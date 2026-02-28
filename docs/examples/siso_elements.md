@@ -20,7 +20,7 @@ sequenceDiagram
     Note right of E: Zero state,<br/>prepare for first step
 
     loop Simulation loop
-        App->>E: step(u, dt_s)
+        App->>E: step(u)
         E-->>App: output (float)
     end
 
@@ -67,9 +67,8 @@ lpf.initialize(config);
 lpf.reset();
 
 // --- Step ---
-float dt_s = 0.01f;
 for (auto& sample : signal_samples) {
-    float filtered = lpf.step(sample, dt_s);
+    float filtered = lpf.step(sample);
     // use filtered output ...
 }
 
@@ -102,6 +101,7 @@ The integrator accumulates its input over time. An optional `Limit` member can c
 
 | Parameter | SI Unit | Notes |
 |---|---|---|
+| `dt_s` | s | Fixed timestep; used to scale accumulated value |
 | `method` | — | `"bilinear"`, `"forward_euler"`, `"backward_euler"` |
 | `lower_limit` | (same as output) | Optional; omit to disable |
 | `upper_limit` | (same as output) | Optional; omit to disable |
@@ -114,6 +114,7 @@ The integrator accumulates its input over time. An optional `Limit` member can c
 using namespace las;
 
 nlohmann::json config = {
+    {"dt_s",        0.01},
     {"method",      "bilinear"},
     {"lower_limit", -0.5236},   // -30 deg in rad
     {"upper_limit",  0.5236}    //  30 deg in rad
@@ -123,9 +124,8 @@ Integrator integrator;
 integrator.initialize(config);
 integrator.reset();
 
-float dt_s  = 0.01f;
 float error = target_rad - measured_rad;
-float accumulated = integrator.step(error, dt_s);
+float accumulated = integrator.step(error);
 ```
 
 ---
@@ -228,8 +228,8 @@ integrator.attachLogger(&logger);
 // From this point, every step() call writes to the CSV automatically.
 // Each element's onLog() implementation defines its channel names.
 for (auto& sample : signal_samples) {
-    lpf.step(sample, dt_s);
-    integrator.step(lpf.out(), dt_s);
+    lpf.step(sample);
+    integrator.step(lpf.out());
 }
 
 // Detach when done

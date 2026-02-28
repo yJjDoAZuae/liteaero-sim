@@ -80,7 +80,7 @@ stateDiagram-v2
     Uninitialized --> Ready : initialize(config)
 
     Ready --> Ready : reset()
-    Ready --> Stepping : step(u, dt_s)
+    Ready --> Stepping : step(u)
     Stepping --> Ready : return output
 
     Ready --> Serialized : serialize()
@@ -93,7 +93,7 @@ stateDiagram-v2
 |---|---|
 | `initialize(config)` | Parse parameters, allocate resources, configure internal structure |
 | `reset()` | Return to initial post-initialize conditions; called between simulation runs |
-| `step(u, dt_s)` | Advance state by `dt_s` seconds; return scalar output |
+| `step(u)` | Advance one timestep (fixed at initialize time); return scalar output |
 | `serialize()` | Return a complete SI-unit JSON snapshot of internal state |
 | `deserialize(state)` | Restore internal state from a snapshot |
 

@@ -149,9 +149,9 @@ sequenceDiagram
 
     Note over DynamicBlock,Derived: step() — NVI pattern
 
-    Caller->>DynamicBlock: step(u, dt_s)
+    Caller->>DynamicBlock: step(u)
     DynamicBlock->>DynamicBlock: in_ = u
-    DynamicBlock->>Derived: onStep(u, dt_s)
+    DynamicBlock->>Derived: onStep(u)
     Derived-->>DynamicBlock: computed output
     DynamicBlock->>DynamicBlock: out_ = result
     DynamicBlock->>DynamicBlock: onLog(*logger_) if logger_ attached
@@ -214,7 +214,11 @@ namespace las {
 /// Abstract base for all standalone SISO simulation elements.
 ///
 /// Lifecycle:
-///   initialize(config) → reset() → step(u, dt_s) ↔ serialize()/deserialize()
+///   initialize(config) → reset() → step(u) ↔ serialize()/deserialize()
+///
+/// The timestep dt_s is a configuration parameter parsed in onInitialize().
+/// It is fixed for the lifetime of the element. Elements that need it store
+/// it as a private member and use it in onStep().
 ///
 /// Subclasses implement the protected on*() hooks only.
 /// The public non-virtual methods enforce cross-cutting concerns.
@@ -231,10 +235,10 @@ public:
     /// Restore element to initial post-initialize conditions.
     void reset();
 
-    /// Advance internal state by dt_s seconds. Returns the scalar output.
-    /// @param u    Input signal (SI units)
-    /// @param dt_s Time step in seconds
-    float step(float u, float dt_s);
+    /// Advance internal state by one timestep. Returns the scalar output.
+    /// The timestep is fixed at initialize() time.
+    /// @param u  Input signal (SI units)
+    float step(float u) override;
 
     /// Return a complete JSON snapshot of internal state. All values in SI units.
     /// Snapshot includes schema_version, in_, out_, and all subclass state.
@@ -255,10 +259,6 @@ public:
     [[nodiscard]] float out() const noexcept override { return out_; }
     operator float()          const noexcept override { return out_; }
 
-    /// SISOBlock::step compatibility shim — calls step(u, last_dt_s_).
-    /// Prefer the two-argument form.
-    float step(float u) override;
-
 protected:
     float in_  = 0.0f;
     float out_ = 0.0f;
@@ -268,7 +268,7 @@ protected:
     // -----------------------------------------------------------------------
     virtual void           onInitialize(const nlohmann::json& config) = 0;
     virtual void           onReset() = 0;
-    virtual float          onStep(float u, float dt_s) = 0;
+    virtual float          onStep(float u) = 0;
     virtual nlohmann::json onSerialize() const = 0;
     virtual void           onDeserialize(const nlohmann::json& state) = 0;
 
@@ -279,8 +279,7 @@ protected:
     virtual int schemaVersion() const = 0;
 
 private:
-    ILogger* logger_   = nullptr;
-    float    last_dt_s_ = 0.0f;
+    ILogger* logger_ = nullptr;
 
     void validateSchema(const nlohmann::json& state) const;
 };
@@ -305,7 +304,7 @@ classDiagram
         <<abstract>>
         +initialize(config: json)
         +reset()
-        +step(u: float, dt_s: float) float
+        +step(u: float) float
         +serialize() json
         +deserialize(state: json)
         +attachLogger(logger: ILogger*)
@@ -313,7 +312,7 @@ classDiagram
         #out_: float
         #onInitialize(config: json)*
         #onReset()*
-        #onStep(u: float, dt_s: float) float*
+        #onStep(u: float) float*
         #onSerialize() json*
         #onDeserialize(state: json)*
         #onLog(logger: ILogger)
@@ -471,18 +470,27 @@ filterSS2.attachLogger(&csvLogger);
 
 ## Timestep Convention
 
-The current codebase sets `dt` separately via `setDt()` on some classes, which is error-prone (easy to forget, hard to change at runtime). The `DynamicBlock` interface passes `dt_s` explicitly in `step()`:
+The timestep `dt_s` is a **configuration parameter**, not a runtime argument. It is parsed in `onInitialize(config)` and stored as a private member of the derived class. `step(float u)` takes only the input signal.
 
 $$
-y_k = f(u_k,\, \Delta t)
+y_k = f(u_k), \quad \Delta t\ \text{fixed at initialize()}
 $$
 
-This allows:
-- Variable-rate stepping without reconfiguration
-- Clear data flow — no hidden internal state for the timestep
-- Simpler testing — each step call is self-contained
+**Rationale:** All elements in this simulation run at a fixed rate. Passing `dt_s` at every step call would be redundant, error-prone, and inconsistent with how discrete filter coefficients are precomputed (the coefficients are functions of `dt_s` and cannot change mid-run without reinitializing). Storing it once is simpler and safer.
 
-For classes whose design frequency must be fixed at initialization (e.g., a filter designed at 100 Hz), `onInitialize()` records the design rate, and `onStep()` may warn or clamp if `dt_s` deviates significantly.
+Elements that need `dt_s` declare it as a private member and serialize it:
+
+```cpp
+void onInitialize(const nlohmann::json& config) override {
+    dt_s_ = config.at("dt_s").get<float>();
+    // precompute discrete coefficients here using dt_s_
+}
+
+private:
+    float dt_s_ = 0.01f;
+```
+
+This also eliminates the `setDt()` anti-pattern present in the current codebase, where it was possible to forget to call `setDt()` before `step()`.
 
 ---
 
@@ -568,7 +576,7 @@ flowchart TD
 | Decision | Alternative Considered | Rationale |
 |---|---|---|
 | NVI for public API | Pure virtual public methods | Base class can enforce logging, schema checks, in_/out_ recording without subclass cooperation |
-| `dt_s` passed in `step()` | `setDt()` stored internally | Explicit data flow; enables variable timestep; avoids forgotten-setDt bugs |
+| `dt_s` in `initialize()` config, not `step()` | Pass `dt_s` per call | Fixed-rate simulation; filter coefficients precomputed at init; `step(u)` aligns cleanly with `SISOBlock::step(u)`; eliminates `setDt()` anti-pattern |
 | JSON serialization | Binary / protobuf | Human-readable; schema-versioned; works across C++ and Python analysis tools |
 | Two-tier (`SISOBlock` + `DynamicBlock`) | Single base with full lifecycle | Embedded primitives (Limit in SISOPIDFF) don't need standalone lifecycle; avoids bloated interface |
 | Injected logger | Global logger / spdlog | No global state; testable; zero overhead when not attached |
