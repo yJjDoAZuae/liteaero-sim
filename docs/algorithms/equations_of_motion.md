@@ -673,15 +673,54 @@ Newton's method is then run from $\alpha_0$ rather than from a fixed starting po
 
 **Initialization and regime switching.** On the first call (or after a large discontinuous $\delta n$), the predictor may land far from the correct root. In this case, evaluate $f$ at $\alpha_*$, $\alpha_{peak}$, and $\alpha_{sep}$ to identify which intervals contain sign changes, then pick the initial guess from the interval consistent with the current branch state.
 
+### Implicit Equation for $\beta$
+
+The lateral load factor $n_y$ (positive in $+\hat{y}_W$, to the right of the velocity vector) is the commanded lateral force per unit weight. It is provided jointly by the aerodynamic side force $Y$ and the lateral component of thrust $-T\cos\alpha\sin\beta$:
+
+$$
+n_y = \frac{Y - T\cos\alpha\sin\beta}{mg}
+\quad\Longrightarrow\quad
+Y - T\cos\alpha\sin\beta = n_y\,mg
+$$
+
+Substituting the linear side force model $Y = q_\infty S C_{Y_\beta}\,\beta$:
+
+$$
+\boxed{q_\infty S C_{Y_\beta}\,\beta - T\cos\alpha\sin\beta = n_y\,mg}
+$$
+
+**Sequential solve.** The $\alpha$ equation involves $T\sin\alpha$ (which has no $\beta$ dependence); the $\beta$ equation involves $T\cos\alpha$, which is now fixed from the preceding $\alpha$ solution. Solve for $\alpha$ first; use it as a constant in the $\beta$ equation.
+
+The residual and its derivative:
+
+$$
+g(\beta) = q_\infty S C_{Y_\beta}\,\beta - T\cos\alpha\sin\beta - n_y\,mg, \qquad
+g'(\beta) = q_\infty S C_{Y_\beta} - T\cos\alpha\cos\beta
+$$
+
+$$
+\beta_{k+1} = \beta_k - \frac{g(\beta_k)}{g'(\beta_k)}
+$$
+
+Since $C_{Y_\beta} < 0$ (side-force stability derivative) and $T\cos\alpha\cos\beta > 0$, both terms of $g'(\beta)$ are negative: $g'(\beta) < 0$ everywhere. The equation is **strictly monotone decreasing** and Newton converges to a unique root from any initial guess. No branch ambiguity, fold point, or stall-limit analog exists for the lateral equation.
+
+**Predictor.** Carrying $\beta_{prev}$ as persistent state (initialized to zero), the first-order predictor is:
+
+$$
+\beta_0 = \beta_{prev} + \frac{\delta n_y \cdot mg}{g'(\beta_{prev})}, \qquad \delta n_y = n_{y,k} - n_{y,k-1}
+$$
+
+Because $g' < 0$, the predictor correctly directs $\beta$ opposite to $n_y$: a rightward demand ($\delta n_y > 0$) predicts a more negative $\beta$ (the body yaws left relative to the velocity, generating a rightward side force and rightward thrust component).
+
 ### Tangential Force Balance
 
-Along the velocity vector, the net tangential acceleration drives airspeed change:
+Along the velocity vector, the net tangential acceleration drives airspeed change. With $\alpha$ and $\beta$ both resolved:
 
 $$
 a_\parallel = \frac{T\cos\alpha\cos\beta - D}{m} - g\sin\gamma_a
 $$
 
-For coordinated flight ($\beta = 0$) this simplifies to $(T\cos\alpha - D)/m - g\sin\gamma_a$.
+The factor $\cos\alpha\cos\beta$ accounts for the full projection of the thrust vector onto the velocity direction.
 
 ### Issues and Limitations
 
