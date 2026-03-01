@@ -12,8 +12,8 @@ Each phase must pass its tests (green) before the next phase starts.
 | A | LiftCurveModel — 5-region piecewise lift curve | **Complete** (16 tests) |
 | B | KinematicState — store `_q_nw`, complete `step()` | **Complete** (12 tests) |
 | C | KinematicState — derived-quantity implementations | **Complete** (included in Phase B tests) |
-| D | KinematicState — position integration (WGS84) | Not started |
-| E | LoadFactorAllocator — implicit α/β Newton solver | Not started |
+| D | KinematicState — position integration (WGS84) | **Complete** (15 tests) |
+| E | LoadFactorAllocator — implicit α/β Newton solver | **Complete** (5 tests) |
 
 ---
 
@@ -113,9 +113,35 @@ position-integration logic.
 
 ---
 
-## Phase D — KinematicState: Position Integration
+## Phase D — KinematicState: Position Integration ✓ Complete
 
-### WGS84 API (actual, verified against `include/navigation/WGS84.hpp`)
+**Files:** `src/KinematicState.cpp`, `test/KinematicState_test.cpp`
+
+### What was done
+
+Added position integration inside `step()` after the velocity update, using the existing
+`WGS84_Datum` setters.  Latitude and longitude use forward Euler with the post-step velocity;
+altitude uses the trapezoidal rule with the pre- and post-step `V_D` values (both already
+available as `velocity_NED_mps_prev` and `_velocity_NED_mps`).
+
+```cpp
+const float height_prev_m = _positionDatum.height_WGS84_m();
+_positionDatum.setLatitudeGeodetic_rad(
+    _positionDatum.latitudeGeodetic_rad() + latitudeRate_rps() * dt);
+_positionDatum.setLongitude_rad(
+    _positionDatum.longitude_rad() + longitudeRate_rps() * dt);
+_positionDatum.setHeight_WGS84_m(
+    height_prev_m - 0.5f * (velocity_NED_mps_prev(2) + _velocity_NED_mps(2)) * dt);
+```
+
+### Tests (added to KinematicState_test.cpp; 15 KinematicState tests total)
+
+`PositionIntegration_LatitudeIncreases`, `PositionIntegration_ClimbIncreasesHeight`,
+`PositionIntegration_ZeroVelocityNoChange`.
+
+---
+
+## Phase D reference — WGS84 API (actual, verified against `include/navigation/WGS84.hpp`)
 
 `WGS84_Datum` already provides:
 
@@ -163,9 +189,9 @@ Test — zero velocity produces no position change
 
 ---
 
-## Phase E — LoadFactorAllocator
+## Phase E — LoadFactorAllocator ✓ Complete
 
-### New files
+### Files
 
 - `include/aerodynamics/LoadFactorAllocator.hpp`
 - `src/aerodynamics/LoadFactorAllocator.cpp`
@@ -228,24 +254,21 @@ private:
 2. Newton: `β_{k+1} = β_k − g(β_k)/g'(β_k)` (uses `T·cos(α)` from solved α)
 3. Store `β_prev = β`
 
-### Tests
+### Implementation notes
 
-```
-Test — zero demand produces zero angles
-    n=0, n_y=0, T=0 → α=0, β=0.
+- Newton warm-starts from `_alpha_prev` / `_beta_prev` for branch continuity.
+- **Overshoot guard** inside the α Newton loop: if a step would move α past `alphaPeak()`,
+  break immediately and set `stall = true`, `alpha = alphaPeak()`.  This prevents the
+  solver from oscillating across the CL peak when demand exceeds the pre-stall ceiling.
+- **Fold guard**: if `|f'(α)| < kTol` (zero denominator at the stall vertex with T≈0),
+  also sets `stall = true`, `alpha = alphaPeak()`.
+- β solver's `g'(β) = q·S·C_Yβ − T·cos(α)·cos(β)` is always ≤ 0 for typical C_Yβ < 0,
+  guaranteeing a unique root.
 
-Test — small n, linear region, T=0
-    Analytic: α ≈ n·m·g / (q·S·C_Lα) for small α in linear region.
+### Tests (5, all in `test/LoadFactorAllocator_test.cpp`)
 
-Test — stall flag raised when n exceeds ceiling
-    n > (C_L,sep·q·S + T) / (m·g) → stall = true.
-
-Test — monotonically increasing n stays on pre-stall branch
-    Step n up from 0 in small increments; verify α_prev tracking avoids jump to post-stall branch.
-
-Test — lateral, T=0
-    Analytic: β = n_y·m·g / (q·S·C_Yβ).
-```
+`ZeroDemandZeroAngles`, `SmallNLinearRegionT0`, `StallFlagRaisedAboveCeiling`,
+`MonotonicNStaysPreStall`, `LateralT0AnalyticCheck`.
 
 **Note:** The `LiftCurveModel` interface used in Phase E (`alphaPeak()`, `alphaTrough()`,
 `evaluate()`, `derivative()`) matches the completed Phase A implementation.

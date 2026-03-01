@@ -167,3 +167,29 @@ TEST(KinematicStateTest, ZeroVelocityZeroPositionRate) {
     EXPECT_NEAR(s.latitudeRate_rps(),  0.0, 1e-15);
     EXPECT_NEAR(s.longitudeRate_rps(), 0.0, 1e-15);
 }
+
+// ── Phase D: position integration in step() ───────────────────────────────────
+
+TEST(KinematicStateTest, PositionIntegration_LatitudeIncreases) {
+    // 50 m/s northward, dt = 1 s → latitude increases by ≈ 50/R_N.
+    KinematicState s = makeState1({50.f, 0.f, 0.f});
+    s.step(1.0, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_GT(s.positionDatum().latitudeGeodetic_rad(), 0.0);
+    EXPECT_NEAR(s.positionDatum().latitudeGeodetic_rad(), 50.0 / 6.3354e6, 1e-9);
+}
+
+TEST(KinematicStateTest, PositionIntegration_ClimbIncreasesHeight) {
+    // V_D = -10 m/s (climbing in NED convention), dt = 1 s → altitude ≈ +10 m.
+    KinematicState s = makeState1({0.f, 0.f, -10.f});
+    s.step(1.0, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_GT(s.positionDatum().height_WGS84_m(), 0.0f);
+    EXPECT_NEAR(s.positionDatum().height_WGS84_m(), 10.0f, 0.1f);
+}
+
+TEST(KinematicStateTest, PositionIntegration_ZeroVelocityNoChange) {
+    KinematicState s = makeState1(Eigen::Vector3f::Zero());
+    s.step(1.0, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.positionDatum().latitudeGeodetic_rad(), 0.0, 1e-15);
+    EXPECT_NEAR(s.positionDatum().longitude_rad(),        0.0, 1e-15);
+    EXPECT_NEAR(s.positionDatum().height_WGS84_m(),       0.0f, 1e-10f);
+}

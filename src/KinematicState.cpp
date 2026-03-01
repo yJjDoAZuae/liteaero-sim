@@ -230,6 +230,17 @@ void KinematicState::step(double time_sec,
     // save the accel state value
     _acceleration_NED_mps = accel_NED;
 
+    // integrate position (forward Euler for lat/lon, trapezoidal for altitude)
+    // latitudeRate_rps() / longitudeRate_rps() use the updated _velocity_NED_mps
+    const float height_prev_m = _positionDatum.height_WGS84_m();
+    _positionDatum.setLatitudeGeodetic_rad(
+        _positionDatum.latitudeGeodetic_rad() + latitudeRate_rps() * dt);
+    _positionDatum.setLongitude_rad(
+        _positionDatum.longitude_rad() + longitudeRate_rps() * dt);
+    // NED convention: positive D is down; altitude increases when V_D < 0
+    _positionDatum.setHeight_WGS84_m(
+        height_prev_m - 0.5f * (velocity_NED_mps_prev(2) + _velocity_NED_mps(2)) * dt);
+
     // update the velocity frame to align with the new velocity vector
     stepQnv(_velocity_NED_mps, local_q_nv);
 
