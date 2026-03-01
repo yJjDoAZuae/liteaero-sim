@@ -542,6 +542,62 @@ For small angles ($\alpha,\beta \ll 1$) this reduces to approximately $[-D + L\a
 
 ---
 
+## Lift Curve Model
+
+The linear model $C_L(\alpha) = C_{L_\alpha}\,\alpha$ is valid only below stall. The following three-region piecewise model extends it through the stall break and into fully separated flow.
+
+### Piecewise Definition
+
+Let $\alpha_*$ be the **stall onset angle** (where the lift curve first departs from linearity), $\alpha_{sep}$ the angle at which flow is **fully separated**, and $C_{L,sep}$ the constant separated-flow lift coefficient ($C_{L,sep} < C_{L_\alpha}\,\alpha_{sep}$ for a physical stall break). The model is:
+
+$$
+C_L(\alpha) =
+\begin{cases}
+C_{L_\alpha}\,\alpha & \alpha \leq \alpha_* \\[4pt]
+a_2\alpha^2 + a_1\alpha + a_0 & \alpha_* < \alpha \leq \alpha_{sep} \\[4pt]
+C_{L,sep} & \alpha > \alpha_{sep}
+\end{cases}
+$$
+
+The transition segment is determined by three conditions: (i) value and (ii) slope continuity at $\alpha_*$ ($C^1$ join — no kink at stall onset), and (iii) value match at $\alpha_{sep}$ ($C^0$ join — a slope discontinuity at full separation is accepted as physically representative of an abrupt flow reattachment boundary).
+
+### Quadratic Coefficients
+
+Define $\Delta\alpha = \alpha_{sep} - \alpha_*$ and $\Delta C_L = C_{L,sep} - C_{L_\alpha}\,\alpha_{sep}$. For a stall break $\Delta C_L < 0$. The three constraints determine the coefficients uniquely:
+
+$$
+a_2 = \frac{\Delta C_L}{\Delta\alpha^2}, \qquad
+a_1 = C_{L_\alpha} - 2a_2\,\alpha_*, \qquad
+a_0 = a_2\,\alpha_*^2
+$$
+
+**Verification.** At $\alpha_*$: $a_2\alpha_*^2 + a_1\alpha_* + a_0 = a_2(\alpha_*^2 - 2\alpha_*^2 + \alpha_*^2) + C_{L_\alpha}\alpha_* = C_{L_\alpha}\alpha_*\,\checkmark$; slope $2a_2\alpha_* + a_1 = C_{L_\alpha}\,\checkmark$. At $\alpha_{sep}$: $a_2(\alpha_{sep}-\alpha_*)^2 + C_{L_\alpha}\alpha_{sep} = a_2\Delta\alpha^2 + C_{L_\alpha}\alpha_{sep} = \Delta C_L + C_{L_\alpha}\alpha_{sep} = C_{L,sep}\,\checkmark$.
+
+The lift slope (needed for Newton iteration — see [Implicit Equation for $\alpha$](#implicit-equation-for-alpha)):
+
+$$
+C_L'(\alpha) =
+\begin{cases}
+C_{L_\alpha} & \alpha \leq \alpha_* \\[4pt]
+2a_2\alpha + a_1 & \alpha_* < \alpha \leq \alpha_{sep} \\[4pt]
+0 & \alpha > \alpha_{sep}
+\end{cases}
+$$
+
+### Pre-stall Peak
+
+Because $a_2 < 0$, the transition parabola opens downward and has an interior maximum at:
+
+$$
+\alpha_{peak} = -\frac{a_1}{2a_2} = \alpha_* + \frac{C_{L_\alpha}\,\Delta\alpha^2}{-2\,\Delta C_L}
+$$
+
+This peak lies strictly inside $(\alpha_*, \alpha_{sep})$ when $|\Delta C_L| > \tfrac{1}{2}C_{L_\alpha}\,\Delta\alpha$, i.e., when the stall drop is large enough that the separated-flow $C_L$ falls below the value the linear slope would reach at the midpoint of the transition interval. When this condition holds, $C_L$ rises to $C_{L,max} = C_L(\alpha_{peak}) > C_{L_\alpha}\,\alpha_*$ before decreasing — the model captures the rounded top of a realistic stall curve.
+
+The slope discontinuity at $\alpha_{sep}$, from $C_L'(\alpha_{sep}^-) = 2a_2\alpha_{sep} + a_1 = 2\Delta C_L / \Delta\alpha + C_{L_\alpha}$ (negative for a sufficiently large stall break) to zero (flat region), represents the abrupt boundary between partially and fully separated flow.
+
+---
+
 ## Thrust Decomposition and Load Factor Allocation
 
 When the thrust vector is aligned with the body $x$-axis it rotates with the aerodynamic angles. Its Wind frame representation follows from the first column of $C_{WB} = C_{BW}^T$:
@@ -571,19 +627,51 @@ n = \frac{L + T\sin\alpha}{mg}
 L + T\sin\alpha = n\,mg
 $$
 
-Substituting the linear lift model $L = q_\infty S C_{L_\alpha}\,\alpha$:
+Substituting $L = q_\infty S C_L(\alpha)$ from the [Lift Curve Model](#lift-curve-model):
 
 $$
-\boxed{q_\infty S C_{L_\alpha}\,\alpha + T\sin\alpha = n\,mg}
+\boxed{q_\infty S\,C_L(\alpha) + T\sin\alpha = n\,mg}
 $$
 
-This is an implicit equation for $\alpha$ given commanded load factor $n$, thrust $T$, dynamic pressure $q_\infty = \tfrac{1}{2}\rho V^2$, and mass $m$. Defining the residual $f(\alpha) = q_\infty S C_{L_\alpha}\,\alpha + T\sin\alpha - n\,mg$, Newton's method gives:
+This is an implicit equation for $\alpha$ given commanded load factor $n$, thrust $T$, dynamic pressure $q_\infty = \tfrac{1}{2}\rho V^2$, and mass $m$. The residual and its derivative for Newton's method are:
 
 $$
-\alpha_{k+1} = \alpha_k - \frac{f(\alpha_k)}{f'(\alpha_k)}, \qquad f'(\alpha) = q_\infty S C_{L_\alpha} + T\cos\alpha
+f(\alpha) = q_\infty S\,C_L(\alpha) + T\sin\alpha - n\,mg, \qquad
+f'(\alpha) = q_\infty S\,C_L'(\alpha) + T\cos\alpha
 $$
 
-Convergence is fast (typically 2–3 iterations) for $|\alpha| \lesssim 20°$.
+$$
+\alpha_{k+1} = \alpha_k - \frac{f(\alpha_k)}{f'(\alpha_k)}
+$$
+
+In the linear regime ($\alpha \leq \alpha_*$), $f'(\alpha) = q_\infty S C_{L_\alpha} + T\cos\alpha > 0$: the equation is strictly monotone and Newton converges in 2–3 iterations. In the stall transition and fully-separated regimes the behavior is more complex — see Issues 3 and 4 below.
+
+### Branch Continuation and Root Tracking
+
+To resolve root ambiguity across timesteps, the solver carries the previously accepted angle of attack $\alpha_{prev}$ as persistent state, initialized to zero.
+
+**Predictor.** Let $\delta n = n_k - n_{k-1}$ be the step change in commanded load factor. Differentiating $f(\alpha) = 0$ with respect to $n$ gives $\partial\alpha/\partial n = mg / f'(\alpha)$. The first-order predictor for the new initial guess is therefore:
+
+$$
+\alpha_0 = \alpha_{prev} + \frac{\delta n \cdot mg}{f'(\alpha_{prev})}
+$$
+
+Newton's method is then run from $\alpha_0$ rather than from a fixed starting point. For small $\delta n$, $\alpha_0$ lands on the same branch as $\alpha_{prev}$ and convergence to the correct root is assured.
+
+**Branch identification.** The sign of $f'(\alpha_{prev})$ identifies which branch is active:
+
+| $f'(\alpha_{prev})$ | Branch | Interpretation |
+|---|---|---|
+| $> 0$ | Pre-stall | $\alpha$ on the ascending or linear limb of $f$ |
+| $< 0$ | Post-stall | $\alpha$ on the descending limb in the transition region |
+| $= 0$ | Fold point | Aircraft is at the stall limit; predictor is ill-conditioned |
+
+**Fold point and stall limit.** $f'(\alpha_{prev}) \to 0$ signals that the aircraft is at the load factor ceiling. Two outcomes:
+
+1. If the commanded $n_k\,mg > \max_\alpha f(\alpha) + n_{k-1}\,mg$, no root exists — the load factor demand exceeds what lift and thrust can provide. Saturate $\alpha$ at $\alpha_{prev}$ (the fold point), set a stall-limit flag, and clamp $n$ to the achievable maximum.
+2. If $n_k\,mg$ has decreased (load factor released), the fold is exiting and a root on the pre-stall side can be found by bracketed search in $(\alpha_*, \alpha_{prev})$.
+
+**Initialization and regime switching.** On the first call (or after a large discontinuous $\delta n$), the predictor may land far from the correct root. In this case, evaluate $f$ at $\alpha_*$, $\alpha_{peak}$, and $\alpha_{sep}$ to identify which intervals contain sign changes, then pick the initial guess from the interval consistent with the current branch state.
 
 ### Tangential Force Balance
 
@@ -597,15 +685,23 @@ For coordinated flight ($\beta = 0$) this simplifies to $(T\cos\alpha - D)/m - g
 
 ### Issues and Limitations
 
-**1. Thrust misalignment.** If the engine has a fixed incidence offset $\delta_T$ relative to $\hat{x}_B$, replace $\alpha$ with $\alpha + \delta_T$ throughout the thrust decomposition. The implicit equation becomes $q_\infty S C_{L_\alpha}\,\alpha + T\sin(\alpha + \delta_T) = nmg$; the Newton derivative changes to $f'(\alpha) = q_\infty S C_{L_\alpha} + T\cos(\alpha + \delta_T)$.
+**1. Thrust misalignment.** If the engine has a fixed incidence offset $\delta_T$ relative to $\hat{x}_B$, replace $\alpha$ with $\alpha + \delta_T$ in the thrust decomposition. The implicit equation becomes $q_\infty S\,C_L(\alpha) + T\sin(\alpha + \delta_T) = nmg$; the Newton derivative changes to $f'(\alpha) = q_\infty S\,C_L'(\alpha) + T\cos(\alpha + \delta_T)$.
 
 **2. Zero-$\alpha$ lift.** A cambered airfoil generates lift at $\alpha = 0$: $L = q_\infty S(C_{L_0} + C_{L_\alpha}\,\alpha)$. The implicit equation becomes $q_\infty S(C_{L_0} + C_{L_\alpha}\,\alpha) + T\sin\alpha = nmg$. The Newton step is unchanged; the residual constant shifts by $q_\infty S C_{L_0}$.
 
-**3. Linear model validity.** The lift model is valid only for $\alpha$ below stall. Near stall the implicit equation may have no solution (commanded $n$ exceeds maximum lift capability) or, if $C_L(\alpha)$ is non-monotone past stall, multiple solutions.
+**3. Multiple roots in the stall transition.** In the transition region $(\alpha_*, \alpha_{sep})$, $f'(\alpha) = q_\infty S C_L'(\alpha) + T\cos\alpha$ can change sign. $C_L'(\alpha)$ decreases linearly from $C_{L_\alpha}$ at $\alpha_*$ to $2\Delta C_L/\Delta\alpha + C_{L_\alpha}$ at $\alpha_{sep}$ (negative for a significant stall break). When $q_\infty S |C_L'(\alpha)| > T\cos\alpha$, $f'$ turns negative, $f$ develops a local maximum, and the equation $f(\alpha) = 0$ can have two roots in the transition interval — one on the ascending limb ($\alpha < \alpha_{peak}$) and one on the descending limb. The physically relevant root is the lower $\alpha$ (pre-stall side). Newton's method starting from the linear-regime solution converges to the correct root; starting above $\alpha_{peak}$ risks converging to the post-stall root or diverging if $f' \approx 0$. Safe practice: bracket $f$ at $\alpha_*$, $\alpha_{peak}$, and $\alpha_{sep}$ before iterating.
 
-**4. Lateral coupling.** For $\beta \neq 0$ the lateral thrust component $-T\cos\alpha\sin\beta$ must be balanced by the aerodynamic side force $Y = q_\infty S C_{Y_\beta}\,\beta$. For large thrust this couples the $\alpha$ and $\beta$ equations. In practice, coordinated flight ($\beta \approx 0$) is maintained by the yaw channel, decoupling them.
+**4. Explicit solution in the fully-separated regime.** For $\alpha > \alpha_{sep}$, $C_L(\alpha) = C_{L,sep}$ is constant, and the equation reduces to:
+$$
+q_\infty S\,C_{L,sep} + T\sin\alpha = n\,mg
+\quad\Longrightarrow\quad
+\alpha = \arcsin\!\left(\frac{n\,mg - q_\infty S\,C_{L,sep}}{T}\right)
+$$
+No iteration is required. A solution in this region exists only when $T > 0$ and $0 \leq n\,mg - q_\infty S\,C_{L,sep} \leq T$. If $T = 0$ (glide), $f$ is constant in this region and either always zero or never zero; there is no $\alpha$ to solve for. If the commanded $n\,mg$ exceeds $q_\infty S\,C_{L,sep} + T$ (the ceiling of achievable normal force), no solution exists anywhere and the load factor demand is infeasible.
 
-**5. Quasi-static assumption.** The equation $L + T\sin\alpha = nmg$ is an instantaneous force balance. It gives the $\alpha$ required for a steady load factor but does not capture pitch dynamics or $q$-dependent lift ($C_{L_q}$ terms). In a rapidly pitching maneuver the actual $\alpha$ will lag the quasi-static solution.
+**5. Lateral coupling.** For $\beta \neq 0$ the lateral thrust component $-T\cos\alpha\sin\beta$ must be balanced by the aerodynamic side force $Y = q_\infty S C_{Y_\beta}\,\beta$. For large thrust this couples the $\alpha$ and $\beta$ equations. In practice, coordinated flight ($\beta \approx 0$) is maintained by the yaw channel, decoupling them.
+
+**6. Quasi-static assumption.** The equation $L + T\sin\alpha = nmg$ is an instantaneous force balance. It gives the $\alpha$ required for a steady load factor but does not capture pitch dynamics or $q$-dependent lift ($C_{L_q}$ terms). In a rapidly pitching maneuver the actual $\alpha$ will lag the quasi-static solution.
 
 ---
 
