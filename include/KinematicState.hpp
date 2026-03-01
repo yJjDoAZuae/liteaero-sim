@@ -34,8 +34,10 @@ public:
                        _positionDatum(),
                        _velocity_NED_mps(Eigen::Vector3f::Zero()),
                        _acceleration_NED_mps(Eigen::Vector3f::Zero()),
+                       _q_nw(Eigen::Quaternionf::Identity()),
                        _q_nb(Eigen::Quaternionf::Identity()),
-                       _rates_Body_rps(Eigen::Vector3f::Zero()) {};
+                       _rates_Body_rps(Eigen::Vector3f::Zero()),
+                       _wind_NED_mps(Eigen::Vector3f::Zero()) {};
 
     KinematicState(double time_sec,
                    const WGS84_Datum &position_datum,
@@ -55,13 +57,15 @@ public:
                    const Eigen::Vector3f &velocity_NED_mps,
                    const Eigen::Vector3f &acceleration_NED_mps,
                    const Eigen::Quaternionf &q_nb,
-                   const Eigen::Vector3f &rates_Body_rps) 
+                   const Eigen::Vector3f &rates_Body_rps)
         : _time_sec(time_sec),
           _positionDatum(position_datum),
           _velocity_NED_mps(velocity_NED_mps),
           _acceleration_NED_mps(acceleration_NED_mps),
+          _q_nw(Eigen::Quaternionf::Identity()),
           _q_nb(q_nb),
-          _rates_Body_rps(rates_Body_rps)
+          _rates_Body_rps(rates_Body_rps),
+          _wind_NED_mps(Eigen::Vector3f::Zero())
           {}
 
     ~KinematicState() {};
@@ -83,6 +87,7 @@ public:
     Eigen::Vector3f velocity_NED_mps() const { return _velocity_NED_mps; }
     Eigen::Vector3f acceleration_NED_mps() const { return _acceleration_NED_mps; }
     Eigen::Quaternionf q_nb() const { return _q_nb; }   // Body to NED rotation
+    Eigen::Quaternionf q_nw() const { return _q_nw; }   // Wind to NED rotation
     Eigen::Vector3f rates_Body_rps() const { return _rates_Body_rps; }
 
     // derived quantity methods
@@ -106,7 +111,6 @@ public:
 
     Eigen::Quaternionf q_nl() const; // Local Level to NED rotation
     Eigen::Quaternionf q_ns() const; // Stability to NED rotation
-    Eigen::Quaternionf q_nw() const; // Wind to NED rotation
     Eigen::Quaternionf q_nv() const; // Velocity to NED rotation
     float alpha() const;
     float beta() const;
@@ -133,15 +137,17 @@ protected:
     // acceleration in NED frame
     Eigen::Vector3f _acceleration_NED_mps;
 
+    // Wind-to-NED rotation (stored state)
+    Eigen::Quaternionf _q_nw;
+
     // Body to NED rotation
     Eigen::Quaternionf _q_nb;
 
     // Body rates
     Eigen::Vector3f _rates_Body_rps;
 
-    // Wind
-    float _windVelNorth;
-    float _windVelEast;
+    // Wind velocity in NED frame
+    Eigen::Vector3f _wind_NED_mps;
 
     static void stepQnv(const Eigen::Vector3f& velocity_NED_mps, Eigen::Quaternionf& q_nv );
 

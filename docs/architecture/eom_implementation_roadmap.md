@@ -10,8 +10,8 @@ Each phase must pass its tests (green) before the next phase starts.
 | Phase | Description | Status |
 |-------|-------------|--------|
 | A | LiftCurveModel — 5-region piecewise lift curve | **Complete** (16 tests) |
-| B | KinematicState — store `_q_nw`, complete `step()` | Not started |
-| C | KinematicState — derived-quantity implementations | Not started |
+| B | KinematicState — store `_q_nw`, complete `step()` | **Complete** (12 tests) |
+| C | KinematicState — derived-quantity implementations | **Complete** (included in Phase B tests) |
 | D | KinematicState — position integration (WGS84) | Not started |
 | E | LoadFactorAllocator — implicit α/β Newton solver | Not started |
 
@@ -55,178 +55,61 @@ class LiftCurveModel {
 
 ---
 
-## Phase B — KinematicState: Store `_q_nw`
+## Phase B — KinematicState: Store `_q_nw` ✓ Complete
 
-### Goal
+**Files:** `include/KinematicState.hpp`, `src/KinematicState.cpp`, `test/KinematicState_test.cpp`
 
-`q_nw()` is currently **undefined** (no function body exists — any call is an ODR violation).
-`step()` computes a corrected `local_q_nw` but immediately discards it.
-This phase makes `_q_nw` a stored member and completes the three outstanding TODOs in `step()`.
+### What was done
 
-### Files to modify
+- Added `Eigen::Quaternionf _q_nw` and `Eigen::Vector3f _wind_NED_mps` as stored members;
+  removed `float _windVelNorth` / `float _windVelEast`.
+- `q_nw()` is now an inline getter returning `_q_nw` (was an ODR violation — no body existed).
+- All three constructors initialize `_q_nw` and `_wind_NED_mps`. Constructor 2 (takes `q_nb`
+  directly) defaults `_q_nw` to `Identity()`.
+- Completed the three `step()` TODOs: `diff_rot_n` (path-curvature), `roll_delta` (roll around
+  Wind X), and `_q_nw = (diff_rot_n * _q_nw * roll_delta).normalized()`.
+- Wind is updated at the top of `step()` from the `windSpeed_mps` / `windDirFrom_rad`
+  parameters before being used in the velocity integration.
+- `crab()` and `crabRate()` updated to use `_wind_NED_mps`.
 
-- `include/KinematicState.hpp`
-- `src/KinematicState.cpp`
-- `test/KinematicState_test.cpp` (new — write first, TDD)
+### Tests (12 passing)
 
-### Header changes (`include/KinematicState.hpp`)
-
-**Add member** in the `protected` block (after `_q_nb`):
-```cpp
-Eigen::Quaternionf _q_nw;   // Wind-to-NED rotation (stored state)
-```
-
-**Replace** the two wind scalars:
-```cpp
-// Remove:
-float _windVelNorth;
-float _windVelEast;
-
-// Add:
-Eigen::Vector3f _wind_NED_mps;
-```
-
-**Add getter** (inline, since `_q_nw` is now a stored member):
-```cpp
-Eigen::Quaternionf q_nw() const { return _q_nw; }
-```
-Remove the existing `q_nw() const;` declaration (currently unimplemented).
-
-**Constructor 2** (takes `q_nb` directly, lines 53–65 of `.hpp`) does not currently receive
-a `q_nw` parameter. Two options:
-- Add `const Eigen::Quaternionf& q_nw` parameter and initialize `_q_nw(q_nw)`.
-- Initialize `_q_nw(Eigen::Quaternionf::Identity())` (acceptable if this constructor is only
-  used for already-NED states where Wind ≡ NED).
-
-Choose based on actual call sites. If no call site needs non-Identity `q_nw` via this
-constructor, default to `Identity()`.
-
-### Implementation changes (`src/KinematicState.cpp`)
-
-**Constructor 1** — add `_q_nw(q_nw)` to member-initializer list:
-```cpp
-: _time_sec(time_sec),
-  _positionDatum(position_datum),
-  _velocity_NED_mps(velocity_NED_mps),
-  _acceleration_NED_mps(q_nw.toRotationMatrix() * acceleration_Wind_mps),
-  _q_nw(q_nw),                      // add this
-  _q_nb(Eigen::Quaternionf::Identity()),
-  _wind_NED_mps(-windSpeed_mps * Eigen::Vector3f(cos(windDirFrom_rad),
-                                                  sin(windDirFrom_rad), 0.0f)),
-  _rates_Body_rps(Eigen::Vector3f::Zero())
-```
-
-**Replace all four `_windVelNorth`/`_windVelEast` sites** with `_wind_NED_mps`:
-
-| Location | Old code | New code |
-|----------|----------|----------|
-| Constructor body | `_windVelNorth = ...; _windVelEast = ...;` | removed (handled in initializer) |
-| `crab()` line 149 | `wind_NED_mps << _windVelNorth, _windVelEast, 0;` | `Eigen::Vector3f wind_NED_mps = _wind_NED_mps;` |
-| `crabRate()` line 162 | same | same |
-| `step()` line 240 | `Eigen::Vector3f windVel_NED = Eigen::Vector3f(_windVelNorth, _windVelEast, 0);` | `Eigen::Vector3f windVel_NED = _wind_NED_mps;` |
-
-Also update `step()`: when `windSpeed_mps` / `windDirFrom_rad` arrive as parameters,
-update the stored member:
-```cpp
-_wind_NED_mps = -windSpeed_mps * Eigen::Vector3f(cos(windDirFrom_rad),
-                                                   sin(windDirFrom_rad), 0.0f);
-```
-
-**Complete the three TODOs in `step()`:**
-
-Replace lines 267–278 with:
-```cpp
-// Step 1: path-curvature rotation in NED (already computed above)
-Eigen::Quaternionf diff_rot_n;
-diff_rot_n.setFromTwoVectors(velocity_NED_mps_prev, _velocity_NED_mps);
-
-// Step 2: roll rotation around the Wind X axis
-Eigen::Quaternionf roll_delta(
-    Eigen::AngleAxisf(rollRate_Wind_rps * dt, Eigen::Vector3f::UnitX()));
-
-// Step 3: propagate _q_nw
-_q_nw = (diff_rot_n * _q_nw * roll_delta).normalized();
-```
-
-Lines 284–286 (`q_wb` and `_q_nb = q_nw() * q_wb`) need **no textual change** — they
-already call `q_nw()`, which will now return the stored `_q_nw`.
-
-Line 309 (`_rates_Body_rps = ...q_nw().toRotationMatrix()...`) similarly needs no change.
-
-**Remove the now-unreachable `q_nw()` definition** in `.cpp` (currently the function body
-is missing — there is nothing to remove, but confirm no orphan definition exists).
-
-### Tests (`test/KinematicState_test.cpp`) — write first
-
-```
-Test 1 — q_nw becomes non-Identity after roll
-    Construct state with Identity q_nw, nonzero velocity, zero wind.
-    Call step() with rollRate_Wind_rps = 0.1 rad/s, alpha=0, beta=0, nonzero acceleration.
-    Assert q_nw() != Identity (coefficient deviation > 1e-6).
-
-Test 2 — q_nb = q_nw * q_wb
-    After one step with known alpha and beta, verify:
-    q_nb() ≈ q_nw() * q_wb(alpha, beta)
-    where q_wb = AngleAxisf(alpha, UnitY) * AngleAxisf(-beta, UnitZ).
-
-Test 3 — rates_Body_rps has correct magnitude
-    Zero alpha/beta/alphaDot/betaDot, zero rollRate, constant acceleration.
-    Verify _rates_Body_rps is consistent with path curvature: |ω| ≈ |a_perp| / |V|.
-```
-
-**Note:** `setFromTwoVectors` is degenerate when the two vectors are identical (zero-acceleration
-straight-line step). Test 1 must supply nonzero acceleration so `diff_rot_n ≠ Identity`,
-or rely only on `roll_delta` (nonzero `rollRate_Wind_rps`) for the non-Identity assertion.
-The latter is simpler and avoids the degenerate case.
+`QnwStoredFromConstructor`, `QnwIsIdentityFromSimpleConstructor`, `QnwChangesAfterRollStep`,
+`QnbEqualsQnwTimesQwb` (Phase B), plus all Phase C tests listed below.
 
 ---
 
-## Phase C — KinematicState: Derived Quantity Implementations
+## Phase C — KinematicState: Derived Quantity Implementations ✓ Complete
 
-### Prerequisite
+**Files:** `src/KinematicState.cpp`, `test/KinematicState_test.cpp`
 
-Phase B complete (stored `_q_nw` and `_wind_NED_mps` available).
+### What was done
 
-### Implementations (replace stubs in `src/KinematicState.cpp`)
+Replaced four stubs and two placeholders:
 
 ```cpp
-Eigen::Vector3f KinematicState::velocity_Wind_mps() const {
-    return _q_nw.toRotationMatrix().transpose() * (_velocity_NED_mps - _wind_NED_mps);
-}
-
-Eigen::Vector3f KinematicState::velocity_Body_mps() const {
-    return _q_nb.toRotationMatrix().transpose() * _velocity_NED_mps;
-}
-
-Eigen::Vector3f KinematicState::acceleration_Wind_mps() const {
-    return _q_nw.toRotationMatrix().transpose() * _acceleration_NED_mps;
-}
-
-Eigen::Vector3f KinematicState::acceleration_Body_mps() const {
-    return _q_nb.toRotationMatrix().transpose() * _acceleration_NED_mps;
-}
+velocity_Wind_mps()      → _q_nw.toRotationMatrix().transpose() * (_velocity_NED_mps - _wind_NED_mps)
+velocity_Body_mps()      → _q_nb.toRotationMatrix().transpose() * _velocity_NED_mps
+acceleration_Wind_mps()  → _q_nw.toRotationMatrix().transpose() * _acceleration_NED_mps
+acceleration_Body_mps()  → _q_nb.toRotationMatrix().transpose() * _acceleration_NED_mps
+latitudeRate_rps()       → _positionDatum.latitudeRate(_velocity_NED_mps(0))
+longitudeRate_rps()      → _positionDatum.longitudeRate(_velocity_NED_mps(1))
 ```
 
-`alpha()`, `beta()`, `rollRate_Wind_rps()`, `alphaDot()`, `betaDot()`, `q_nl()`, `q_ns()`,
-`rollRate_rps()`, `pitchRate_rps()`, `headingRate_rps()`, `velocity_Stab_mps()`, `POM()`,
-`turnCircle()` are declared but not specified in the current plan. Do not implement these
-in Phase C unless they are needed by a test; flag them for a separate design decision.
+Not yet implemented (out of scope for this phase): `alpha()`, `beta()`, `alphaDot()`,
+`betaDot()`, `rollRate_Wind_rps()`, `rollRate_rps()`, `pitchRate_rps()`, `headingRate_rps()`,
+`velocity_Stab_mps()`, `q_nl()`, `q_ns()`, `POM()`, `turnCircle()`.
 
-### Tests
+### Tests (included in KinematicState_test.cpp, all passing)
 
-```
-Test — velocity_Wind_mps X-component equals airspeed
-    Zero wind, straight-and-level, V = [50, 0, 0] NED, Identity q_nw.
-    velocity_Wind_mps().x() ≈ 50.0 m/s.
+`VelocityWindEqualsGroundSpeedZeroWind`, `VelocityWindSubtractsWind`,
+`VelocityBodyNonZeroAlpha`, `AccelerationWindRotatesFromNED`, `AccelerationBodyRotatesFromNED`,
+`LatitudeRatePositiveForNorthwardVelocity`, `LongitudeRatePositiveForEastwardVelocity`,
+`ZeroVelocityZeroPositionRate`.
 
-Test — velocity_Body_mps at zero α, β
-    q_nw = Identity, q_nb = Identity, V = [50, 0, 0] NED.
-    velocity_Body_mps().x() ≈ 50.0 m/s.
-
-Test — acceleration_Wind_mps resolves correctly
-    Known q_nw (e.g., 90° rotation), known NED acceleration.
-    Verify acceleration_Wind_mps() equals manually rotated vector.
-```
+Note: `latitudeRate_rps()` and `longitudeRate_rps()` are implemented here (Phase C)
+rather than Phase D, since they delegate entirely to `WGS84_Datum` and require no
+position-integration logic.
 
 ---
 
@@ -246,19 +129,6 @@ Test — acceleration_Wind_mps resolves correctly
 | `setHeight_WGS84_m(float)` | setter |
 | `latitudeRate(double Vnorth)` | returns `dφ/dt` in rad/s |
 | `longitudeRate(double Veast)` | returns `dλ/dt` in rad/s |
-
-### Implement `latitudeRate_rps()` and `longitudeRate_rps()` in `KinematicState`
-
-Delegate to `WGS84_Datum`:
-```cpp
-double KinematicState::latitudeRate_rps() const {
-    return _positionDatum.latitudeRate(_velocity_NED_mps(0));
-}
-
-double KinematicState::longitudeRate_rps() const {
-    return _positionDatum.longitudeRate(_velocity_NED_mps(1));
-}
-```
 
 ### Position integration in `step()` (add after velocity update)
 

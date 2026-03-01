@@ -6,7 +6,7 @@ KinematicState::KinematicState(double time_sec,
                const WGS84_Datum &position_datum,
                const Eigen::Vector3f &velocity_NED_mps,
                const Eigen::Vector3f &acceleration_Wind_mps,
-               const Eigen::Quaternionf &q_nw,  // TODO: is this what a user would have to init with?
+               const Eigen::Quaternionf &q_nw,
                float rollRate_Wind_rps,
                float alpha,
                float beta,
@@ -18,8 +18,11 @@ KinematicState::KinematicState(double time_sec,
       _positionDatum(position_datum),
       _velocity_NED_mps(velocity_NED_mps),
       _acceleration_NED_mps(q_nw.toRotationMatrix() * acceleration_Wind_mps),
+      _q_nw(q_nw),
       _q_nb(Eigen::Quaternionf::Identity()),
-      _rates_Body_rps(Eigen::Vector3f::Zero())
+      _rates_Body_rps(Eigen::Vector3f::Zero()),
+      _wind_NED_mps(-windSpeed_mps * Eigen::Vector3f(std::cos(windDirFrom_rad),
+                                                      std::sin(windDirFrom_rad), 0.f))
 {
     const float smallV(0.1);
 
@@ -29,29 +32,17 @@ KinematicState::KinematicState(double time_sec,
     // alpha, beta -> q_wb
     Eigen::Quaternionf q_wb(Eigen::AngleAxisf(alpha, Eigen::Vector3f(0, 1, 0)) * Eigen::AngleAxisf(-beta, Eigen::Vector3f(0, 0, 1)));
 
-    _q_nb = q_nw * q_wb;
-
-    // set the wind velocities
-    _windVelNorth = -windSpeed_mps*cos(windDirFrom_rad);
-    _windVelEast = -windSpeed_mps*sin(windDirFrom_rad);
-
-    // orientation of the body X axis expressed in NED
-    Eigen::Vector3f Xbody_NED;
+    _q_nb = _q_nw * q_wb;
 
     // alphaDot, betaDot -> omega_bw_b
     // Uses the Euler rate to body rate matrix
     Eigen::Vector3f omega_bw_b; // rotation rate of Body w.r.t. Wind expressed in the Body frame
-    omega_bw_b << sin(alpha)*betaDot, alphaDot, -cos(alpha)*betaDot;
-
-    // TODO: convert alpha, beta, alphaDot, betaDot to ground-relative quantities?
-    // VelocityWind frame is rotated in azimuth from the Velocity frame by crab, and the rotation rate is crabRate
-    // Wind frame is rotated in roll, alpha, and beta from the VelocityWind frame, 
-    // and the rotation rates are rollRate_Wind_rps, alphaDot, and betaDot
+    omega_bw_b << std::sin(alpha)*betaDot, alphaDot, -std::cos(alpha)*betaDot;
 
     Eigen::Quaternionf local_q_nvaero;
     local_q_nvaero.setIdentity();
 
-    Eigen::Vector3f velocityWind_NED_mps(_velocity_NED_mps - Eigen::Vector3f(_windVelNorth,_windVelEast,0));
+    Eigen::Vector3f velocityWind_NED_mps(_velocity_NED_mps - _wind_NED_mps);
 
     stepQnv(velocityWind_NED_mps, local_q_nvaero);
 
@@ -62,56 +53,45 @@ KinematicState::KinematicState(double time_sec,
     float normV = _velocity_NED_mps.norm();
     if (normV > smallV)
     {
-        // omega = V/R = kappa*V
-        // ay = V^2/R = V^2 * kappa = V*omega
-
-        // path curvature
         Eigen::Vector3f kappa(_velocity_NED_mps.cross(_acceleration_NED_mps) / (normV * normV * normV));
-
         omega_wn_n = kappa * normV;
     }
 
     // sum angular rate contributions
-    _rates_Body_rps = omega_bw_b + q_wb.toRotationMatrix().transpose() * (q_nw.toRotationMatrix().transpose() * omega_wn_n);
+    _rates_Body_rps = omega_bw_b + q_wb.toRotationMatrix().transpose() * (_q_nw.toRotationMatrix().transpose() * omega_wn_n);
 }
 
 double KinematicState::latitudeRate_rps() const
 {
-    // Placeholder implementation
-    return 0.0;
+    return _positionDatum.latitudeRate(_velocity_NED_mps(0));
 }
 
 double KinematicState::longitudeRate_rps() const
 {
-    // Placeholder implementation
-    return 0.0;
+    return _positionDatum.longitudeRate(_velocity_NED_mps(1));
 }
 
 Eigen::Vector3f KinematicState::velocity_Wind_mps() const
 {
-    // Placeholder implementation
-    return Eigen::Vector3f::Zero();
+    return _q_nw.toRotationMatrix().transpose() * (_velocity_NED_mps - _wind_NED_mps);
 }
 
 Eigen::Vector3f KinematicState::velocity_Body_mps() const
 {
-    // Placeholder implementation
-    return Eigen::Vector3f::Zero();
+    return _q_nb.toRotationMatrix().transpose() * _velocity_NED_mps;
 }
 
 Eigen::Vector3f KinematicState::acceleration_Wind_mps() const
 {
-    // Placeholder implementation
-    return Eigen::Vector3f::Zero();
+    return _q_nw.toRotationMatrix().transpose() * _acceleration_NED_mps;
 }
 
-Eigen::Vector3f KinematicState::acceleration_Body_mps() const 
+Eigen::Vector3f KinematicState::acceleration_Body_mps() const
 {
-    // Placeholder implementation
-    return Eigen::Vector3f::Zero();
+    return _q_nb.toRotationMatrix().transpose() * _acceleration_NED_mps;
 }
 
-Eigen::Vector3f KinematicState::eulers() const 
+Eigen::Vector3f KinematicState::eulers() const
 {
     return q_nb().toRotationMatrix().eulerAngles(3,2,1);
 }
@@ -145,10 +125,7 @@ float KinematicState::crab() const
     // tangent unit vector to ground-relative velocity
     Eigen::Vector3f Tvel_NED(_velocity_NED_mps.normalized());
 
-    Eigen::Vector3f wind_NED_mps;
-    wind_NED_mps << _windVelNorth, _windVelEast, 0;
-
-    Eigen::Vector3f velocityAero_NED_mps(_velocity_NED_mps - wind_NED_mps);
+    Eigen::Vector3f velocityAero_NED_mps(_velocity_NED_mps - _wind_NED_mps);
 
     // tangent unit vector to wind-relative velocity
     Eigen::Vector3f Twind_NED(velocityAero_NED_mps.normalized());
@@ -158,13 +135,10 @@ float KinematicState::crab() const
 
 float KinematicState::crabRate() const
 {
-    Eigen::Vector3f wind_NED_mps;
-    wind_NED_mps << _windVelNorth, _windVelEast, 0;
-
-    Eigen::Vector3f velocityAero_NED_mps(_velocity_NED_mps - wind_NED_mps);
+    Eigen::Vector3f velocityAero_NED_mps(_velocity_NED_mps - _wind_NED_mps);
 
     // crabRate is crab angle derivative w.r.t. time
-    // assume derivative of wind_NED_mps = 0
+    // assume derivative of _wind_NED_mps = 0
     // d/dt velocityAero_NED_mps = _acceleration_NED_mps
     // https://en.wikipedia.org/wiki/Atan2
     float azVelDot = -_velocity_NED_mps(1)*_acceleration_NED_mps(0)/(_velocity_NED_mps(0)*_velocity_NED_mps(1) + _velocity_NED_mps(1)*_velocity_NED_mps(1))
@@ -176,7 +150,7 @@ float KinematicState::crabRate() const
 }
 
 // update the velocity frame based on the velocity vector
-// velocity frame has its 
+// velocity frame has its
 // first axis aligned with the velocity vector
 // second axis right perp in the local level frame
 // third axis to complete the triad
@@ -229,27 +203,29 @@ void KinematicState::step(double time_sec,
     float dt = float(time_sec - _time_sec);
     _time_sec = time_sec;
 
+    // update stored wind
+    _wind_NED_mps = -windSpeed_mps * Eigen::Vector3f(std::cos(windDirFrom_rad),
+                                                      std::sin(windDirFrom_rad), 0.f);
+
     // save the previous frame rotations
     Eigen::Quaternionf local_q_nv(this->q_nv());
-    Eigen::Quaternionf local_q_vw(this->q_nv().toRotationMatrix().transpose()*this->q_nw().toRotationMatrix());
-    Eigen::Quaternionf local_q_wb(this->q_nw().toRotationMatrix().transpose()*this->q_nb().toRotationMatrix());
+    Eigen::Quaternionf local_q_vw(this->q_nv().toRotationMatrix().transpose() * _q_nw.toRotationMatrix());
+    Eigen::Quaternionf local_q_wb(_q_nw.toRotationMatrix().transpose() * _q_nb.toRotationMatrix());
 
     // get accelerations in the NED frame
-    Eigen::Vector3f accel_NED = q_nw().toRotationMatrix()*acceleration_Wind_mps;
-
-    Eigen::Vector3f windVel_NED =  Eigen::Vector3f(_windVelNorth, _windVelEast, 0);
+    Eigen::Vector3f accel_NED = _q_nw.toRotationMatrix() * acceleration_Wind_mps;
 
     // previous wind-relative velocity expressed in NED
-    Eigen::Vector3f velocityWind_NED = _velocity_NED_mps - windVel_NED;
+    Eigen::Vector3f velocityWind_NED = _velocity_NED_mps - _wind_NED_mps;
 
     // apply the accelerations in the wind-relative NED frame so that we
     // get the effects of heading rate in a steady wind
-    velocityWind_NED += 0.5*(_acceleration_NED_mps + accel_NED)*dt;
+    velocityWind_NED += 0.5f * (_acceleration_NED_mps + accel_NED) * dt;
 
-    Eigen::Vector3f velocity_NED_mps_prev = _velocity_NED_mps; // we need to save this to determine the rotations
+    Eigen::Vector3f velocity_NED_mps_prev = _velocity_NED_mps; // save to determine rotations
 
     // update the velocity vector based on acceleration
-    _velocity_NED_mps = velocityWind_NED + windVel_NED;
+    _velocity_NED_mps = velocityWind_NED + _wind_NED_mps;
 
     // save the accel state value
     _acceleration_NED_mps = accel_NED;
@@ -257,37 +233,25 @@ void KinematicState::step(double time_sec,
     // update the velocity frame to align with the new velocity vector
     stepQnv(_velocity_NED_mps, local_q_nv);
 
-    // TODO: update the Wind frame based on acceleration-induced 
-    // velocity vector rotation in Wind Y and Z axes
-    // obtain a differential rotation based on the cross product of the previous and updated velocity vectors
-    // remove the x component of the differential rotation
-    // update q_nw using the differential rotation
-    // normalize q_nw to remove any residual error in velocity vector alignment
-
-    // TODO: is this correct direction?
-    // TODO: do we want this rotation in NED?
+    // path-curvature rotation: differential rotation from the velocity vector change
     Eigen::Quaternionf diff_rot_n;
     diff_rot_n.setFromTwoVectors(velocity_NED_mps_prev, _velocity_NED_mps);
 
-    // apply diff_rot_n to q_nw
-    Eigen::Quaternionf local_q_nw(diff_rot_n.toRotationMatrix()*q_nw().toRotationMatrix());
-    // local_q_nw << diff_rot_n.toRotationMatrix()*q_nw().toRotationMatrix();
+    // roll rotation around Wind X axis
+    Eigen::Quaternionf roll_delta(
+        Eigen::AngleAxisf(rollRate_Wind_rps * dt, Eigen::Vector3f::UnitX()));
 
-    // TODO: rotate the Wind frame based on rollRate_Wind_rps in
-    // Wind X axis
-
-    // TODO: update Body frame based on alpha and beta
-
-    // TODO: get angular rates based on acceleration, rollRate_Wind_rps, alphaDot, and betaDot
+    // propagate _q_nw: path curvature rotates it in NED, roll rotates it in Wind
+    _q_nw = (diff_rot_n * _q_nw * roll_delta).normalized();
 
     // alpha, beta -> q_wb
     Eigen::Quaternionf q_wb(Eigen::AngleAxisf(alpha, Eigen::Vector3f(0, 1, 0)) * Eigen::AngleAxisf(-beta, Eigen::Vector3f(0, 0, 1)));
 
-    _q_nb = q_nw()  * q_wb;
+    _q_nb = _q_nw * q_wb;
 
     // alphaDot, betaDot -> omega_bw_b
     Eigen::Vector3f omega_bw_b; // rotation rate of Body w.r.t. Wind expressed in the Body frame
-    omega_bw_b << sin(alpha)*betaDot, alphaDot, -cos(alpha)*betaDot;
+    omega_bw_b << std::sin(alpha)*betaDot, alphaDot, -std::cos(alpha)*betaDot;
 
     // accel, vel, -> omega_wn_n
     // this is path curvature induced rotation in the POM
@@ -296,19 +260,12 @@ void KinematicState::step(double time_sec,
     float normV = _velocity_NED_mps.norm();
     if (normV > smallV)
     {
-        // omega = V/R = kappa*V
-        // ay = V^2/R = V^2 * kappa = V*omega
-
-        // path curvature
         Eigen::Vector3f kappa(_velocity_NED_mps.cross(_acceleration_NED_mps) / (normV * normV * normV));
-
         omega_wn_n = kappa * normV;
     }
 
     // sum angular rate contributions
-    _rates_Body_rps = omega_bw_b + q_wb.toRotationMatrix().transpose() * (q_nw().toRotationMatrix().transpose() * omega_wn_n);
-
-
+    _rates_Body_rps = omega_bw_b + q_wb.toRotationMatrix().transpose() * (_q_nw.toRotationMatrix().transpose() * omega_wn_n);
 }
 
 // https://stengel.mycpanel.princeton.edu/Quaternions.pdf

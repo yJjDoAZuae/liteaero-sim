@@ -102,7 +102,9 @@
       "Bash(PATH=\"/c/msys64/ucrt64/bin:$PATH\" cmake --build build --target liteaerosim)",
       "Bash(PATH=\"/c/msys64/ucrt64/bin:/c/Program Files/CMake/bin:$PATH\" cmake --build build --target liteaerosim)",
       "Bash(PATH=\"/c/msys64/ucrt64/bin:/c/Program Files/CMake/bin:$PATH\" cmake --build build)",
-      "Bash(PATH=\"/c/msys64/ucrt64/bin:$PATH\" ./build/test/liteaerosim_test.exe --gtest_filter=\"LiftCurveModelTest.*\")"
+      "Bash(PATH=\"/c/msys64/ucrt64/bin:$PATH\" ./build/test/liteaerosim_test.exe --gtest_filter=\"LiftCurveModelTest.*\")",
+      "Bash(PATH=\"/c/msys64/ucrt64/bin:$PATH\" ./build/test/liteaerosim_test.exe --gtest_filter=\"KinematicStateTest.*\")",
+      "Bash(PATH=\"/c/msys64/ucrt64/bin:$PATH\" ./build/test/liteaerosim_test.exe)"
     ]
   }
 }
