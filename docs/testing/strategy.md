@@ -2,13 +2,13 @@
 
 ## Philosophy
 
-All production code in LiteAeroSim is written using **Test-Driven Development (TDD)**. Tests are not written after the fact — they define the expected behaviour before a line of production code exists.
+All production code in LiteAeroSim is written using **Test-Driven Development (TDD)**. Tests are not written after the fact — they define the expected behavior before a line of production code exists.
 
 ```mermaid
 flowchart LR
-    R["🔴 Red<br/>Write a failing test<br/>that defines the behaviour"] -->
+    R["🔴 Red<br/>Write a failing test<br/>that defines the behavior"] -->
     G["🟢 Green<br/>Write the minimum code<br/>to pass the test"] -->
-    RF["🔵 Refactor<br/>Clean up without<br/>changing behaviour"] -->
+    RF["🔵 Refactor<br/>Clean up without<br/>changing behavior"] -->
     R
 ```
 
@@ -25,7 +25,7 @@ flowchart TD
     UNIT --> INT --> E2E
 ```
 
-The majority of tests are **unit tests**. Integration and end-to-end tests are added only when unit tests cannot adequately cover the behaviour.
+The majority of tests are **unit tests**. Integration and end-to-end tests are added only when unit tests cannot adequately cover the behavior.
 
 ## C++ Test Structure
 
@@ -40,7 +40,7 @@ The majority of tests are **unit tests**. Integration and end-to-end tests are a
 
 | Source file | Test file |
 |---|---|
-| `src/control/FilterSS2.cpp` | `test/control/FilterSS2_test.cpp` |
+| `src/control/FilterSS2.cpp` | `test/FilterSS2_test.cpp` |
 | `src/navigation/WGS84.cpp` | `test/navigation/WGS84_test.cpp` |
 
 ### Test Naming Convention
@@ -65,6 +65,7 @@ protected:
 
     FilterSS2 filter_;
     nlohmann::json default_config_ = {
+        {"design",     "low_pass_second"},
         {"dt_s",       0.01},
         {"wn_rad_s",   6.2832},
         {"zeta",       0.7071},
@@ -97,7 +98,7 @@ $$
 TEST_F(FilterSS2Test, StepResponse_ConstantInput_ConvergesToDCGain) {
     filter_.initialize(config_with_unity_dc_gain);
     for (int k = 0; k < 1000; k++) {
-        filter_.step(1.0f, 0.01f);
+        filter_.step(1.0f);
     }
     EXPECT_NEAR(filter_.out(), 1.0f, 1e-4f);
 }
@@ -107,7 +108,7 @@ TEST_F(FilterSS2Test, StepResponse_ConstantInput_ConvergesToDCGain) {
 
 ```cpp
 TEST_F(FilterSS2Test, Reset_AfterStepping_OutputReturnsToInitial) {
-    for (int k = 0; k < 50; k++) filter_.step(1.0f, 0.01f);
+    for (int k = 0; k < 50; k++) filter_.step(1.0f);
     filter_.reset();
     EXPECT_NEAR(filter_.out(), 0.0f, 1e-9f);
 }
@@ -120,7 +121,7 @@ This test is **mandatory** for every `DynamicBlock` subclass.
 ```cpp
 TEST_F(FilterSS2Test, Serialize_Deserialize_RoundTrip) {
     // Drive to a non-trivial state
-    for (int k = 0; k < 20; k++) filter_.step(1.0f, 0.01f);
+    for (int k = 0; k < 20; k++) filter_.step(1.0f);
 
     const nlohmann::json snapshot = filter_.serialize();
 

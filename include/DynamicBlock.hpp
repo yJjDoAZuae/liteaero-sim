@@ -67,7 +67,7 @@ protected:
     float out_ = 0.0f;
 
     // -----------------------------------------------------------------------
-    // Customisation hooks — implement in derived classes
+    // Customization hooks — implement in derived classes
     // -----------------------------------------------------------------------
 
     virtual void           onInitialize(const nlohmann::json& config) = 0;

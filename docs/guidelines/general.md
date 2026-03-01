@@ -146,9 +146,9 @@ The simulation is structured in layers. Each layer has a single well-defined res
 ### Component Model
 
 - Simulation elements are **components** with a uniform lifecycle interface:
-  - `initialize(config)` — set up from configuration.
+  - `initialize(config)` — set up from configuration; `config` includes `dt_s` for elements that need it.
   - `reset()` — return to initial conditions.
-  - `step(dt)` — advance state by one time step `dt` (seconds).
+  - `step(u)` — advance state by one timestep; timestep is fixed at `initialize()` time.
   - `serialize()` / `deserialize(data)` — state snapshot.
 - Components are composed, not inherited, wherever possible.
 
@@ -208,6 +208,7 @@ All dependencies must be documented with their version, license, and integration
   - [ ] Serialization implemented for new stateful components
   - [ ] No hardcoded magic numbers (use named constants)
   - [ ] New dependency license is permissive and recorded in the dependency registry
+  - [ ] No backward-compatibility shims, deprecated aliases, or forwarding wrappers (all call sites updated directly)
 
 ---
 

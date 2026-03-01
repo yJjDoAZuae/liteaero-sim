@@ -2,114 +2,7 @@
 
 ## Overview
 
-This document specifies the architecture for all single-input, single-output (SISO) dynamic simulation elements in LiteAeroSim. It covers the problem statement, current-state analysis, proposed two-tier design, the Non-Virtual Interface (NVI) pattern used to implement it, serialization, logging, and the incremental migration strategy.
-
----
-
-## Problem Statement
-
-The simulation will contain many dynamic elements — filters, integrators, limiters, PID loops, gain schedulers — that share a common set of operations:
-
-| Operation | Variation |
-|---|---|
-| Parameter initialization | Configuration source and structure differ per element |
-| State initialization | Reset conditions and arguments differ per element |
-| Time stepping | Internal dynamics differ completely per element |
-| Serialization / deserialization | Fields differ; schema versioning is universal |
-| Logging | Logged signals differ per element |
-
-The current `SISOBlock` base class defines only the I/O interface. It provides no lifecycle contract. The result is ad-hoc and inconsistent:
-
-- Initialization via constructors, `configure()`, and `configure(json)` mixed across classes
-- Reset via `reset()`, `reset(float)`, `resetInput(float)`, `resetOutput(float)`, or nothing
-- No serialization anywhere in the codebase
-- Logging infrastructure is an empty stub
-- `SISOPIDFF`, `Gain`, and `ControlLoop` do not inherit from `SISOBlock` despite participating in signal chains
-
----
-
-## Current Class Hierarchy
-
-```mermaid
-classDiagram
-    class SISOBlock {
-        <<abstract>>
-        +in() float
-        +out() float
-        +operator float() float
-        +step(u: float) float
-    }
-
-    class Filter {
-        <<abstract>>
-        +order() uint8_t
-        +resetInput(in: float)
-        +resetOutput(out: float)
-        +dcGain() float
-        +errorCode() uint16_t
-    }
-
-    class LimitBase {
-        <<abstract>>
-        +setLower(lim: float)
-        +setUpper(lim: float)
-        +enable()
-        +disable()
-        +isLimited() bool
-    }
-
-    class FilterTF
-    class FilterTF2
-    class FilterFIR
-    class FilterSS
-    class FilterSS2
-    class FilterSS2Clip
-
-    class Limit
-    class RateLimit
-
-    class Integrator
-    class Derivative
-    class Unwrap
-
-    class SISOPIDFF {
-        note: NOT a SISOBlock
-    }
-    class Gain {
-        note: NOT a SISOBlock
-    }
-    class ControlLoop {
-        note: NOT a SISOBlock
-    }
-
-    SISOBlock <|-- Filter
-    SISOBlock <|-- LimitBase
-    SISOBlock <|-- Integrator
-    SISOBlock <|-- Derivative
-    SISOBlock <|-- Unwrap
-
-    Filter <|-- FilterTF
-    Filter <|-- FilterTF2
-    Filter <|-- FilterFIR
-    Filter <|-- FilterSS
-    Filter <|-- FilterSS2
-    Filter <|-- FilterSS2Clip
-
-    LimitBase <|-- Limit
-    LimitBase <|-- RateLimit
-```
-
-**Gaps in the current design:**
-
-| Concern | Status |
-|---|---|
-| I/O interface (`in`, `out`, `step`) | ✅ Defined in `SISOBlock` |
-| Parameter initialization | ❌ Ad hoc per class |
-| State reset | ❌ Inconsistent signatures |
-| Serialization | ❌ Absent everywhere |
-| Deserialization | ❌ Absent everywhere |
-| Logging | ❌ Empty stub |
-| `dt` management | ❌ Set separately via `setDt()` — error-prone |
+This document specifies the architecture for all single-input, single-output (SISO) dynamic simulation elements in LiteAeroSim. It covers the problem statement, the two-tier design, the Non-Virtual Interface (NVI) pattern, serialization, logging, and the incremental migration strategy.
 
 ---
 
@@ -119,7 +12,7 @@ classDiagram
 
 Not every `SISOBlock` needs standalone lifecycle management. A `Limit` embedded inside a `SISOPIDFF` is an implementation detail — it is serialized as part of its parent, not independently. Imposing a full lifecycle on every composable primitive would add unnecessary coupling.
 
-The proposed design separates two concerns:
+The design separates two concerns:
 
 ```mermaid
 flowchart LR
@@ -188,6 +81,7 @@ The project uses a single top-level namespace `liteaerosim` with subsystem sub-n
 
 ```
 liteaerosim                  ← cross-subsystem types (DynamicBlock, SISOBlock, ILogger)
+                               math aliases (Vec3, Mat22, FiltVectorXf, …) in numerics.hpp
 liteaerosim::control         ← filters, integrators, limiters, PID, autopilot
 liteaerosim::physics         ← KinematicState, Atmosphere, Aerodynamics
 liteaerosim::propulsion      ← engine / motor models
@@ -197,7 +91,7 @@ liteaerosim::path            ← Path, PathSegmentHelix, PathSegmentTrochoid
 liteaerosim::logger          ← CsvLogger and other ILogger implementations
 ```
 
-The old `namespace Control` (Pascal-case) is replaced by `namespace liteaerosim::control`.
+The old `namespace Control` (Pascal-case) is replaced by `namespace liteaerosim::control`. Math type aliases and bounded-vector utilities are defined in `include/numerics.hpp` under `namespace liteaerosim` — they are not control-specific and must not live under a subsystem namespace.
 
 ---
 
@@ -207,6 +101,7 @@ The old `namespace Control` (Pascal-case) is replaced by `namespace liteaerosim:
 
 | Header | Location | Namespace |
 |---|---|---|
+| `numerics.hpp` | `include/numerics.hpp` | `liteaerosim` |
 | `SISOBlock.hpp` | `include/SISOBlock.hpp` | `liteaerosim` |
 | `DynamicBlock.hpp` | `include/DynamicBlock.hpp` | `liteaerosim` |
 | `ILogger.hpp` | `include/ILogger.hpp` | `liteaerosim` |
@@ -216,7 +111,7 @@ The old `namespace Control` (Pascal-case) is replaced by `namespace liteaerosim:
 
 ---
 
-## Proposed Interface
+## Interface
 
 ### `SISOBlock` — unchanged
 
@@ -298,7 +193,7 @@ protected:
     float out_ = 0.0f;
 
     // -----------------------------------------------------------------------
-    // Customisation hooks — implement in derived classes
+    // Customization hooks — implement in derived classes
     // -----------------------------------------------------------------------
     virtual void           onInitialize(const nlohmann::json& config) = 0;
     virtual void           onReset() = 0;
@@ -328,7 +223,7 @@ private:
 
 ---
 
-## Proposed Class Hierarchy
+## Target Class Hierarchy
 
 ```mermaid
 classDiagram
@@ -432,9 +327,11 @@ Every `DynamicBlock` subclass serializes a complete, self-describing JSON snapsh
         "x1": 0.0
     },
     "params": {
-        "dt_s": 0.01,
-        "wn_rad_s": 6.2832,
-        "zeta": 0.7071
+        "design":    "low_pass_second",
+        "dt_s":      0.01,
+        "wn_rad_s":  6.2832,
+        "zeta":      0.7071,
+        "tau_zero_s": 0.0
     }
 }
 ```
@@ -591,8 +488,8 @@ The existing codebase has passing tests. Migration proceeds one class at a time,
 
 ```mermaid
 flowchart TD
-    A["1. Define DynamicBlock<br/>& DynamicFilterBlock interfaces<br/>in new headers<br/>No production code changes"] -->
-    B["2. Migrate FilterSS2<br/>as reference implementation.<br/>Add serialize/deserialize.<br/>Write round-trip test."] -->
+    A["✅ 1. Define DynamicBlock<br/>& DynamicFilterBlock interfaces<br/>in new headers<br/>No production code changes"] -->
+    B["✅ 2. Migrate FilterSS2<br/>as reference implementation.<br/>Add serialize/deserialize.<br/>Write round-trip test."] -->
     C["3. Migrate remaining filters<br/>one at a time.<br/>Round-trip test per class."] -->
     D["4. Migrate Integrator,<br/>Derivative, Unwrap"] -->
     E["5. Migrate Limit, RateLimit<br/>via DynamicLimitBlock"] -->
@@ -612,6 +509,12 @@ flowchart TD
 - [ ] Round-trip serialization test added
 - [ ] Schema version rejection test added
 - [ ] All existing tests still pass
+
+**Completed migrations:**
+
+| Class | Step | Notes |
+|---|---|---|
+| `FilterSS2` | ✅ Step 2 | Reference implementation; full round-trip test in `test/FilterSS2_test.cpp` |
 
 ---
 

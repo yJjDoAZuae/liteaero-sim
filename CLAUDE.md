@@ -26,6 +26,8 @@ This file provides Claude Code with the project's development standards. Read th
 4. **Serialization** — Every stateful dynamic component implements `serialize()` and `deserialize()`. Round-trip test is required.
 5. **Naming** — Names are self-documenting. Abbreviations and Hungarian notation are forbidden. Encode units in names when not obvious from context.
 6. **No backward compatibility** — This codebase is not legacy code and must not be treated as such. Do not add forwarding shims, deprecated aliases, compatibility wrappers, or any other construct whose sole purpose is to preserve an old interface. When an API changes, update all call sites directly. When code is removed, remove it completely.
+7. **American English** — Use American spellings in all comments, documentation, identifiers, and string literals (e.g. "color" not "colour", "serialize" not "serialise").
+8. **Documentation reflects the present** — Keep all documentation accurate to the current state of the code. Remove or update any section that describes a previous design or a state that no longer exists. Do not leave historical notes inline; version control preserves history. Proposed extensions to the architecture (new subsystems, planned classes, future algorithms) may be documented, but must be clearly labeled as proposed or not yet implemented — never described as if they already exist.
 
 ### Architecture at a Glance
 
@@ -38,7 +40,7 @@ Infrastructure       ← math utilities, serialization helpers, unit conversion 
 
 ### Component Lifecycle
 
-Every dynamic element implements: `initialize(config)` → `reset()` → `step(dt_s)` → `serialize()` / `deserialize(state)`
+Every dynamic element implements: `initialize(config)` → `reset()` → `step(u)` → `serialize()` / `deserialize(state)`
 
 ### Project Language Mix
 
@@ -121,3 +123,4 @@ cmake/               CMake helpers
 | Serialized fields | SI unit suffix in field name: `"altitude_m"`, `"roll_rate_rad_s"` |
 | Schema version | Field `"schema_version"` (int) in every serialized object |
 | New dependency | Check license first; use FetchContent if source is available |
+| Angular velocity notation | $\boldsymbol{\omega}_{A/B}^C$: rotation of frame $A$ relative to frame $B$, expressed in frame $C$ |

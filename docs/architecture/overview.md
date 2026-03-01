@@ -133,7 +133,7 @@ flowchart LR
     subgraph PathSubsystem["Path"]
         PATH["Path"]
         HELIX["PathSegmentHelix"]
-        TROC["PathSegmentTrochoid<br/>(planned)"]
+        TROC["PathSegmentTrochoid<br/>(proposed)"]
     end
 
     subgraph Environment
@@ -225,7 +225,7 @@ sequenceDiagram
 | Lifecycle interface | Non-Virtual Interface (NVI) | Base enforces cross-cutting concerns (logging, schema validation) once |
 | State snapshot format | JSON (nlohmann/json) | Human-readable, schema-versioned, language-agnostic |
 | SI unit enforcement | All internal values in SI | Eliminates unit-conversion bugs in computation code |
-| Filter discretization | Tustin (bilinear) with prewarping | Preserves frequency-domain behaviour at design frequency |
+| Filter discretization | Tustin (bilinear) with prewarping | Preserves frequency-domain behavior at design frequency |
 | Path transitions | Dubins / Trochoid | Time-optimal under curvature constraint and wind |
 | Linear algebra | Eigen3 | De-facto standard; zero-cost abstractions; fixed-size matrices |
 | Build system | CMake FetchContent | Reproducible, no separate package manager required |

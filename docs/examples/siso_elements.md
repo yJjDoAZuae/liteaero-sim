@@ -41,6 +41,7 @@ The filter is configured with a natural frequency $\omega_n$ in rad/s and dampin
 
 | Parameter | SI Unit | Typical Value |
 |---|---|---|
+| `design` | — | `"low_pass_second"`, `"low_pass_first"`, … |
 | `dt_s` | s | 0.01 (100 Hz) |
 | `wn_rad_s` | rad/s | $2\pi \cdot f_c$ |
 | `zeta` | — (dimensionless) | 0.7071 (Butterworth) |
@@ -56,6 +57,7 @@ using namespace liteaerosim::control;
 
 // --- Initialize ---
 nlohmann::json config = {
+    {"design",     "low_pass_second"},
     {"dt_s",       0.01},
     {"wn_rad_s",   12.566},   // 2*pi*2 Hz cutoff
     {"zeta",       0.7071},   // Butterworth (maximally flat)
