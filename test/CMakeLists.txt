@@ -38,6 +38,10 @@ target_link_libraries(liteaerosim_test
         nlohmann_json::nlohmann_json
 )
 
-# Register individual test cases with CTest via Google Test discovery
+# Register individual test cases with CTest via Google Test discovery.
+# WORKING_DIRECTORY keeps test-generated output files (e.g. CSVs) inside the
+# build tree instead of the source root.
 include(GoogleTest)
-gtest_discover_tests(liteaerosim_test)
+gtest_discover_tests(liteaerosim_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
