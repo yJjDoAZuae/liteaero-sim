@@ -8,7 +8,7 @@
 
 using json = nlohmann::json;
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 TEST(TableAxisTest, Instantiation00) {
 

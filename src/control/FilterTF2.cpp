@@ -10,7 +10,8 @@
 
 static float dcTol = 1e-6;
 
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
 // copy implementation
 // template <char NUM_STATES=FILTER_MAX_STATES>

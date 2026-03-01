@@ -2,7 +2,7 @@
 #include "control/ControlLoop.hpp"
 #include "KinematicState.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 // input is a vertical speed command (positive local level up)
 // output is a vertical acceleration command (positive local level up)

@@ -9,7 +9,8 @@
 
 static float dcTol = 1e-6;
 
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
 
 void FilterSS::copy(FilterSS &filt)
@@ -23,7 +24,7 @@ void FilterSS::copy(FilterSS &filt)
     _errorCode = filt.errorCode();
 }
 
-void FilterSS::copy(FilterSS2 &filt)
+void FilterSS::copy(liteaerosim::control::FilterSS2 &filt)
 {
     _Phi << filt.Phi();
     _Gamma << filt.Gamma();

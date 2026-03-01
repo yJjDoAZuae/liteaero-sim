@@ -8,7 +8,7 @@
 #include "control/Derivative.hpp"
 #include "control/Unwrap.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 class SISOPIDFF
 {

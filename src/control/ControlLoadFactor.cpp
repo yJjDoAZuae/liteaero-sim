@@ -1,7 +1,7 @@
 #include "control/ControlLoadFactor.hpp"
 #include <Eigen/Dense>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 static float constexpr g = 9.81;
 

@@ -4,7 +4,7 @@
 
 #include "control/LimitBase.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 class RateLimit : public LimitBase {
 

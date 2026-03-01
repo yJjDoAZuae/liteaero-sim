@@ -4,7 +4,7 @@
 
 #include "SISOBlock.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 class LimitBase : public liteaerosim::SISOBlock {
 

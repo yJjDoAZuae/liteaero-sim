@@ -8,7 +8,7 @@
 #include <Eigen/Dense>
 #include <unsupported/Eigen/MatrixFunctions>  // for Matrix::pow()
 
-namespace Control {
+namespace liteaerosim::control {
 
 // A single input, single output discrete filter implementation
 // with ARMA parameterization
@@ -39,7 +39,7 @@ public:
     ~FilterSS() override {}
 
     void copy(FilterSS &filt);
-    void copy(FilterSS2 &filt);
+    void copy(liteaerosim::control::FilterSS2 &filt);
 
     float in() const override { return _in; }
     float out() const override { return _out; }

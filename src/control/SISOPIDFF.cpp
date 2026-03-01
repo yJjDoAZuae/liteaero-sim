@@ -4,7 +4,7 @@
 #include "control/SISOPIDFF.hpp"
 #include "math/math_util.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float SISOPIDFF::step(float cmdIn, float measIn, float measDotIn)
 {

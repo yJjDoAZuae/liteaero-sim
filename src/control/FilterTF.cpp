@@ -8,7 +8,8 @@
 
 static float dcTol = 1e-6;
 
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
 // error_code values
 // 0 : no error
@@ -137,7 +138,7 @@ float FilterTF::step(float in)
     // we're assigning state->y.k[0] without a coefficient
 
     // update the output
-    for (int k = 1; k < order() + 1 && k < NUM_STATES+1; k++)
+    for (int k = 1; k < order() + 1 && k < kFilterMaxStates+1; k++)
     {
         // TRICKY: because we haven't rolled the buffers yet
         // the input and output buffer indices are one less

@@ -1,7 +1,7 @@
 #include "control/ControlHeadingRate.hpp"
 #include <Eigen/Dense>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float velWind_horiz(const KinematicState & state)
 {

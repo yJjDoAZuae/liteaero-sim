@@ -1,6 +1,6 @@
 #include "control/Integrator.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float Integrator::step(float in)
 {

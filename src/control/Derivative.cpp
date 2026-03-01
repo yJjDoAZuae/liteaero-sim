@@ -1,6 +1,6 @@
 #include "control/Derivative.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float Derivative::step(float in)
 {

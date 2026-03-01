@@ -7,7 +7,7 @@
 #include <Eigen/Dense>
 
 
-namespace Control {
+namespace liteaerosim::control {
 
 
 // A single input, single output discrete filter implementation

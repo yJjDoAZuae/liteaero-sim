@@ -2,7 +2,7 @@
 
 #include "control/Antiwindup.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 void Antiwindup::operator=(float in)
 {

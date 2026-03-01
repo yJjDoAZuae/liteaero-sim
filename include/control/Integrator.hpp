@@ -6,7 +6,7 @@
 #include "control/Antiwindup.hpp"
 #include <vector>
 
-namespace Control {
+namespace liteaerosim::control {
 
     class Integrator : public liteaerosim::SISOBlock {
 

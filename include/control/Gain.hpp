@@ -8,7 +8,7 @@
 #include <sstream>
 #include <fstream>
 
-namespace Control {
+namespace liteaerosim::control {
 
 template <typename T, uint32_t NumAxes>    
 class Gain {

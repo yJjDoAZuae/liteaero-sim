@@ -4,14 +4,14 @@
 #include "control/filter_realizations.hpp"
 #include <cmath>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
-namespace Control {
+namespace liteaerosim::control {
 
 // https://en.wikipedia.org/wiki/Butterworth_filter#Normalized_Butterworth_polynomials
 FilterError butter(uint8_t order, float wn_rps, FiltVectorXf& num_s, FiltVectorXf& den_s)
 {
-    if (order < 1 || order > 10 || order > NUM_STATES) {
+    if (order < 1 || order > 10 || order > kFilterMaxStates) {
         return FilterError::INVALID_DIMENSION;
     }
 
@@ -116,7 +116,7 @@ void butterz_pzk(uint8_t order, uint8_t k, float dt, float wn_rps, float& pz_Re,
 // NOTE: excessive state dimension in a single transfer function can lead to numerical problems
 FilterError butterz(uint8_t order, float dt, float wn_rps, FiltVectorXf& num_s, FiltVectorXf& den_s)
 {
-    if (order < 1 || order > NUM_STATES) {
+    if (order < 1 || order > kFilterMaxStates) {
         return FilterError::INVALID_DIMENSION;
     }
 

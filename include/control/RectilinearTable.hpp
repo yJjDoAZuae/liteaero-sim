@@ -10,7 +10,7 @@
 
 using json = nlohmann::json;
 
-namespace Control {
+namespace liteaerosim::control {
 
 template <typename Tv, typename Ta, uint32_t NumAxes>
 class RectilinearTable {

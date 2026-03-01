@@ -1,307 +1,272 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
-// #include <stdio.h>
-// #include <string.h>
+#include <stdexcept>
+#include <string>
 
 #include "control/control.hpp"
 #include "control/filter_realizations.hpp"
 #include "control/FilterSS2.hpp"
 
-static float dcTol = 1e-6;
+using namespace liteaerosim::control;
 
-using namespace Control;
+namespace liteaerosim::control {
 
-// copy implementation
-// template <char NUM_STATES=FILTER_MAX_STATES>
-// void SISOFilter<NUM_STATES>::copy(SISOFilter &filt)
-void FilterSS2::copy(FilterSS2 &filt)
-{
-    _Phi << filt.Phi();
-    _Gamma << filt.Gamma();
-    _H << filt.H();
-    _J << filt.J();
-    _x << filt.x();
+static constexpr float kDcTol               = 1e-6f;
+static constexpr float kInvertibleThreshold = 1e-4f;
 
-    _errorCode = filt.errorCode();
-    
-    _order = filt.order();
-    _dt = filt.dt();
+// ---------------------------------------------------------------------------
+// Constructors
+// ---------------------------------------------------------------------------
+
+FilterSS2::FilterSS2() {
+    phi_.setZero();
+    gamma_.setZero();
+    h_.setZero();
+    j_.setOnes();
+    x_.setZero();
 }
 
-void FilterSS2::setLowPassFirstIIR(float dt, float tau)
-{
-    // HACK: zero order hold realization
-    // ydot = -1/tau y + 1/tau u
-    // yk+1 - yk = (-1/tau yk + 1/tau u) * dt
-    // yk+1 = (1 - dt/tau) xk + dt/tau u
-
-    // numz.k[0] = dt/tau;
-    // numz.k[1] = 0.0f;
-    // denz.k[0] = 1.0f;
-    // denz.k[1] = -(1-dt/tau);
-
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
-
-    num_s(0) = 0.0f;
-    num_s(1) = 0.0f;
-    num_s(2) = 1.0f / tau;
-    den_s(0) = 0.0f;
-    den_s(1) = 1.0f;
-    den_s(2) = 1.0f / tau;
-
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
-
-    _errorCode += tustin_1_tf(num_s, den_s, dt, 2.0f*M_PI / tau, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 1;
-    _dt = dt;
+FilterSS2::FilterSS2(FilterSS2& filt) {
+    copy(filt);
 }
 
-void FilterSS2::setLowPassSecondIIR(float dt, float wn_rps, float zeta, float tau_zero)
-{
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
-
-    num_s(0) = 0.0f;  // s^2
-    num_s(1) = tau_zero * wn_rps * wn_rps; // s
-    num_s(2) = wn_rps * wn_rps;
-    den_s(0) = 1.0f;  // s^2
-    den_s(1) = 2.0f * zeta * wn_rps;  // s
-    den_s(2) = wn_rps * wn_rps;
-
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
-
-    _errorCode += tustin_2_tf(num_s, den_s, dt, wn_rps, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 2;
-    _dt = dt;
+void FilterSS2::copy(FilterSS2& filt) {
+    phi_        = filt.phi_;
+    gamma_      = filt.gamma_;
+    h_          = filt.h_;
+    j_          = filt.j_;
+    x_          = filt.x_;
+    in_         = filt.in_;
+    out_        = filt.out_;
+    error_code_ = filt.error_code_;
+    order_      = filt.order_;
+    params_     = filt.params_;
 }
 
-void FilterSS2::setNotchSecondIIR(float dt, float wn_rps, float zeta_den, float zeta_num)
-{
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
+// ---------------------------------------------------------------------------
+// DynamicBlock hooks
+// ---------------------------------------------------------------------------
 
-    num_s(0) = 1.0f;
-    num_s(1) = 2.0f * zeta_num * wn_rps;
-    num_s(2) = wn_rps * wn_rps;
-    den_s(0) = 1.0f;
-    den_s(1) = 2.0f * zeta_den * wn_rps;
-    den_s(2) = wn_rps * wn_rps;
+void FilterSS2::onInitialize(const nlohmann::json& config) {
+    error_code_ = 0;
+    params_     = config;
 
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
+    const float       dt_s   = config.at("dt_s").get<float>();
+    const std::string design = config.at("design").get<std::string>();
 
-    _errorCode += tustin_2_tf(num_s, den_s, dt, wn_rps, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 2;
-    _dt = dt;
-}
-
-void FilterSS2::setHighPassFirstIIR(float dt, float tau)
-{
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
-
-    num_s(0) = 0.0f;
-    num_s(1) = 1.0f / tau;
-    num_s(2) = 0.0f;
-    den_s(0) = 0.0f;
-    den_s(1) = 1.0f;
-    den_s(2) = 1.0f / tau;
-
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
-
-    _errorCode = tustin_2_tf(num_s, den_s, dt, 2.0f*M_PI / tau, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 1;
-    _dt = dt;
-}
-
-void FilterSS2::setHighPassSecondIIR(float dt, float wn_rps, float zeta, float c_zero)
-{
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
-
-    num_s(0) = 1.0f;  // s^2
-    num_s(1) = c_zero * 2.0f * zeta * wn_rps;  // s
-    num_s(2) = 0.0f;
-    den_s(0) = 1.0f;  // s^2
-    den_s(1) = 2.0f * zeta * wn_rps;  // s
-    den_s(2) = wn_rps * wn_rps;
-
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
-
-    _errorCode += tustin_2_tf(num_s, den_s, dt, wn_rps, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 2;
-    _dt = dt;
-}
-
-void FilterSS2::setDerivIIR(float dt, float tau)
-{
-    Eigen::Vector3f num_s;
-    Eigen::Vector3f den_s;
-
-    num_s(0) = 0.0f;
-    num_s(1) = 1.0f / tau;
-    num_s(2) = 0.0f;
-    den_s(0) = 0.0f;
-    den_s(1) = 1.0f;
-    den_s(2) = 1.0f / tau;
-
-    Eigen::Vector3f num_z;
-    Eigen::Vector3f den_z;
-
-    _errorCode += tustin_2_tf(num_s, den_s, dt, 2.0f*M_PI / tau, num_z, den_z);
-
-    tf2ss(num_z, den_z, _Phi, _Gamma, _H, _J);
-
-    _order = 1;
-    _dt = dt;
-}
-
-void FilterSS2::resetInput(float in)
-{
-    _x.setZero();
-    _out = 0.0f;
-    _in = 0.0f;
-    float dcGain = this->dcGain();
-
-    if (errorCode() == 0)
-    {
-
-        Mat22 ImPhiInv;
-        bool invertible = false;
-        float absDeterminantThreshold = 1e-4;
-
-        (Mat22::Identity() - _Phi).computeInverseWithCheck(ImPhiInv, invertible, absDeterminantThreshold);
-
-        if (!invertible) {
-            _errorCode += FilterError::UNSTABLE;
-            return;
-        }
-
-        _in = in;
-        _out = dcGain * in;
-
-        _x << ImPhiInv * _Gamma * _in;
+    if (design == "low_pass_first") {
+        designLowPassFirst(dt_s, config.at("tau_s").get<float>());
+    } else if (design == "low_pass_second") {
+        designLowPassSecond(dt_s,
+                            config.at("wn_rad_s").get<float>(),
+                            config.at("zeta").get<float>(),
+                            config.at("tau_zero_s").get<float>());
+    } else if (design == "high_pass_first") {
+        designHighPassFirst(dt_s, config.at("tau_s").get<float>());
+    } else if (design == "high_pass_second") {
+        designHighPassSecond(dt_s,
+                             config.at("wn_rad_s").get<float>(),
+                             config.at("zeta").get<float>(),
+                             config.at("c_zero").get<float>());
+    } else if (design == "deriv") {
+        designDerivative(dt_s, config.at("tau_s").get<float>());
+    } else if (design == "notch_second") {
+        designNotchSecond(dt_s,
+                          config.at("wn_rad_s").get<float>(),
+                          config.at("zeta_den").get<float>(),
+                          config.at("zeta_num").get<float>());
     } else {
-        return;
+        throw std::invalid_argument("FilterSS2::onInitialize: unknown design key \"" + design + "\"");
     }
 }
 
-void FilterSS2::resetOutput(float out)
-{
-    const float tol = 1e-6;
-
-    _x.setZero();
-    _out = 0.0f;
-    _in = 0.0f;
-    float dcGain = this->dcGain();
-
-    if (fabs(dcGain) < tol) {
-        _errorCode += FilterError::ZERO_DC_GAIN;
-        return;
-    }
-
-    if (errorCode() == 0)
-    {
-
-        Mat22 ImPhiInv;
-        bool invertible = false;
-        float absDeterminantThreshold = 1e-4;
-
-        (Mat22::Identity() - _Phi).computeInverseWithCheck(ImPhiInv, invertible, absDeterminantThreshold);
-
-        if (!invertible) {
-            _errorCode += FilterError::UNSTABLE;
-            return;
-        }
-
-        _out = out;
-        _in = out/dcGain;
-
-        _x << ImPhiInv * _Gamma * _in;
-    } else {
-        return;
-    }
-
+void FilterSS2::onReset() {
+    x_.setZero();
 }
 
-float FilterSS2::dcGain() const
-{
-    // float dcGain = 1.0f;
+float FilterSS2::onStep(float u) {
+    // Output is based on current state (strictly proper or proper).
+    const float y = (h_ * x_ + j_ * u).value();
+    x_            = phi_ * x_ + gamma_ * u;
+    return y;
+}
 
-    // We need an arbitrary finite DC gain to accommodate
-    // band pass, high pass, and lead/lag filters filters
-    // TODO: Filter stability test?
+nlohmann::json FilterSS2::onSerialize() const {
+    return {
+        {"state",  {{"x0", x_(0)}, {"x1", x_(1)}}},
+        {"params", params_}
+    };
+}
 
-    // Test for infinite DC gain.
-    // Pure integrators should not be implemented
-    // using an ARMA filter.
+void FilterSS2::onDeserialize(const nlohmann::json& state) {
+    onInitialize(state.at("params"));
+    const nlohmann::json& s = state.at("state");
+    x_(0) = s.at("x0").get<float>();
+    x_(1) = s.at("x1").get<float>();
+}
 
+void FilterSS2::onLog(liteaerosim::ILogger& logger) const {
+    logger.log("FilterSS2.in",  in_);
+    logger.log("FilterSS2.out", out_);
+    logger.log("FilterSS2.x0",  x_(0));
+    logger.log("FilterSS2.x1",  x_(1));
+}
+
+// ---------------------------------------------------------------------------
+// Filter-specific query and reset
+// ---------------------------------------------------------------------------
+
+float FilterSS2::dcGain() const {
     Mat22 ImPhiInv;
-    bool invertible = false;
-    float absDeterminantThreshold = 1e-4;
+    bool  invertible = false;
 
-    (Mat22::Identity() - _Phi).computeInverseWithCheck(ImPhiInv, invertible, absDeterminantThreshold);
+    (Mat22::Identity() - phi_).computeInverseWithCheck(ImPhiInv, invertible, kInvertibleThreshold);
 
     if (!invertible) {
-        // _errorCode += FilterError::INFINITE_DC_GAIN;
-        return 1.0f;
+        return 1.0f;  // integrator-like; caller must handle
     }
 
-    return (_H*ImPhiInv*_Gamma + _J).value();
+    return (h_ * ImPhiInv * gamma_ + j_).value();
 }
 
-Mat22 FilterSS2::controlGrammian() const
-{
-    Mat22 C(Mat22::Zero(2,2));
+void FilterSS2::resetToInput(float in_val) {
+    x_.setZero();
+    in_  = 0.0f;
+    out_ = 0.0f;
 
-    for (int k = 0; k<2; k++) {
-        C(Eigen::all, k) << Mat21(_Phi.pow(k) * _Gamma);
+    if (error_code_ != 0) {
+        return;
     }
 
+    Mat22 ImPhiInv;
+    bool  invertible = false;
+
+    (Mat22::Identity() - phi_).computeInverseWithCheck(ImPhiInv, invertible, kInvertibleThreshold);
+
+    if (!invertible) {
+        error_code_ += FilterError::UNSTABLE;
+        return;
+    }
+
+    in_  = in_val;
+    out_ = dcGain() * in_val;
+    x_   = ImPhiInv * gamma_ * in_val;
+}
+
+void FilterSS2::resetToOutput(float out_val) {
+    x_.setZero();
+    in_  = 0.0f;
+    out_ = 0.0f;
+
+    const float dc = dcGain();
+
+    if (std::fabs(dc) < kDcTol) {
+        error_code_ += FilterError::ZERO_DC_GAIN;
+        return;
+    }
+
+    if (error_code_ != 0) {
+        return;
+    }
+
+    Mat22 ImPhiInv;
+    bool  invertible = false;
+
+    (Mat22::Identity() - phi_).computeInverseWithCheck(ImPhiInv, invertible, kInvertibleThreshold);
+
+    if (!invertible) {
+        error_code_ += FilterError::UNSTABLE;
+        return;
+    }
+
+    out_ = out_val;
+    in_  = out_val / dc;
+    x_   = ImPhiInv * gamma_ * in_;
+}
+
+// ---------------------------------------------------------------------------
+// Grammians
+// ---------------------------------------------------------------------------
+
+Mat22 FilterSS2::controlGrammian() const {
+    Mat22 C(Mat22::Zero(2, 2));
+    for (int k = 0; k < 2; ++k) {
+        C(Eigen::all, k) << Mat21(phi_.pow(k) * gamma_);
+    }
     return C;
 }
 
-Mat22 FilterSS2::observeGrammian() const
-{
-    Mat22 C(Mat22::Zero(2,2));
-
-    for (int k = 0; k<2; k++) {
-        C(k, Eigen::all) << Mat12(_H * _Phi.pow(k));
+Mat22 FilterSS2::observeGrammian() const {
+    Mat22 C(Mat22::Zero(2, 2));
+    for (int k = 0; k < 2; ++k) {
+        C(k, Eigen::all) << Mat12(h_ * phi_.pow(k));
     }
-
     return C;
 }
 
-float FilterSS2::step(float in)
-{
+// ---------------------------------------------------------------------------
+// Private design methods
+// ---------------------------------------------------------------------------
 
-    this->_in = in;
+void FilterSS2::designLowPassFirst(float dt_s, float tau_s) {
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 0.0f, 0.0f, 1.0f / tau_s;
+    den_s << 0.0f, 1.0f, 1.0f / tau_s;
 
-    // TRICKY: update the output first
-    _out = (_H*_x + _J*in).value();
-
-    // now update the state
-    _x = _Phi*_x + _Gamma*in;
-
-    return this->out();
+    error_code_ += tustin_1_tf(num_s, den_s, dt_s, 2.0f * static_cast<float>(M_PI) / tau_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 1;
 }
+
+void FilterSS2::designLowPassSecond(float dt_s, float wn_rad_s, float zeta, float tau_zero_s) {
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 0.0f, tau_zero_s * wn_rad_s * wn_rad_s, wn_rad_s * wn_rad_s;
+    den_s << 1.0f, 2.0f * zeta * wn_rad_s,           wn_rad_s * wn_rad_s;
+
+    error_code_ += tustin_2_tf(num_s, den_s, dt_s, wn_rad_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 2;
+}
+
+void FilterSS2::designHighPassFirst(float dt_s, float tau_s) {
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 0.0f, 1.0f / tau_s, 0.0f;
+    den_s << 0.0f, 1.0f,         1.0f / tau_s;
+
+    error_code_ += tustin_2_tf(num_s, den_s, dt_s, 2.0f * static_cast<float>(M_PI) / tau_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 1;
+}
+
+void FilterSS2::designHighPassSecond(float dt_s, float wn_rad_s, float zeta, float c_zero) {
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 1.0f, c_zero * 2.0f * zeta * wn_rad_s, 0.0f;
+    den_s << 1.0f, 2.0f * zeta * wn_rad_s,           wn_rad_s * wn_rad_s;
+
+    error_code_ += tustin_2_tf(num_s, den_s, dt_s, wn_rad_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 2;
+}
+
+void FilterSS2::designDerivative(float dt_s, float tau_s) {
+    // s/tau / (s + 1/tau) — same polynomial structure as high-pass first
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 0.0f, 1.0f / tau_s, 0.0f;
+    den_s << 0.0f, 1.0f,         1.0f / tau_s;
+
+    error_code_ += tustin_2_tf(num_s, den_s, dt_s, 2.0f * static_cast<float>(M_PI) / tau_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 1;
+}
+
+void FilterSS2::designNotchSecond(float dt_s, float wn_rad_s, float zeta_den, float zeta_num) {
+    Eigen::Vector3f num_s, den_s, num_z, den_z;
+    num_s << 1.0f, 2.0f * zeta_num * wn_rad_s, wn_rad_s * wn_rad_s;
+    den_s << 1.0f, 2.0f * zeta_den * wn_rad_s, wn_rad_s * wn_rad_s;
+
+    error_code_ += tustin_2_tf(num_s, den_s, dt_s, wn_rad_s, num_z, den_z);
+    tf2ss(num_z, den_z, phi_, gamma_, h_, j_);
+    order_ = 2;
+}
+
+}  // namespace liteaerosim::control

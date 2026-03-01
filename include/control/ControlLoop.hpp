@@ -5,7 +5,7 @@
 
 using json = nlohmann::json;
 
-namespace Control {
+namespace liteaerosim::control {
 
 class ControlLoop {
 

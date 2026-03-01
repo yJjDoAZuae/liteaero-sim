@@ -1,53 +1,25 @@
 #pragma once
 
-#include <Eigen/Dense>
+#include "numerics.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
-// NOTE: excessive state dimension in a single transfer function can lead to numerical problems
-#define FILTER_MAX_STATES 8
-#define NUM_STATES FILTER_MAX_STATES
+enum FilterError : uint16_t {
+    NONE               = 0,
+    INVALID_DIMENSION  = 1,
+    INVALID_TIMESTEP   = 2,
+    UNSTABLE           = 4,
+    INFINITE_DC_GAIN   = 8,
+    ZERO_DC_GAIN       = 16,
+    INVALID_POLYNOMIAL = 32,
+};
 
-// template <char NUM_STATES=FILTER_MAX_STATES>
-typedef Eigen::Matrix<float, Eigen::Dynamic, 1, 0, NUM_STATES + 1, 1> FiltVectorXf;
-typedef Eigen::Vector3f Vec3;
-typedef Eigen::Vector2cf Vec2c;
-
-typedef Eigen::Matrix<float, 2, 2> Mat22;
-typedef Eigen::Matrix<float, 2, 1> Mat21;
-typedef Eigen::Matrix<float, 1, 2> Mat12;
-typedef Eigen::Matrix<float, 1, 1> Mat11;
-
-typedef Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, 0, NUM_STATES, NUM_STATES> MatNN;
-typedef Eigen::Matrix<float, Eigen::Dynamic,              1, 0, NUM_STATES,          1> MatN1;
-typedef Eigen::Matrix<float,              1, Eigen::Dynamic, Eigen::RowMajor,          1, NUM_STATES> Mat1N;
-typedef Eigen::Matrix<float,              1,              1, 0,          1,          1> Mat11;
-
-FiltVectorXf left_resize(const FiltVectorXf &in, char len);
-FiltVectorXf right_resize(const FiltVectorXf &in, char len);
-void roll_buffer(FiltVectorXf &buff, float u);
-void roll_buffer(Vec3 &buff, float u);
-
-
-typedef enum {
-
-    // error_code values
-    NONE = 0, // no error
-    INVALID_DIMENSION = 1, // invalid vector or matrix dimension input
-    INVALID_TIMESTEP = 2, // invalid timestep
-    UNSTABLE = 4, // invalid denominator coefficients
-    INFINITE_DC_GAIN = 8, // non-finite dc gain
-    ZERO_DC_GAIN = 16, // attempt to perform output initialization with zero dc gain
-    INVALID_POLYNOMIAL = 32
-
-} FilterError;
-
-typedef enum {
-    FwdEuler = 0,
+enum DiscretizationMethod {
+    FwdEuler  = 0,
     BackEuler = 1,
-    Bilinear = 2,
-    Prewarp = 3,
-    PZMatch = 4
-} DiscretizationMethod;
+    Bilinear  = 2,
+    Prewarp   = 3,
+    PZMatch   = 4,
+};
 
-}
+}  // namespace liteaerosim::control

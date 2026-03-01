@@ -605,7 +605,7 @@ flowchart TD
 - [ ] Class derives from `DynamicBlock` or appropriate intermediate abstract
 - [ ] `onInitialize(config)` replaces constructor parameter setting
 - [ ] `onReset()` replaces ad-hoc reset methods
-- [ ] `onStep(u, dt_s)` replaces `step(float)` — dt is now explicit
+- [ ] `onStep(u)` replaces `step(float u)` — dt is fixed at initialize() time
 - [ ] `onSerialize()` / `onDeserialize()` implemented
 - [ ] `schemaVersion()` returns `1`
 - [ ] `onLog()` implemented (logs all internal signals)

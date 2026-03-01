@@ -60,7 +60,22 @@
       "Bash(/c/Users/Alex/.local/bin/uvx.exe pipx --version)",
       "Bash(source ~/.bashrc)",
       "Bash(uv --version)",
-      "Bash(uvx pipx --version)"
+      "Bash(uvx pipx --version)",
+      "Bash(INCS=\"-I include -I libs/eigen -I libs/nlohmann -I extern/trochoids/include\")",
+      "Bash(g++ -std=gnu++17 -c $INCS src/control/FilterSS2.cpp -o /tmp/FilterSS2.o)",
+      "Bash(EIGEN=\"/c/Users/Alex/avraero/Eigen\")",
+      "Bash(INCS=\"-I include -I $EIGEN -I $EIGEN/include\")",
+      "Bash(JSON=\"build/_deps/nlohmann_json-src/include\")",
+      "Bash(INCS=\"-I include -I $EIGEN -I $EIGEN/include -I $JSON\")",
+      "Bash(g++ -std=gnu++17 -c $INCS test/FilterSS2_test.cpp -o /tmp/FilterSS2_test.o)",
+      "Bash(GTEST=\"build/_deps/googletest-src/googletest/include\")",
+      "Bash(INCS=\"-I include -I $EIGEN -I $EIGEN/include -I $JSON -I $GTEST\")",
+      "Bash(make -j4 liteaerosim)",
+      "Bash(PATH=\"/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH\")",
+      "Bash(ls /c/msys64/ucrt64/bin/make* /c/msys64/ucrt64/bin/mingw32-make* /c/msys64/usr/bin/make*)",
+      "Bash(export PATH=\"/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH\")",
+      "Bash(xargs sed -i 's/using namespace Control;/using namespace liteaerosim::control;/g')",
+      "Bash(grep -l \"Mat22\\\\|Mat21\\\\|Mat12\\\\|Mat11\\\\|Vec3\\\\|Vec2c\\\\|MatNN\\\\|FiltVectorXf\" test/*.cpp)"
     ]
   }
 }

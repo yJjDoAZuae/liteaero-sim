@@ -7,7 +7,7 @@
 
 using json = nlohmann::json;
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 TEST(GainTest, Instantiation00) {
 

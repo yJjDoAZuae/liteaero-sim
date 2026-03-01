@@ -2,7 +2,7 @@
 #include "control/ControlLoop.hpp"
 #include "KinematicState.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 class ControlAltitude : public ControlLoop {
 

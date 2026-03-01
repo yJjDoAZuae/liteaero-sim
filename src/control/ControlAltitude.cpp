@@ -1,6 +1,6 @@
 #include "control/ControlAltitude.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float ControlAltitude::step(float altitudeCmdIn, const KinematicState & state)
 {

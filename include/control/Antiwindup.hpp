@@ -6,7 +6,7 @@
 #include <sstream>
 #include <vector>
 
-namespace Control {
+namespace liteaerosim::control {
 
 typedef enum {
     AW_Negative = -1,

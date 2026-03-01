@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include "control/control.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 FilterError butter(uint8_t order, 
                    float wn_rps, 

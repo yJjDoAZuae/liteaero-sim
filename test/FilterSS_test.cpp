@@ -3,7 +3,8 @@
 #include "control/filter_realizations.hpp"
 #include <gtest/gtest.h>
 
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
 TEST(FilterSSTest, Instantiation00) {
 

@@ -2,7 +2,7 @@
 #include "control/RateLimit.hpp"
 #include <gtest/gtest.h>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 TEST(RateLimitTest, Instantiation00) {
 

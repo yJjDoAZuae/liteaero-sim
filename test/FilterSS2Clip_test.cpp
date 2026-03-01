@@ -7,7 +7,8 @@
 #include <iomanip>
 
 using namespace std;
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
 TEST(FilterSS2ClipTest, Instantiation00) {
 

@@ -2,7 +2,7 @@
 #include "control/Limit.hpp"
 #include <gtest/gtest.h>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 TEST(LimitTest, Instantiation00) {
 

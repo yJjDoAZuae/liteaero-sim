@@ -1,6 +1,6 @@
 #include "control/RateLimit.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 void RateLimit::setLower(float lim)
 {

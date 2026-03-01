@@ -6,7 +6,7 @@
 #include <Eigen/Dense>
 
 
-namespace Control {
+namespace liteaerosim::control {
 
 
 // A single input, single output discrete filter implementation
@@ -18,7 +18,7 @@ class Filter : public liteaerosim::SISOBlock
 
 public:
 
-    constexpr static char maxNumStates = NUM_STATES;
+    constexpr static char maxNumStates = liteaerosim::kFilterMaxStates;
 
     virtual uint8_t order() const=0;
 

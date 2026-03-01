@@ -2,7 +2,7 @@
 #include "control/Unwrap.hpp"
 #include <gtest/gtest.h>
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 TEST(UnwrapTest, Instantiation00) {
 

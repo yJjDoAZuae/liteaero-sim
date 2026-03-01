@@ -1,6 +1,6 @@
 #include "control/Limit.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 // void Limit::copy(const SISOLimit& lim) 
 // {

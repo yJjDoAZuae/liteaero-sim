@@ -8,7 +8,7 @@
 #include <Eigen/Dense>
 #include <unsupported/Eigen/MatrixFunctions>  // for Matrix::pow()
 
-namespace Control {
+namespace liteaerosim::control {
 
 // template <char NUM_STATES=FILTER_MAX_STATES>
 

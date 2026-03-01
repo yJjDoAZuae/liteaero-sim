@@ -1,6 +1,6 @@
 #include "control/ControlHeading.hpp"
 
-using namespace Control;
+using namespace liteaerosim::control;
 
 float ControlHeading::step(float cmdIn, const KinematicState & state)
 {

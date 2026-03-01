@@ -2,9 +2,9 @@
 
 static float dcTol = 1e-6;
 
-using namespace Control;
+using namespace liteaerosim::control;
+using namespace liteaerosim;
 
-void roll_buffer(FiltVectorXf &buff, float u);
 
 void FilterFIR::setAverageFIR(char order)
 {

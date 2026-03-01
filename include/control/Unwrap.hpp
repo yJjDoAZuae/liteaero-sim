@@ -4,7 +4,7 @@
 
 #include "SISOBlock.hpp"
 
-namespace Control {
+namespace liteaerosim::control {
 
 class Unwrap : public liteaerosim::SISOBlock {
 
