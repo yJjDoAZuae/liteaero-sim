@@ -25,6 +25,7 @@ This file provides Claude Code with the project's development standards. Read th
 3. **Unit conversion** — Only at the outermost interface (display, config file parsing). Never inside computation code.
 4. **Serialization** — Every stateful dynamic component implements `serialize()` and `deserialize()`. Round-trip test is required.
 5. **Naming** — Names are self-documenting. Abbreviations and Hungarian notation are forbidden. Encode units in names when not obvious from context.
+6. **No backward compatibility** — This codebase is not legacy code and must not be treated as such. Do not add forwarding shims, deprecated aliases, compatibility wrappers, or any other construct whose sole purpose is to preserve an old interface. When an API changes, update all call sites directly. When code is removed, remove it completely.
 
 ### Architecture at a Glance
 
