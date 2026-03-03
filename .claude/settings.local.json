@@ -137,7 +137,9 @@
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe 2>&1 | tail -10\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build --target liteaerosim_test 2>&1\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=LiftCurveModelTest.*:AllocatorFixture.* 2>&1\")",
-      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=LiftCurveModelTest.* 2>&1\")"
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=LiftCurveModelTest.* 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.* 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe 2>&1\")"
     ]
   }
 }

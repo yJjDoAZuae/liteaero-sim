@@ -14,7 +14,12 @@ KinematicState::KinematicState(double time_sec,
       _acceleration_NED_mps(acceleration_NED_mps),
       _q_nb(q_nb),
       _rates_Body_rps(rates_Body_rps),
-      _wind_NED_mps(Eigen::Vector3f::Zero())
+      _wind_NED_mps(Eigen::Vector3f::Zero()),
+      _alpha_rad(0.f),
+      _beta_rad(0.f),
+      _alphaDot_rps(0.f),
+      _betaDot_rps(0.f),
+      _rollRate_Wind_rps(0.f)
 {
     // Derive alpha and beta exactly from the body-frame velocity projection.
     // With q_wb = Ry(alpha) * Rz(-beta), the body-frame airmass velocity is:
@@ -57,7 +62,12 @@ KinematicState::KinematicState(double time_sec,
       _q_nb(Eigen::Quaternionf::Identity()),
       _rates_Body_rps(Eigen::Vector3f::Zero()),
       _wind_NED_mps(-windSpeed_mps * Eigen::Vector3f(std::cos(windDirFrom_rad),
-                                                      std::sin(windDirFrom_rad), 0.f))
+                                                      std::sin(windDirFrom_rad), 0.f)),
+      _alpha_rad(alpha),
+      _beta_rad(beta),
+      _alphaDot_rps(alphaDot),
+      _betaDot_rps(betaDot),
+      _rollRate_Wind_rps(rollRate_Wind_rps)
 {
     const float smallV(0.1);
 
@@ -241,6 +251,13 @@ void KinematicState::step(double time_sec,
     float dt = float(time_sec - _time_sec);
     _time_sec = time_sec;
 
+    // store aerodynamic inputs
+    _alpha_rad         = alpha;
+    _beta_rad          = beta;
+    _alphaDot_rps      = alphaDot;
+    _betaDot_rps       = betaDot;
+    _rollRate_Wind_rps = rollRate_Wind_rps;
+
     // update stored wind
     _wind_NED_mps = -windSpeed_mps * Eigen::Vector3f(std::cos(windDirFrom_rad),
                                                       std::sin(windDirFrom_rad), 0.f);
@@ -315,6 +332,96 @@ void KinematicState::step(double time_sec,
 
     // sum angular rate contributions
     _rates_Body_rps = omega_bw_b + q_wb.toRotationMatrix().transpose() * (_q_nw.toRotationMatrix().transpose() * omega_wn_n);
+}
+
+float KinematicState::alpha()              const { return _alpha_rad; }
+float KinematicState::beta()               const { return _beta_rad; }
+float KinematicState::alphaDot()           const { return _alphaDot_rps; }
+float KinematicState::betaDot()            const { return _betaDot_rps; }
+float KinematicState::rollRate_Wind_rps()  const { return _rollRate_Wind_rps; }
+
+float KinematicState::rollRate_rps()    const { return BodyRatesToEulerRates(eulers(), _rates_Body_rps)(0); }
+float KinematicState::pitchRate_rps()   const { return BodyRatesToEulerRates(eulers(), _rates_Body_rps)(1); }
+float KinematicState::headingRate_rps() const { return BodyRatesToEulerRates(eulers(), _rates_Body_rps)(2); }
+
+Eigen::Quaternionf KinematicState::q_ns() const
+{
+    return (_q_nw * Eigen::Quaternionf(
+                Eigen::AngleAxisf(_alpha_rad, Eigen::Vector3f::UnitY()))).normalized();
+}
+
+Eigen::Vector3f KinematicState::velocity_Stab_mps() const
+{
+    return q_ns().toRotationMatrix().transpose() * _velocity_NED_mps;
+}
+
+Eigen::Quaternionf KinematicState::q_nl() const
+{
+    return Eigen::Quaternionf(_positionDatum.qne().cast<float>());
+}
+
+const PlaneOfMotion& KinematicState::POM() const
+{
+    static constexpr float kSmallV     = 0.1f;
+    static constexpr float kSmallAperp = 1e-4f;
+
+    const Eigen::Vector3f v = _velocity_NED_mps - _wind_NED_mps;
+    const float V = v.norm();
+
+    if (V < kSmallV) {
+        _pom.q_np = Eigen::Quaternionf::Identity();
+        return _pom;
+    }
+
+    const Eigen::Vector3f xhat   = v / V;
+    const Eigen::Vector3f a_par  = _acceleration_NED_mps.dot(xhat) * xhat;
+    const Eigen::Vector3f a_perp = _acceleration_NED_mps - a_par;
+
+    if (a_perp.norm() < kSmallAperp) {
+        _pom.q_np = Eigen::Quaternionf::Identity();
+        return _pom;
+    }
+
+    const Eigen::Vector3f yhat = a_perp.normalized();
+    const Eigen::Vector3f zhat = xhat.cross(yhat);
+
+    Eigen::Matrix3f C_NP;
+    C_NP.col(0) = xhat;
+    C_NP.col(1) = yhat;
+    C_NP.col(2) = zhat;
+    _pom.q_np = Eigen::Quaternionf(C_NP);
+
+    return _pom;
+}
+
+const TurnCircle& KinematicState::turnCircle() const
+{
+    static constexpr float kSmallV     = 0.1f;
+    static constexpr float kSmallAperp = 1e-4f;
+
+    _turn_circle.pom = POM();
+
+    const Eigen::Vector3f v = _velocity_NED_mps - _wind_NED_mps;
+    const float V = v.norm();
+
+    if (V < kSmallV) {
+        _turn_circle.turnCenter_deltaNED_m = Eigen::Vector3f::Zero();
+        return _turn_circle;
+    }
+
+    const Eigen::Vector3f xhat   = v / V;
+    const Eigen::Vector3f a_par  = _acceleration_NED_mps.dot(xhat) * xhat;
+    const Eigen::Vector3f a_perp = _acceleration_NED_mps - a_par;
+
+    if (a_perp.norm() < kSmallAperp) {
+        _turn_circle.turnCenter_deltaNED_m = Eigen::Vector3f::Zero();
+        return _turn_circle;
+    }
+
+    const float R = (V * V) / a_perp.norm();
+    _turn_circle.turnCenter_deltaNED_m = R * a_perp.normalized();
+
+    return _turn_circle;
 }
 
 // https://stengel.mycpanel.princeton.edu/Quaternions.pdf

@@ -296,3 +296,290 @@ TEST(KinematicStateTest, EulersCombinedZYX) {
     EXPECT_NEAR(s.pitch(),   theta, 1e-4f);
     EXPECT_NEAR(s.heading(), psi,   1e-4f);
 }
+
+// ── Phase F: alpha() and beta() ───────────────────────────────────────────────
+
+TEST(KinematicStateTest, AlphaBetaZeroInitially) {
+    // q_nb constructor: alpha/beta initialized to 0.f.
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    EXPECT_NEAR(s.alpha(), 0.f, 1e-6f);
+    EXPECT_NEAR(s.beta(),  0.f, 1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaBetaStoredFromConstructor) {
+    // q_nw constructor: alpha and beta stored from explicit parameters.
+    const float alpha_val = 0.2f, beta_val = 0.1f;
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, Eigen::Vector3f::Zero(),
+                                  Eigen::Quaternionf::Identity(), 0.f,
+                                  alpha_val, beta_val);
+    EXPECT_NEAR(s.alpha(), alpha_val, 1e-6f);
+    EXPECT_NEAR(s.beta(),  beta_val,  1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaBetaStoredFromStep) {
+    // step() stores alpha and beta.
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    const float alpha_val = 0.2f, beta_val = 0.1f;
+    s.step(0.1, Eigen::Vector3f::Zero(), 0.f, alpha_val, beta_val, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.alpha(), alpha_val, 1e-6f);
+    EXPECT_NEAR(s.beta(),  beta_val,  1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaBetaUpdatedEachStep) {
+    // Consecutive step() calls: getter reflects the most recent.
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    s.step(0.1, Eigen::Vector3f::Zero(), 0.f, 0.15f, 0.05f, 0.f, 0.f, 0.f, 0.f);
+    s.step(0.2, Eigen::Vector3f::Zero(), 0.f, 0.25f, 0.08f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.alpha(), 0.25f, 1e-6f);
+    EXPECT_NEAR(s.beta(),  0.08f, 1e-6f);
+}
+
+// ── Phase G: alphaDot() and betaDot() ─────────────────────────────────────────
+
+TEST(KinematicStateTest, AlphaDotBetaDotZeroInitially) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    EXPECT_NEAR(s.alphaDot(), 0.f, 1e-6f);
+    EXPECT_NEAR(s.betaDot(),  0.f, 1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaDotStoredFromConstructor) {
+    // q_nw constructor: alphaDot and betaDot stored from parameters.
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     0.f, 0.1f, 0.f, 0.05f, 0.01f, 0.f, 0.f);
+    EXPECT_NEAR(s.alphaDot(), 0.05f, 1e-6f);
+    EXPECT_NEAR(s.betaDot(),  0.01f, 1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaDotStoredFromStep) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    s.step(0.1, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.05f, 0.01f, 0.f, 0.f);
+    EXPECT_NEAR(s.alphaDot(), 0.05f, 1e-6f);
+    EXPECT_NEAR(s.betaDot(),  0.01f, 1e-6f);
+}
+
+TEST(KinematicStateTest, AlphaDotUpdatedEachStep) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    s.step(0.1, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.03f, 0.f, 0.f, 0.f);
+    s.step(0.2, Eigen::Vector3f::Zero(), 0.f, 0.f, 0.f, 0.07f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.alphaDot(), 0.07f, 1e-6f);
+}
+
+// ── Phase H: Euler rate methods ───────────────────────────────────────────────
+
+TEST(KinematicStateTest, EulerRatesAllZeroForZeroBodyRates) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    EXPECT_NEAR(s.rollRate_rps(),    0.f, 1e-6f);
+    EXPECT_NEAR(s.pitchRate_rps(),   0.f, 1e-6f);
+    EXPECT_NEAR(s.headingRate_rps(), 0.f, 1e-6f);
+}
+
+TEST(KinematicStateTest, HeadingRateEqualsYawBodyRateAtLevelFlight) {
+    // q_nb=I, [p,q,r]=[0,0,r] → headingRate=r, others≈0.
+    const float r = 0.5f;
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f(0.f, 0.f, r));
+    EXPECT_NEAR(s.headingRate_rps(), r,   1e-5f);
+    EXPECT_NEAR(s.rollRate_rps(),    0.f, 1e-5f);
+    EXPECT_NEAR(s.pitchRate_rps(),   0.f, 1e-5f);
+}
+
+TEST(KinematicStateTest, PitchRateEqualsBodyPitchAtLevelFlight) {
+    // q_nb=I, [p,q,r]=[0,q,0] → pitchRate=q, others≈0.
+    const float q_rate = 0.3f;
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f(0.f, q_rate, 0.f));
+    EXPECT_NEAR(s.pitchRate_rps(),   q_rate, 1e-5f);
+    EXPECT_NEAR(s.rollRate_rps(),    0.f,    1e-5f);
+    EXPECT_NEAR(s.headingRate_rps(), 0.f,    1e-5f);
+}
+
+TEST(KinematicStateTest, RollRateEqualsBodyRollAtLevelFlight) {
+    // q_nb=I, [p,q,r]=[p,0,0] → rollRate=p, others≈0.
+    const float p = 0.2f;
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f(p, 0.f, 0.f));
+    EXPECT_NEAR(s.rollRate_rps(),    p,   1e-5f);
+    EXPECT_NEAR(s.pitchRate_rps(),   0.f, 1e-5f);
+    EXPECT_NEAR(s.headingRate_rps(), 0.f, 1e-5f);
+}
+
+// ── Phase I: rollRate_Wind_rps() ──────────────────────────────────────────────
+
+TEST(KinematicStateTest, RollRateWindZeroInitially) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    EXPECT_NEAR(s.rollRate_Wind_rps(), 0.f, 1e-6f);
+}
+
+TEST(KinematicStateTest, RollRateWindStoredFromConstructor) {
+    const float rollRate = 0.3f;
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, Eigen::Vector3f::Zero(),
+                                  Eigen::Quaternionf::Identity(), rollRate);
+    EXPECT_NEAR(s.rollRate_Wind_rps(), rollRate, 1e-6f);
+}
+
+TEST(KinematicStateTest, RollRateWindStoredFromStep) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    const float rollRate = 0.3f;
+    s.step(0.1, Eigen::Vector3f::Zero(), rollRate, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.rollRate_Wind_rps(), rollRate, 1e-6f);
+}
+
+TEST(KinematicStateTest, RollRateWindUpdatedEachStep) {
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(50.f, 0.f, 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    s.step(0.1, Eigen::Vector3f::Zero(), 0.15f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    s.step(0.2, Eigen::Vector3f::Zero(), 0.25f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f);
+    EXPECT_NEAR(s.rollRate_Wind_rps(), 0.25f, 1e-6f);
+}
+
+// ── Phase J: q_ns() and velocity_Stab_mps() ───────────────────────────────────
+
+TEST(KinematicStateTest, QnsEqualsQnwAtZeroAlpha) {
+    // q_nw=I, alpha=0 → q_ns = I = q_nw.
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, Eigen::Vector3f::Zero(),
+                                  Eigen::Quaternionf::Identity(), 0.f, 0.f, 0.f);
+    EXPECT_NEAR((s.q_ns().toRotationMatrix() - s.q_nw().toRotationMatrix()).norm(), 0.f, 1e-5f);
+}
+
+TEST(KinematicStateTest, QnsRotatedByAlphaFromQnw) {
+    // q_nw=I, alpha=α → q_ns = Ry(α).
+    const float alpha_val = 0.2f;
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, Eigen::Vector3f::Zero(),
+                                  Eigen::Quaternionf::Identity(), 0.f, alpha_val, 0.f);
+    const Eigen::Matrix3f expected =
+        Eigen::AngleAxisf(alpha_val, Eigen::Vector3f::UnitY()).toRotationMatrix();
+    EXPECT_NEAR((s.q_ns().toRotationMatrix() - expected).norm(), 0.f, 1e-5f);
+}
+
+TEST(KinematicStateTest, VelocityStabXIsAirspeedAtZeroAeroAngles) {
+    // q_nw=I, alpha=beta=0, no wind, v=[50,0,0] → velocity_Stab = [50,0,0].
+    KinematicState s = makeState1({50.f, 0.f, 0.f});
+    EXPECT_NEAR(s.velocity_Stab_mps().x(), 50.f, 1e-4f);
+    EXPECT_NEAR(s.velocity_Stab_mps().y(),  0.f, 1e-4f);
+    EXPECT_NEAR(s.velocity_Stab_mps().z(),  0.f, 1e-4f);
+}
+
+TEST(KinematicStateTest, VelocityStabYIsZeroWithNonzeroBeta) {
+    // q_nb=I, v=[V*cos(β), V*sin(β), 0]: sideslip β encodes q_nw=Rz(β).
+    // velocity_Stab.y() must be 0 and airspeed must be preserved in x.
+    const float beta_val = 0.15f;
+    const float V        = 50.f;
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f(V * std::cos(beta_val), V * std::sin(beta_val), 0.f),
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+    EXPECT_NEAR(s.velocity_Stab_mps().y(), 0.f, 1e-4f);
+    EXPECT_NEAR(s.velocity_Stab_mps().x(), V,   1e-4f);
+}
+
+// ── Phase K: q_nl() ───────────────────────────────────────────────────────────
+
+TEST(KinematicStateTest, QnlIsUnitQuaternion) {
+    KinematicState s = makeState1();
+    EXPECT_NEAR(s.q_nl().norm(), 1.f, 1e-5f);
+}
+
+TEST(KinematicStateTest, QnlNorthVectorMapsToECEF) {
+    // At lat=0, lon=0: q_nl (ECEF→NED), so q_nl.conjugate() maps NED→ECEF.
+    // NED north [1,0,0] should map to ECEF (0,0,1) = toward North Pole.
+    KinematicState s = makeState1();
+    const Eigen::Vector3f north_ECEF = s.q_nl().conjugate() * Eigen::Vector3f::UnitX();
+    EXPECT_NEAR(north_ECEF.x(), 0.f, 1e-4f);
+    EXPECT_NEAR(north_ECEF.y(), 0.f, 1e-4f);
+    EXPECT_NEAR(north_ECEF.z(), 1.f, 1e-4f);
+}
+
+// ── Phase L: POM() and turnCircle() ──────────────────────────────────────────
+
+TEST(KinematicStateTest, POMIdentityForStraightFlight) {
+    // Zero acceleration → straight flight → POM defaults to Identity.
+    KinematicState s = makeState1({50.f, 0.f, 0.f});
+    EXPECT_NEAR((s.POM().q_np.toRotationMatrix() - Eigen::Matrix3f::Identity()).norm(),
+                0.f, 1e-5f);
+}
+
+TEST(KinematicStateTest, POMXAxisAlignedWithVelocity) {
+    // v=[50,0,0], centripetal a_Wind=[0,5,0] → POM x-hat = [1,0,0].
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, {0.f, 5.f, 0.f});
+    const Eigen::Vector3f x_pom = s.POM().q_np.toRotationMatrix().col(0);
+    EXPECT_NEAR(x_pom.x(), 1.f, 1e-4f);
+    EXPECT_NEAR(x_pom.y(), 0.f, 1e-4f);
+    EXPECT_NEAR(x_pom.z(), 0.f, 1e-4f);
+}
+
+TEST(KinematicStateTest, POMYAxisTowardCurvatureCenter) {
+    // v=[50,0,0], centripetal a_Wind=[0,5,0] → POM y-hat (toward center) = [0,1,0].
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, {0.f, 5.f, 0.f});
+    const Eigen::Vector3f y_pom = s.POM().q_np.toRotationMatrix().col(1);
+    EXPECT_NEAR(y_pom.x(), 0.f, 1e-4f);
+    EXPECT_NEAR(y_pom.y(), 1.f, 1e-4f);
+    EXPECT_NEAR(y_pom.z(), 0.f, 1e-4f);
+}
+
+TEST(KinematicStateTest, TurnCircleRadiusCorrect) {
+    // V=50, a_perp=5 m/s² → R = V²/a_perp = 500 m.
+    const float V = 50.f, a = 5.f;
+    KinematicState s = makeState1({V, 0.f, 0.f}, {0.f, a, 0.f});
+    EXPECT_NEAR(s.turnCircle().turnCenter_deltaNED_m.norm(), V * V / a, 1.f);
+}
+
+TEST(KinematicStateTest, TurnCircleCenterInCurvatureDirection) {
+    // Center displacement must point in the a_perp direction = [0,1,0].
+    KinematicState s = makeState1({50.f, 0.f, 0.f}, {0.f, 5.f, 0.f});
+    const Eigen::Vector3f dir = s.turnCircle().turnCenter_deltaNED_m.normalized();
+    EXPECT_NEAR(dir.x(), 0.f, 1e-4f);
+    EXPECT_NEAR(dir.y(), 1.f, 1e-4f);
+    EXPECT_NEAR(dir.z(), 0.f, 1e-4f);
+}
