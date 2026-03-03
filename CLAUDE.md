@@ -20,7 +20,8 @@ This file provides Claude Code with the project's development standards. Read th
 
 ### Non-Negotiable Rules
 
-1. **TDD** — Write a failing test before writing production code.
+1. **No unsolicited implementation** — Do not write, edit, or generate source code, test code, or build-system files unless the user has explicitly instructed you to implement or code something in the current message. Reading files, updating documentation, and updating implementation-plan documents are always permitted. When in doubt, ask rather than implement.
+2. **TDD** — Write a failing test before writing production code.
 2. **SI units** — All stored values are meters, radians, seconds, kilograms, newtons. No exceptions inside the domain layer.
 3. **Unit conversion** — Only at the outermost interface (display, config file parsing). Never inside computation code.
 4. **Serialization** — Every stateful dynamic component implements `serialize()` and `deserialize()`. Round-trip test is required.

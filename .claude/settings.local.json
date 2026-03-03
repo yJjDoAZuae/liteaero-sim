@@ -128,7 +128,16 @@
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cd build\\\\test && liteaerosim_test.exe --gtest_filter=KinematicStateTest.*\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.*\")",
-      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe\")"
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest* 2>&1\")",
+      "Bash(~/.local/bin/uv.exe run --with matplotlib python gen_task2_example.py)",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -20\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=AllocatorFixture.* 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe 2>&1 | tail -10\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build --target liteaerosim_test 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=LiftCurveModelTest.*:AllocatorFixture.* 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=LiftCurveModelTest.* 2>&1\")"
     ]
   }
 }
