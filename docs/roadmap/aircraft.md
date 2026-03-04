@@ -15,9 +15,9 @@ writing production code.
 
 | Component | File | Status |
 |-----------|------|--------|
-| `KinematicState` | `include/KinematicState.hpp` | ✅ Implemented |
-| `LiftCurveModel` | `include/aerodynamics/LiftCurveModel.hpp` | ✅ Implemented |
-| `LoadFactorAllocator` | `include/aerodynamics/LoadFactorAllocator.hpp` | ✅ Implemented |
+| `KinematicState` | `include/KinematicState.hpp` | ✅ Implemented + serialization (JSON + proto) |
+| `LiftCurveModel` | `include/aerodynamics/LiftCurveModel.hpp` | ✅ Implemented + serialization (JSON + proto) |
+| `LoadFactorAllocator` | `include/aerodynamics/LoadFactorAllocator.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `WGS84_Datum` | `include/navigation/WGS84.hpp` | ✅ Implemented |
 | `AeroPerformance` | `include/aerodynamics/AeroPerformance.hpp` | ⚠️ Old-style stub — no namespace, no `LoadFactorAllocator` integration |
 | `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ⚠️ Plain struct — no serialization |
@@ -356,20 +356,27 @@ velocity integration before finalizing.
 
 ## 7. Serialization
 
-`Aircraft::serialize()` must capture the full restart state of every owned subcomponent.
+`Aircraft` must implement both JSON and binary (protobuf) serialization, capturing the full
+restart state of every owned subcomponent with warm-start state. The methods follow the
+non-`DynamicBlock` pattern (plain public members, not NVI):
 
-### Serialized fields
+```cpp
+nlohmann::json       serializeJson()                              const;
+void                 deserializeJson(const nlohmann::json&        j);
+
+std::vector<uint8_t> serializeProto()                            const;
+void                 deserializeProto(const std::vector<uint8_t>& bytes);
+```
+
+### JSON schema
 
 ```json
 {
     "schema_version": 1,
     "type": "Aircraft",
-    "kinematic_state": { ... },         // KinematicState::serialize()
-    "allocator_state": {
-        "alpha_prev_rad": 0.0,
-        "beta_prev_rad":  0.0
-    },
-    "propulsion_state": { ... },        // V_Propulsion::serialize() (TBD per subclass)
+    "kinematic_state": { ... },         // KinematicState::serializeJson()
+    "allocator_state": { ... },         // LoadFactorAllocator::serializeJson()
+    "propulsion_state": { ... },        // V_Propulsion::serializeJson() (TBD per subclass)
     "params": {
         "mass_kg":  1000.0,
         "dt_s":     0.01
@@ -380,16 +387,22 @@ velocity integration before finalizing.
 `LiftCurveModel` and `AeroPerformance` are stateless; their parameters are re-read from the
 config at `initialize()` time and are not duplicated in the state snapshot.
 
+### Proto message
+
+Add an `Aircraft` message to `proto/liteaerosim.proto` that embeds the existing
+`KinematicState` and `LoadFactorAllocatorState` messages.
+
 ### Tests
 
-- Round-trip: `deserialize(serialize())` yields identical `KinematicState` and allocator warm-start.
-- Schema version mismatch on `deserialize()` throws `std::runtime_error`.
+- JSON round-trip: `deserializeJson(serializeJson())` yields identical `KinematicState` and allocator warm-start.
+- Proto round-trip: same verification via `deserializeProto(serializeProto())`.
+- Schema version mismatch on either deserialize throws `std::runtime_error`.
 
 ---
 
 ## 8. JSON Initialization
 
-Once the JSON parameter schema (see `docs/roadmap/equations_of_motion.md §7`) is defined,
+Once the JSON parameter schema (see `docs/roadmap/equations_of_motion.md §4`) is defined,
 `Aircraft::initialize(config)` must read from a validated config file and construct all
 owned subcomponents.
 
@@ -403,7 +416,7 @@ owned subcomponents.
 | `lift_curve.*` | `LiftCurveParams` → `LiftCurveModel` |
 | `initial_state.*` | `KinematicState` constructor |
 
-The `validate_aircraft_config.py` script (see `docs/roadmap/equations_of_motion.md §7`)
+The `validate_aircraft_config.py` script (see `docs/roadmap/equations_of_motion.md §4`)
 must pass before `initialize()` is called. `initialize()` may throw `std::invalid_argument`
 on malformed input but is not required to duplicate the full Python-side validation.
 
