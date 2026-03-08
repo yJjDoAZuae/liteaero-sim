@@ -597,6 +597,75 @@ TEST(KinematicStateTest, TurnCircleCenterInCurvatureDirection) {
     EXPECT_NEAR(dir.z(), 0.f, 1e-4f);
 }
 
+// ── Phase M: RK4 integration accuracy ────────────────────────────────────────
+//
+// The current trapezoidal scheme couples velocity to _acceleration_NED_mps
+// stored from the PREVIOUS step:
+//   v_new = v_old + 0.5 * (a_stored_prev + a_new) * dt
+// This causes error when acceleration changes between steps: the scheme
+// implicitly assumes a linear ramp from a_prev to a_new, whereas the trim-aero
+// model provides a constant commanded acceleration for the entire step.
+//
+// RK4 treats acceleration as constant during the step, giving exact results
+// for constant-acceleration phases and removing the inter-step coupling.
+
+TEST(KinematicStateTest, Rk4VelocityIndependentOfStoredAcceleration) {
+    // Construct a state that has stored _acceleration_NED_mps = [5, 0, 0]
+    // (as if the previous step had northward acceleration 5 m/s²).
+    // Then step with a new commanded acceleration of 10 m/s².
+    //
+    // True velocity after step (constant a=10 for the whole dt):
+    //   v_new = 50 + 10 * 0.5 = 55 m/s
+    //
+    // Trapezoidal with stored a_prev=5, a_new=10:
+    //   v_new = 50 + 0.5 * (5+10) * 0.5 = 53.75 m/s  ← wrong
+    const float dt     = 0.5f;
+    const float a_prev = 5.f;
+    const float a_new  = 10.f;
+    const float V0     = 50.f;
+
+    // Constructor stores acceleration_Wind_mps → _acceleration_NED_mps = q_nw * a_wind.
+    // With q_nw = Identity, _acceleration_NED_mps = [a_prev, 0, 0].
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f{V0, 0.f, 0.f},
+                     Eigen::Vector3f{a_prev, 0.f, 0.f},
+                     Eigen::Quaternionf::Identity(),
+                     0.f, 0.f, 0.f, 0.f, 0.f,
+                     Eigen::Vector3f::Zero());
+
+    s.step(dt, Eigen::Vector3f{a_new, 0.f, 0.f}, 0.f, 0.f, 0.f, 0.f, 0.f,
+           Eigen::Vector3f::Zero());
+
+    // Velocity must reflect only the new commanded acceleration.
+    const float expected_vN = V0 + a_new * dt;  // 55 m/s
+    EXPECT_NEAR(s.velocity_NED_mps()(0), expected_vN, 1e-3f);
+}
+
+TEST(KinematicStateTest, Rk4PositionWithChangingAcceleration) {
+    // Same setup: stored a_prev=5, commanded a_new=10, dt=0.5.
+    // True northward displacement = V0*dt + 0.5*a_new*dt² = 25 + 1.25 = 26.25 m.
+    // Trapezoidal gives (V0 + 0.5*(5+10)*dt)*dt = 53.75*0.5 = 26.875 m (error 0.625 m).
+    const float dt     = 0.5f;
+    const float a_prev = 5.f;
+    const float a_new  = 10.f;
+    const float V0     = 50.f;
+
+    KinematicState s(0.0, WGS84_Datum(),
+                     Eigen::Vector3f{V0, 0.f, 0.f},
+                     Eigen::Vector3f{a_prev, 0.f, 0.f},
+                     Eigen::Quaternionf::Identity(),
+                     0.f, 0.f, 0.f, 0.f, 0.f,
+                     Eigen::Vector3f::Zero());
+
+    s.step(dt, Eigen::Vector3f{a_new, 0.f, 0.f}, 0.f, 0.f, 0.f, 0.f, 0.f,
+           Eigen::Vector3f::Zero());
+
+    // True displacement: 50*0.5 + 0.5*10*0.25 = 25 + 1.25 = 26.25 m
+    WGS84_Datum datum;
+    const double expected_lat = 26.25 * datum.latitudeRate(1.0);
+    EXPECT_NEAR(s.positionDatum().latitudeGeodetic_rad(), expected_lat, 1e-9);
+}
+
 // ── Serialization ─────────────────────────────────────────────────────────────
 
 // Helper: construct a non-trivial state for serialization round-trip tests.

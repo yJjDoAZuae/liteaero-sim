@@ -5,18 +5,18 @@ failing test before writing production code.
 
 ---
 
-## 1. Higher-Order Integration
+## ~~1. Higher-Order Integration~~ ✅ Complete
 
-`KinematicState::step()` uses forward Euler for velocity and first-order position
-integration.  For scenarios requiring long-horizon accuracy (e.g., trajectory planning
-over minutes), this should be replaced with RK4.
+`KinematicState::step()` integrates position and velocity with classic RK4 (4 evaluations
+per step, 4th-order accuracy).  The previous trapezoidal/Euler scheme has been replaced.
 
 **Design document:** [`docs/algorithms/integration.md`](../algorithms/integration.md) —
-covers algorithm options, the recommended RK4 implementation, `IVehicleDynamics` /
-`rk4Step<>` architecture for multi-vehicle support, and the migration path to 6DOF.
+covers algorithm options, the `IVehicleDynamics` / `rk4Step<>` architecture for
+multi-vehicle support, and the migration path to 6DOF.
 
-**Recommendation:** Classic RK4 (4 evaluations/step, 4th-order accuracy, no startup
-overhead).  See the design document for the full rationale and algorithm comparison table.
+**Next step (proposed):** Introduce the `IVehicleDynamics` interface and `rk4Step<>`
+template to decouple the integrator from the trim-aero vehicle model, enabling 6DOF
+extension without changing the integrator code.  See §3–§5 of the design document.
 
 ---
 

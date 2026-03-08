@@ -4,6 +4,71 @@
 #include "liteaerosim.pb.h"
 #include <stdexcept>
 
+namespace {
+
+struct PVState {
+    double lat_rad;
+    double lon_rad;
+    float  alt_m;
+    float  vN_mps;
+    float  vE_mps;
+    float  vD_mps;
+};
+
+struct PVDerivative {
+    double lat_dot_rps;
+    double lon_dot_rps;
+    float  alt_dot_mps;
+    float  vN_dot_mps2;
+    float  vE_dot_mps2;
+    float  vD_dot_mps2;
+};
+
+static PVDerivative pvDerivative(const PVState& s, const Eigen::Vector3f& accel_NED) {
+    WGS84_Datum d;
+    d.setLatitudeGeodetic_rad(s.lat_rad);
+    d.setLongitude_rad(s.lon_rad);
+    d.setHeight_WGS84_m(s.alt_m);
+    return PVDerivative{
+        d.latitudeRate(s.vN_mps),
+        d.longitudeRate(s.vE_mps),
+        -s.vD_mps,
+        accel_NED(0),
+        accel_NED(1),
+        accel_NED(2)
+    };
+}
+
+static PVState pvAdvance(const PVState& s, const PVDerivative& d, float dt) {
+    return PVState{
+        s.lat_rad + d.lat_dot_rps * static_cast<double>(dt),
+        s.lon_rad + d.lon_dot_rps * static_cast<double>(dt),
+        s.alt_m   + d.alt_dot_mps * dt,
+        s.vN_mps  + d.vN_dot_mps2 * dt,
+        s.vE_mps  + d.vE_dot_mps2 * dt,
+        s.vD_mps  + d.vD_dot_mps2 * dt
+    };
+}
+
+static PVState pvRk4(const PVState& s0, const Eigen::Vector3f& accel_NED, float dt) {
+    const float h2 = 0.5f * dt;
+    const PVDerivative k1 = pvDerivative(s0,                    accel_NED);
+    const PVDerivative k2 = pvDerivative(pvAdvance(s0, k1, h2), accel_NED);
+    const PVDerivative k3 = pvDerivative(pvAdvance(s0, k2, h2), accel_NED);
+    const PVDerivative k4 = pvDerivative(pvAdvance(s0, k3, dt), accel_NED);
+    const PVDerivative d_avg{
+        (k1.lat_dot_rps  + 2.0*k2.lat_dot_rps  + 2.0*k3.lat_dot_rps  + k4.lat_dot_rps)  / 6.0,
+        (k1.lon_dot_rps  + 2.0*k2.lon_dot_rps  + 2.0*k3.lon_dot_rps  + k4.lon_dot_rps)  / 6.0,
+        (k1.alt_dot_mps  + 2.f*k2.alt_dot_mps  + 2.f*k3.alt_dot_mps  + k4.alt_dot_mps)  / 6.f,
+        (k1.vN_dot_mps2  + 2.f*k2.vN_dot_mps2  + 2.f*k3.vN_dot_mps2  + k4.vN_dot_mps2) / 6.f,
+        (k1.vE_dot_mps2  + 2.f*k2.vE_dot_mps2  + 2.f*k3.vE_dot_mps2  + k4.vE_dot_mps2) / 6.f,
+        (k1.vD_dot_mps2  + 2.f*k2.vD_dot_mps2  + 2.f*k3.vD_dot_mps2  + k4.vD_dot_mps2) / 6.f
+    };
+    return pvAdvance(s0, d_avg, dt);
+}
+
+} // namespace
+
 KinematicState::KinematicState(double time_sec,
                const WGS84_Datum &position_datum,
                const Eigen::Vector3f &velocity_NED_mps,
@@ -260,39 +325,31 @@ void KinematicState::step(double time_sec,
     // update stored wind
     _wind_NED_mps = wind_NED_mps;
 
-    // save the previous frame rotations
+    // save the previous velocity frame for quaternion propagation
     Eigen::Quaternionf local_q_nv(this->q_nv());
-    Eigen::Quaternionf local_q_vw(this->q_nv().toRotationMatrix().transpose() * _q_nw.toRotationMatrix());
-    Eigen::Quaternionf local_q_wb(_q_nw.toRotationMatrix().transpose() * _q_nb.toRotationMatrix());
 
-    // get accelerations in the NED frame
+    // rotate commanded acceleration from Wind frame to NED frame
     Eigen::Vector3f accel_NED = _q_nw.toRotationMatrix() * acceleration_Wind_mps;
 
-    // previous wind-relative velocity expressed in NED
-    Eigen::Vector3f velocityWind_NED = _velocity_NED_mps - _wind_NED_mps;
+    // RK4 integration of position and velocity
+    // Ground velocity = airspeed + wind; since wind is constant, d(vGround)/dt = accel_NED.
+    const PVState pv0{
+        _positionDatum.latitudeGeodetic_rad(),
+        _positionDatum.longitude_rad(),
+        _positionDatum.height_WGS84_m(),
+        _velocity_NED_mps(0),
+        _velocity_NED_mps(1),
+        _velocity_NED_mps(2)
+    };
+    const PVState pv1 = pvRk4(pv0, accel_NED, dt);
 
-    // apply the accelerations in the wind-relative NED frame so that we
-    // get the effects of heading rate in a steady wind
-    velocityWind_NED += 0.5f * (_acceleration_NED_mps + accel_NED) * dt;
-
-    Eigen::Vector3f velocity_NED_mps_prev = _velocity_NED_mps; // save to determine rotations
-
-    // update the velocity vector based on acceleration
-    _velocity_NED_mps = velocityWind_NED + _wind_NED_mps;
-
-    // save the accel state value
+    const Eigen::Vector3f velocity_NED_mps_prev = _velocity_NED_mps;
+    _velocity_NED_mps     = Eigen::Vector3f{pv1.vN_mps, pv1.vE_mps, pv1.vD_mps};
     _acceleration_NED_mps = accel_NED;
 
-    // integrate position (forward Euler for lat/lon, trapezoidal for altitude)
-    // latitudeRate_rps() / longitudeRate_rps() use the updated _velocity_NED_mps
-    const float height_prev_m = _positionDatum.height_WGS84_m();
-    _positionDatum.setLatitudeGeodetic_rad(
-        _positionDatum.latitudeGeodetic_rad() + latitudeRate_rps() * dt);
-    _positionDatum.setLongitude_rad(
-        _positionDatum.longitude_rad() + longitudeRate_rps() * dt);
-    // NED convention: positive D is down; altitude increases when V_D < 0
-    _positionDatum.setHeight_WGS84_m(
-        height_prev_m - 0.5f * (velocity_NED_mps_prev(2) + _velocity_NED_mps(2)) * dt);
+    _positionDatum.setLatitudeGeodetic_rad(pv1.lat_rad);
+    _positionDatum.setLongitude_rad(pv1.lon_rad);
+    _positionDatum.setHeight_WGS84_m(pv1.alt_m);
 
     // update the velocity frame to align with the new velocity vector
     stepQnv(_velocity_NED_mps, local_q_nv);

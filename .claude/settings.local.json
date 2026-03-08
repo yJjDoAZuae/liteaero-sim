@@ -145,7 +145,11 @@
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim 2>&1\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build 2>&1\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=*Serialization* 2>&1\")",
-      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe 2>&1\")"
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && build\\\\test\\\\liteaerosim_test.exe 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -5 && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.Rk4* 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -5 && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.Rk4*\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -10\")",
+      "Bash(cmd.exe /c \"build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.*\")"
     ]
   }
 }
