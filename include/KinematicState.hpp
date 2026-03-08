@@ -57,8 +57,7 @@ public:
                    float beta,
                    float alphaDot,
                    float betaDot,
-                   float windSpeed_mps,
-                   float windDirFrom_rad);
+                   const Eigen::Vector3f &wind_NED_mps);
 
     // Constructor 2: accepts q_nb directly (e.g. from an Euler-angle specification).
     // _q_nw is derived exactly from velocity_NED_mps and q_nb.  With
@@ -83,8 +82,7 @@ public:
               float beta_rad,
               float alphaDot_rps,
               float betaDot_rps,
-              float windSpeed_mps,
-              float windDirFrom_rad);
+              const Eigen::Vector3f &wind_NED_mps);
 
     // getters
     double time_sec() const { return _time_sec; }
