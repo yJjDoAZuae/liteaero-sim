@@ -1,0 +1,23 @@
+[project]
+name = "liteaerosim-tools"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "mypy>=1.0",
+    "black>=24.0",
+    "ruff>=0.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = ["tools"]
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100

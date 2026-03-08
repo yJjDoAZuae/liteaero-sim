@@ -149,7 +149,12 @@
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -5 && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.Rk4* 2>&1\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -5 && build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.Rk4*\")",
       "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && cmake --build build --target liteaerosim_test 2>&1 | tail -10\")",
-      "Bash(cmd.exe /c \"build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.*\")"
+      "Bash(cmd.exe /c \"build\\\\test\\\\liteaerosim_test.exe --gtest_filter=KinematicStateTest.*\")",
+      "Bash(ls -la /c/Users/Alex/avraero/LiteAeroSim/*.toml /c/Users/Alex/avraero/LiteAeroSim/*.cfg /c/Users/Alex/avraero/LiteAeroSim/.python-version)",
+      "Bash(uv run pytest test/ -v)",
+      "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/general_aviation.json)",
+      "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/jet_trainer.json)",
+      "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/small_uas.json)"
     ]
   }
 }

@@ -1,2 +1,9 @@
 build/
 *.csv
+
+# Python
+__pycache__/
+*.py[cod]
+python/.venv/
+python/.pytest_cache/
+python/.mypy_cache/

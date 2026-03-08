@@ -1,0 +1,28 @@
+{
+    "schema_version": 1,
+    "aircraft": {
+        "S_ref_m2": 15.8,
+        "mass_kg": 5500.0,
+        "cl_y_beta": -0.90
+    },
+    "lift_curve": {
+        "cl_alpha": 4.5,
+        "cl_max": 1.40,
+        "cl_min": -0.80,
+        "delta_alpha_stall": 0.209,
+        "delta_alpha_stall_neg": 0.209,
+        "cl_sep": 0.90,
+        "cl_sep_neg": -0.50
+    },
+    "initial_state": {
+        "latitude_rad": 0.0,
+        "longitude_rad": 0.0,
+        "altitude_m": 3000.0,
+        "velocity_north_mps": 150.0,
+        "velocity_east_mps": 0.0,
+        "velocity_down_mps": 0.0,
+        "wind_north_mps": 0.0,
+        "wind_east_mps": 0.0,
+        "wind_down_mps": 0.0
+    }
+}
