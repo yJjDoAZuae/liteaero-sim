@@ -105,6 +105,22 @@ classDiagram
         +deserializeProto(bytes) void
     }
 
+    class PropulsionEDF {
+        -_params : PropulsionEdfParams
+        -_disk_area_m2 : float
+        -_spool_filter : FilterSS2Clip
+        -_thrust_n : float
+        +PropulsionEDF(params, dt_s)
+        +step(throttle_nd, tas_mps, rho_kgm3) float
+        +thrust_n() float
+        +batteryCurrent_a(tas_mps, rho_kgm3) float
+        +reset() void
+        +serializeJson() json
+        +deserializeJson(j) void
+        +serializeProto() bytes
+        +deserializeProto(bytes) void
+    }
+
     class PropellerAero {
         +diameter_m : float
         +pitch_m : float
@@ -165,12 +181,14 @@ classDiagram
 
     V_Propulsion    <|-- PropulsionJet  : extends
     V_Propulsion    <|-- PropulsionProp : extends
+    V_Propulsion    <|-- PropulsionEDF  : extends
     V_Motor         <|-- MotorElectric  : extends
     V_Motor         <|-- MotorPiston    : extends
     PropulsionJet   *-- FilterSS2Clip   : owns (_spool_filter, _ab_filter)
     PropulsionProp  *-- PropellerAero   : owns (value member)
     PropulsionProp  *-- FilterSS2Clip   : owns (_rotor_filter)
     PropulsionProp  o-- V_Motor         : owns (unique_ptr)
+    PropulsionEDF   *-- FilterSS2Clip   : owns (_spool_filter)
     Aircraft        o-- V_Propulsion    : owns (unique_ptr)
 ```
 
@@ -384,6 +402,198 @@ struct PropulsionJetParams {
     "ab_active": false,
     "spool_state": [0.12, 0.0],
     "ab_state":    [0.0,  0.0]
+}
+```
+
+---
+
+## `PropulsionEDF` — Electric Ducted Fan (proposed)
+
+**File:** `include/propulsion/PropulsionEDF.hpp`, `src/propulsion/PropulsionEDF.cpp`
+
+### Design Rationale
+
+An electric ducted fan (EDF) sits between a jet engine and an open propeller in its
+aerodynamic character. The duct prevents tip recirculation and augments static thrust by
+roughly 15–30% over the same bare fan; at cruise the net thrust lapse with airspeed is
+flatter than an open propeller's. The drive is electric, so there is no thermal spool lag.
+
+`PropulsionEDF` is designed as a structural parallel to `PropulsionJet`, borrowing its
+thrust-envelope framing (density lapse + ram drag + `FilterSS2Clip` anti-windup), with
+the thermal dynamics replaced by a shorter electric rotor time constant and the afterburner
+removed. It does not reuse `PropulsionProp` / `PropellerAero` because the duct renders the
+advance-ratio aerodynamic model inapplicable.
+
+`PropulsionEDF` adds a `batteryCurrent_a()` diagnostic, borrowing the ESC efficiency
+pattern from `MotorElectric`.
+
+---
+
+### Physical Model
+
+#### Thrust Envelope
+
+Full-throttle gross thrust lapse with density (electric motor shaft power is nearly
+density-independent; disk momentum scales linearly with density):
+
+$$
+T_{gross}(\delta_T, \rho) = \delta_T \cdot T_{SL} \cdot \frac{\rho}{\rho_{SL}}
+$$
+
+Ram drag from the duct inlet ingesting freestream momentum (same as `PropulsionJet`):
+
+$$
+F_{ram} = \rho \cdot V_{TAS}^2 \cdot A_{inlet}
+$$
+
+Available net thrust (floored at idle to prevent windmilling below idle RPM):
+
+$$
+T_{avail}(\delta_T, \rho, V) = \max\!\bigl(T_{idle}(\rho),\; T_{gross} - F_{ram}\bigr)
+$$
+
+$$
+T_{idle}(\rho) = f_{idle} \cdot T_{SL} \cdot \frac{\rho}{\rho_{SL}}
+$$
+
+#### Spool Dynamics — `FilterSS2Clip`
+
+The electric rotor responds faster than a gas turbine but is still limited by fan+motor
+inertia. The dynamics are modeled by a first-order IIR filter, using `FilterSS2Clip` for
+anti-windup clamping. The per-step pattern is identical to `PropulsionJet`:
+
+```cpp
+const float T_gross  = throttle_nd * _params.thrust_sl_n * (rho_kgm3 / kRhoSL_kgm3);
+const float F_ram    = rho_kgm3 * tas_mps * tas_mps * _params.inlet_area_m2;
+const float T_avail  = std::max(thrustIdle(rho_kgm3), T_gross - F_ram);
+const float T_demand = throttle_nd * T_avail;
+
+_spool_filter.valLimit.setLower(thrustIdle(rho_kgm3));
+_spool_filter.valLimit.setUpper(T_avail);
+_thrust_n = _spool_filter.step(T_demand);
+```
+
+**Configuration at construction:**
+
+```cpp
+_spool_filter.setLowPassFirstIIR(dt_s, _params.rotor_tau_s);
+```
+
+#### Battery Current
+
+Power delivered to the fan disk is estimated from actuator disk momentum theory. For a
+disk of area $A_{disk} = \pi (D_{fan}/2)^2$ producing thrust $T$ at freestream speed $V$,
+the induced velocity $v_i$ satisfies:
+
+$$
+v_i = -\frac{V}{2} + \sqrt{\left(\frac{V}{2}\right)^2 + \frac{T}{2\,\rho\,A_{disk}}}
+$$
+
+Fan shaft power (momentum flux through the disk):
+
+$$
+P_{fan} = T \cdot (V + v_i)
+$$
+
+Battery current (accounting for fan aerodynamic and ESC electrical efficiency):
+
+$$
+I_{battery} = \frac{P_{fan}}{\eta_{fan} \cdot \eta_{ESC} \cdot V_{supply}}
+$$
+
+`batteryCurrent_a()` is not called by `step()` — it is available for post-step energy
+and endurance analysis.
+
+---
+
+### Parameters
+
+```cpp
+struct PropulsionEdfParams {
+    float thrust_sl_n;          // Full-throttle static thrust at sea level (N)
+    float fan_diameter_m;       // Fan disk diameter (m) — for actuator-disk power estimate
+    float inlet_area_m2;        // Effective duct inlet capture area for ram drag (m²)
+    float idle_fraction;        // Idle thrust as fraction of thrust_sl_n (—)
+    float rotor_tau_s;          // First-order lag: throttle → thrust (s)
+    float supply_voltage_v;     // DC battery bus voltage (V)
+    float fan_efficiency_nd;    // Fan + duct aerodynamic efficiency (0.65–0.85)
+    float esc_efficiency_nd;    // ESC DC-to-3-phase power conversion efficiency (0.90–0.98)
+};
+```
+
+| Parameter | Typical range | Physical significance |
+|---|---|---|
+| `thrust_sl_n` | 5 N – 5 kN | Installed static thrust; read from spec sheet or bench test |
+| `fan_diameter_m` | 0.04 – 0.25 m | Fan disk diameter; sets actuator disk area |
+| `inlet_area_m2` | 0.001 – 0.05 m² | Duct inlet capture area; determines ram drag at speed |
+| `idle_fraction` | 0.03 – 0.08 | Minimum thrust at idle RPM |
+| `rotor_tau_s` | 0.05 – 0.5 s | Electric rotor lag; much shorter than gas turbine spool |
+| `supply_voltage_v` | 11 – 52 V | LiPo cell voltage × series count |
+| `fan_efficiency_nd` | 0.65 – 0.85 | Combined duct + blade aerodynamic figure of merit |
+| `esc_efficiency_nd` | 0.90 – 0.98 | ESC switching and conduction losses |
+
+**Comparison with `PropulsionJet`:**
+
+| Property | `PropulsionJet` | `PropulsionEDF` |
+|---|---|---|
+| Density exponent | $1/\sqrt{1+\text{BPR}}$ | 1.0 (fixed — electric) |
+| Spool / rotor τ | 1–6 s (thermal) | 0.05–0.5 s (electric) |
+| Afterburner | Yes | No |
+| Energy output | — | `batteryCurrent_a()` |
+| Key new param | `bypass_ratio`, `spool_tau_s` | `fan_diameter_m`, `fan_efficiency_nd`, `esc_efficiency_nd` |
+
+---
+
+### Class Declaration
+
+```cpp
+namespace liteaerosim::propulsion {
+
+class PropulsionEDF : public V_Propulsion {
+public:
+    PropulsionEDF(const PropulsionEdfParams& params, float dt_s);
+
+    // V_Propulsion interface
+    [[nodiscard]] float step(float throttle_nd, float tas_mps, float rho_kgm3) override;
+    [[nodiscard]] float thrust_n() const override;
+    void reset() override;
+
+    [[nodiscard]] nlohmann::json       serializeJson()                              const override;
+    void                               deserializeJson(const nlohmann::json&        j)    override;
+    [[nodiscard]] std::vector<uint8_t> serializeProto()                            const override;
+    void                               deserializeProto(const std::vector<uint8_t>& b)    override;
+
+    // Battery current at the current thrust and flight condition (A).
+    // For energy / endurance accounting only; not called by step().
+    [[nodiscard]] float batteryCurrent_a(float tas_mps, float rho_kgm3) const;
+
+private:
+    PropulsionEdfParams _params;
+    float               _disk_area_m2;   // precomputed: π * (fan_diameter_m / 2)²
+    FilterSS2Clip       _spool_filter;
+    float               _thrust_n;
+};
+
+} // namespace liteaerosim::propulsion
+```
+
+---
+
+### Warm-Start State
+
+| Member | Serialized? | Description |
+|--------|-------------|-------------|
+| `_spool_filter` (state vector `x`) | Yes | Rotor lag integrator state |
+| `_thrust_n` | Yes (derived, for readback) | Last step output |
+
+### JSON State Schema
+
+```json
+{
+    "schema_version": 1,
+    "type": "PropulsionEDF",
+    "thrust_n": 87.5,
+    "spool_state": [0.43, 0.0]
 }
 ```
 
@@ -848,7 +1058,8 @@ flowchart LR
 |---|---|---|---|---|---|
 | `PropulsionJet` (dry) | `_spool_filter` | `throttle * T_avail` | `T_idle(rho)` | `T_avail(rho, V)` | `spool_tau_s` (config) |
 | `PropulsionJet` (AB) | `_ab_filter` | `T_ab_avail` or `0` | `0` | `T_ab_avail(rho)` or `0` | `ab_spool_tau_s` (config) |
-| `PropulsionProp` | `_rotor_filter` | `noLoadOmega` | `0` | `motor.maxOmega_rps()` | derived from $J$, $\partial Q_{prop}/\partial\Omega$ |
+| `PropulsionEDF` | `_spool_filter` | `throttle * T_avail` | `T_idle(rho)` | `T_avail(rho, V)` | `rotor_tau_s` (config) |
+| `PropulsionProp` | `_rotor_filter` | `noLoadOmega` | `0` | `motor.maxOmega_rps()` | `rotor_tau_s` (config) |
 
 `setLower` / `setUpper` are called every step to track the instantaneous flight envelope.
 The anti-windup backsolve in `FilterSS2Clip` prevents state drift when limits are active.
@@ -877,6 +1088,12 @@ message PropulsionJetState {
     bool  ab_active      = 3;
     repeated float spool_state = 4;   // FilterSS2Clip state vector x (2 elements)
     repeated float ab_state    = 5;
+}
+
+message PropulsionEdfState {
+    int32 schema_version    = 1;
+    float thrust_n          = 2;
+    repeated float spool_state = 3;   // FilterSS2Clip state vector x (2 elements)
 }
 
 message PropulsionPropState {
@@ -945,16 +1162,19 @@ objects are constructed directly in application or test code.
 |------|----------|
 | `include/propulsion/V_Propulsion.hpp` | Abstract base class |
 | `include/propulsion/PropulsionJet.hpp` | Jet model declaration; `PropulsionJetParams` struct |
+| `include/propulsion/PropulsionEDF.hpp` | EDF model declaration; `PropulsionEdfParams` struct |
 | `include/propulsion/PropulsionProp.hpp` | Propeller model declaration |
 | `include/propulsion/PropellerAero.hpp` | `PropellerAero` value type |
 | `include/propulsion/V_Motor.hpp` | Abstract motor interface |
 | `include/propulsion/MotorElectric.hpp` | BLDC motor declaration |
 | `include/propulsion/MotorPiston.hpp` | Piston motor declaration |
 | `src/propulsion/PropulsionJet.cpp` | Jet model implementation |
+| `src/propulsion/PropulsionEDF.cpp` | EDF model implementation |
 | `src/propulsion/PropulsionProp.cpp` | Propeller model implementation |
 | `src/propulsion/PropellerAero.cpp` | Propeller coefficient computation |
 | `src/propulsion/MotorElectric.cpp` | Electric motor implementation |
 | `src/propulsion/MotorPiston.cpp` | Piston motor implementation |
 | `test/PropulsionJet_test.cpp` | Unit tests for PropulsionJet |
+| `test/PropulsionEDF_test.cpp` | Unit tests for PropulsionEDF |
 | `test/PropulsionProp_test.cpp` | Unit tests for PropulsionProp (both motor types) |
 | `test/PropellerAero_test.cpp` | Unit tests for PropellerAero coefficients |

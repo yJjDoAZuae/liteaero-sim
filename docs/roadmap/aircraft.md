@@ -24,6 +24,11 @@ writing production code.
 | `Inertia` | `include/airframe/Inertia.hpp` | ⚠️ Plain struct — no serialization |
 | `V_Propulsion` | `include/propulsion/V_Propulsion.hpp` | ❌ Stub comment only |
 | `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ❌ Stub comment only |
+| `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ❌ Not started |
+| `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ❌ Not started |
+| `V_Motor` | `include/propulsion/V_Motor.hpp` | ❌ Not started |
+| `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ❌ Not started |
+| `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ❌ Not started |
 | `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ❌ Stub comment only |
 | `Aircraft` | `include/Aircraft.hpp` | ❌ Stub comment only |
 
@@ -31,75 +36,38 @@ writing production code.
 
 ## 1. Propulsion Virtual Interface (`V_Propulsion`)
 
-`Aircraft` aggregates a propulsion model through a virtual base so that different engine
-types can be substituted without changing the `Aircraft` class.
+Design authority: [`docs/architecture/propulsion.md — V_Propulsion`](../architecture/propulsion.md#v_propulsion--abstract-interface).
 
-### Responsibilities
-
-- Accept a normalized throttle demand and atmospheric conditions; return thrust (N).
-- Maintain internal lag state between calls (e.g., engine spool-up time constant).
-
-### Interface
-
-```cpp
-// include/propulsion/V_Propulsion.hpp
-namespace liteaerosim::propulsion {
-
-class V_Propulsion {
-public:
-    virtual ~V_Propulsion() = default;
-
-    // Advance propulsion state by one timestep and return thrust magnitude (N).
-    //   throttle_nd  — normalized demand [0, 1]
-    //   tas_mps      — true airspeed (m/s), for ram-drag and power corrections
-    //   rho_kgm3     — air density (kg/m³), for density-corrected thrust
-    virtual float step(float throttle_nd, float tas_mps, float rho_kgm3) = 0;
-
-    // Thrust output from the last step() call (N).
-    virtual float thrust_n() const = 0;
-
-    // Reset warm-start state to zero thrust.
-    virtual void reset() = 0;
-};
-
-} // namespace liteaerosim::propulsion
-```
+Implement `include/propulsion/V_Propulsion.hpp` per the design. The interface includes
+`step()`, `thrust_n()`, `reset()`, and both JSON + proto serialization pure-virtuals.
 
 ### Tests
 
-- A concrete subclass can be constructed, `step()` called, and `thrust_n()` returns the same value.
+- A concrete stub subclass constructs, `step()` is callable, and `thrust_n()` returns the value from `step()`.
 - After `reset()`, `thrust_n()` returns 0.
+- `deserializeJson()` with mismatched `"type"` throws `std::runtime_error`.
 
 ---
 
-## 2. `PropulsionJet` — First-Order Thrust Model
+## 2. `PropulsionJet` — Physics-Based Jet Model
 
-A simple enclosed-jet model: static thrust limited by a first-order throttle-response lag.
+Design authority: [`docs/architecture/propulsion.md — PropulsionJet`](../architecture/propulsion.md#propulsionjet--physics-based-jet-engine-model).
 
-### Parameters
-
-| Field | Type | Unit | Description |
-|-------|------|------|-------------|
-| `thrust_max_n` | float | N | Maximum static thrust at sea level |
-| `throttle_lag_s` | float | s | First-order time constant for throttle response; 0 = instantaneous |
-| `dt_s` | float | s | Fixed timestep (configuration parameter, not a `step()` argument) |
-
-### Algorithm
-
-```
-thrust_demand = throttle_nd * thrust_max_n
-thrust_n += (thrust_demand - thrust_n) / throttle_lag_s * dt_s   // first-order lag
-                                                                  // (skip lag if lag_s == 0)
-```
-
-Density correction and ram drag are deferred to a later iteration of this model.
+The model covers: altitude lapse (density exponent from BPR), ram drag, idle thrust floor,
+spool dynamics via `FilterSS2Clip`, and optional afterburner via a second `FilterSS2Clip`.
+All per-step limits are tracked using `valLimit.setLower` / `setUpper` on each filter.
 
 ### Tests
 
-- `throttle_lag_s = 0`: single `step(1.0, ...)` returns `thrust_max_n` exactly.
-- `throttle_lag_s > 0`: thrust converges asymptotically from 0 toward `thrust_max_n` over several steps.
-- `step(0.0, ...)` after full throttle: thrust decreases monotonically back toward 0.
-- `reset()` zeroes the internal thrust state regardless of prior steps.
+- **Density lapse:** at 50% sea-level density, full-throttle thrust equals `T_sl * (0.5)^n`.
+- **Ram drag:** at constant rho and increasing `tas_mps`, `thrust_n()` decreases by `rho * V² * A_inlet`.
+- **Idle floor:** thrust never falls below `idle_fraction * thrust_sl * (rho/rho_sl)` regardless of throttle.
+- **Spool lag:** after a step from 0 to full throttle, thrust after one step is less than `T_avail`; after many steps it converges to `T_avail`.
+- **Afterburner:** `setAfterburner(true)` causes `thrust_n()` to increase beyond dry thrust; `setAfterburner(false)` causes it to decay at the AB time constant.
+- **reset():** `thrust_n()` returns 0; spool and AB filter states are zeroed.
+- **JSON round-trip:** `deserializeJson(serializeJson())` restores spool state and `ab_active`.
+- **Proto round-trip:** same via `deserializeProto(serializeProto())`.
+- **Type mismatch:** `deserializeJson()` with wrong `"type"` throws.
 
 ### CMake
 
@@ -108,32 +76,101 @@ Add `test/PropulsionJet_test.cpp` to the test executable.
 
 ---
 
-## 3. `PropulsionProp` — Piston/Propeller Thrust Model
+## 3. `PropulsionEDF` — Electric Ducted Fan Model (proposed)
 
-A simplified propeller model: thrust is proportional to throttle and air density, with an
-airspeed-dependent efficiency factor.
+Design authority: [`docs/architecture/propulsion.md — PropulsionEDF`](../architecture/propulsion.md#propulsionedf--electric-ducted-fan-proposed).
 
-### Parameters
-
-| Field | Type | Unit | Description |
-|-------|------|------|-------------|
-| `power_max_w` | float | W | Maximum shaft power at sea level |
-| `propeller_eta` | float | — | Propulsive efficiency η (0–1) |
-| `dt_s` | float | s | Fixed timestep |
-
-### Algorithm
-
-```
-T = eta * power_max_w * throttle * (rho / rho_SL) / max(tas_mps, V_min)
-```
-
-where `V_min` prevents division by zero at zero airspeed (clamp to a small positive value).
+Structurally identical to `PropulsionJet` (one `FilterSS2Clip`, same per-step pattern)
+with a fixed density exponent of 1.0, no afterburner, a shorter `rotor_tau_s`, and a
+`batteryCurrent_a()` diagnostic using actuator disk momentum theory.
 
 ### Tests
 
-- At sea-level density and moderate airspeed, thrust equals the analytical formula.
-- Thrust decreases with altitude (lower ρ).
-- Thrust is 0 at `throttle = 0`.
+- **Density lapse:** thrust at half-density equals `thrust_sl * 0.5`.
+- **Ram drag:** same verification as PropulsionJet (different `inlet_area_m2` typical values).
+- **Idle floor, spool lag, reset():** same patterns as PropulsionJet.
+- **Battery current — static:** `batteryCurrent_a(0, rho_sl)` is positive and consistent with `T² / (2 * rho * A_disk)` at idle and full throttle.
+- **Battery current — airspeed:** `batteryCurrent_a(tas_mps, rho)` increases with `tas_mps` at fixed thrust (momentum theory).
+- **JSON and proto round-trips.**
+- **Type mismatch throws.**
+
+### CMake
+
+Add `src/propulsion/PropulsionEDF.cpp` to the `liteaerosim` target.
+Add `test/PropulsionEDF_test.cpp` to the test executable.
+
+---
+
+## 4. `PropellerAero` — Propeller Coefficient Model
+
+Design authority: [`docs/architecture/propulsion.md — PropellerAero`](../architecture/propulsion.md#propelleraero--propeller-aerodynamics-model).
+
+Plain value type (no virtual methods, no state). Computes $C_T(J)$ and $C_Q(J)$ from
+geometric parameters and returns dimensional thrust and torque.
+
+### Tests
+
+- **Static thrust ($J=0$):** `thrust_n(Omega, 0, rho_sl)` matches $C_{T0} \rho n^2 D^4$.
+- **Zero at $J_0$:** `thrustCoeff(J_zero)` is approximately 0.
+- **Torque increases with $J$:** `torqueCoeff(J1) > torqueCoeff(J2)` when `J1 > J2 > 0`.
+- **Dimensional scaling:** doubling `rho` doubles thrust and torque at the same $\Omega$ and $V$.
+
+### CMake
+
+Add `src/propulsion/PropellerAero.cpp` to the `liteaerosim` target.
+Add `test/PropellerAero_test.cpp` to the test executable.
+
+---
+
+## 5. `V_Motor`, `MotorElectric`, `MotorPiston`
+
+Design authority: [`docs/architecture/propulsion.md — V_Motor`](../architecture/propulsion.md#v_motor--abstract-motor-interface),
+[`MotorElectric`](../architecture/propulsion.md#motorelectric--bldc-motor-and-controller),
+[`MotorPiston`](../architecture/propulsion.md#motorpiston--normally-aspirated-piston-engine).
+
+`V_Motor` is a pure abstract interface (three pure virtuals). `MotorElectric` and
+`MotorPiston` are concrete implementations. All are header-only or near-trivial to
+implement (no filter state); tests focus on the formula correctness.
+
+### Tests — `MotorElectric`
+
+- `noLoadOmega_rps(1.0, rho_sl)` returns `kv * supply_voltage_v`.
+- `noLoadOmega_rps(0.5, rho_sl)` returns half of full-throttle value.
+- `noLoadOmega_rps(1.0, rho_sl / 2)` returns the same value (density-independent).
+- `maxOmega_rps()` returns `kv * supply_voltage_v`.
+- `batteryCurrent_a()` at no-load ($\Omega \approx \Omega_0$) is near zero.
+- `batteryCurrent_a()` at stall ($\Omega = 0$, full throttle) is clamped to `I_max / eta_esc`.
+
+### Tests — `MotorPiston`
+
+- `noLoadOmega_rps(1.0, rho_sl)` returns `2 * peak_omega_rps`.
+- `noLoadOmega_rps(0.5, rho_sl)` returns half of the full-throttle value.
+- `noLoadOmega_rps(1.0, rho_sl / 2)` returns a lower value than at sea level.
+- `maxOmega_rps()` returns `2 * peak_omega_rps`.
+
+### CMake
+
+Add `src/propulsion/MotorElectric.cpp` and `src/propulsion/MotorPiston.cpp` to `liteaerosim`.
+Add `test/Motor_test.cpp` (covers both motor types) to the test executable.
+
+---
+
+## 6. `PropulsionProp` — Propeller Propulsion Model
+
+Design authority: [`docs/architecture/propulsion.md — PropulsionProp`](../architecture/propulsion.md#propulsionprop--propeller-propulsion-model).
+
+Owns a `PropellerAero` value member and a `std::unique_ptr<V_Motor>`. One `FilterSS2Clip`
+(`_rotor_filter`) models rotor speed dynamics using the caller-supplied `rotor_tau_s`.
+
+### Tests
+
+- **Steady state:** after many steps at constant throttle and airspeed, `omega_rps()` converges to `motor.noLoadOmega_rps(throttle, rho)`.
+- **Thrust from Omega:** at the converged `omega_rps()`, `thrust_n()` matches `propeller.thrust_n(omega_rps(), tas_mps, rho)`.
+- **Density effect:** lower `rho_kgm3` reduces steady-state thrust.
+- **Airspeed effect:** increasing `tas_mps` at fixed throttle and density reduces thrust (advance ratio effect via $C_T(J)$).
+- **reset():** `thrust_n()` and `omega_rps()` return 0.
+- **JSON and proto round-trips** (both `MotorElectric` and `MotorPiston` variants).
+- **Type mismatch throws.**
 
 ### CMake
 
@@ -142,7 +179,7 @@ Add `test/PropulsionProp_test.cpp` to the test executable.
 
 ---
 
-## 4. `Aircraft` Class Definition
+## 7. `Aircraft` Class Definition
 
 `Aircraft` owns and orchestrates the full physics update loop. It is not a `DynamicBlock`
 (the interface is multi-input, multi-output), but it follows the project's lifecycle
@@ -220,7 +257,7 @@ private:
 
 ---
 
-## 5. `Aircraft::step()` — Physics Integration Loop
+## 8. `Aircraft::step()` — Physics Integration Loop
 
 The `step()` method is the closed-loop physics update. It must execute in this order:
 
@@ -275,7 +312,7 @@ velocity integration before finalizing.
 
 ---
 
-## 6. Serialization
+## 9. Serialization
 
 `Aircraft` must implement both JSON and binary (protobuf) serialization, capturing the full
 restart state of every owned subcomponent with warm-start state. The methods follow the
@@ -321,7 +358,7 @@ Add an `Aircraft` message to `proto/liteaerosim.proto` that embeds the existing
 
 ---
 
-## 7. JSON Initialization
+## 10. JSON Initialization
 
 The JSON parameter schema is complete (see [`docs/schemas/aircraft_config_v1.md`](../schemas/aircraft_config_v1.md)).
 `Aircraft::initialize(config)` must read from a validated config and construct all owned
