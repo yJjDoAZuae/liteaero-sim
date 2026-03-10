@@ -172,6 +172,7 @@ classDiagram
         +setLowPassFirstIIR(dt, tau) void
         +step(u) float
         +resetOutput(out) void
+        +resetState(x) void
         +resetInput(in) void
     }
 
@@ -385,12 +386,12 @@ struct PropulsionJetParams {
 
 ### Warm-Start State
 
-| Member | Serialized? | Description |
-|--------|-------------|-------------|
-| `_spool_filter` (state vector `x`) | Yes | Spool lag integrator state |
-| `_ab_filter` (state vector `x`) | Yes | AB spool integrator state |
-| `_ab_active` | Yes | Current AB engagement |
-| `_thrust_n` | Yes (derived, included for readback) | Last step output |
+| Member | Serialized as | Description |
+|--------|---------------|-------------|
+| `_spool_filter.x()` | `spool_state[0..1]` | Dry-spool filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
+| `_ab_filter.x()` | `ab_state[0..1]` | AB filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
+| `_ab_active` | `ab_active` | Current afterburner engagement |
+| `_thrust_n` | `thrust_n` | Last step total thrust (N); restored directly |
 
 ### JSON State Schema
 
@@ -400,14 +401,14 @@ struct PropulsionJetParams {
     "type": "PropulsionJet",
     "thrust_n": 62400.0,
     "ab_active": false,
-    "spool_state": [0.12, 0.0],
-    "ab_state":    [0.0,  0.0]
+    "spool_state": [1234.56, 0.0],
+    "ab_state":    [0.0,     0.0]
 }
 ```
 
 ---
 
-## `PropulsionEDF` — Electric Ducted Fan (proposed)
+## `PropulsionEDF` — Electric Ducted Fan
 
 **File:** `include/propulsion/PropulsionEDF.hpp`, `src/propulsion/PropulsionEDF.cpp`
 
@@ -581,10 +582,10 @@ private:
 
 ### Warm-Start State
 
-| Member | Serialized? | Description |
-|--------|-------------|-------------|
-| `_spool_filter` (state vector `x`) | Yes | Rotor lag integrator state |
-| `_thrust_n` | Yes (derived, for readback) | Last step output |
+| Member | Serialized as | Description |
+|--------|---------------|-------------|
+| `_spool_filter.x()` | `spool_state[0..1]` | Spool filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
+| `_thrust_n` | `thrust_n` | Last step thrust (N); restored directly |
 
 ### JSON State Schema
 
@@ -593,7 +594,7 @@ private:
     "schema_version": 1,
     "type": "PropulsionEDF",
     "thrust_n": 87.5,
-    "spool_state": [0.43, 0.0]
+    "spool_state": [123.4, 0.0]
 }
 ```
 
@@ -1016,10 +1017,10 @@ _rotor_filter.valLimit.setUpper(motor.maxOmega_rps());
 
 ### Warm-Start State
 
-| Member | Description |
-|--------|-------------|
-| `_rotor_filter` state vector `x` | Rotor speed integrator state |
-| `_thrust_n` | Last computed thrust (included for readback) |
+| Member | Serialized as | Description |
+|--------|---------------|-------------|
+| `_rotor_filter.x()` | `rotor_state[0..1]` | Rotor filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
+| `_thrust_n` | `thrust_n` | Last computed thrust (N); restored directly |
 
 `V_Motor` is stateless — no motor state is serialized.
 
@@ -1030,7 +1031,7 @@ _rotor_filter.valLimit.setUpper(motor.maxOmega_rps());
     "schema_version": 1,
     "type": "PropulsionProp",
     "thrust_n": 312.5,
-    "rotor_state": [0.82, 0.0]
+    "rotor_state": [210.3, 0.0]
 }
 ```
 
@@ -1079,27 +1080,51 @@ serialized; they are reapplied by `Aircraft::initialize(config)` at construction
 Each snapshot includes `"type"` as a string. `deserializeJson()` verifies the
 discriminator matches the concrete class; mismatch throws `std::runtime_error`.
 
-### Protobuf Messages (to be added to `proto/liteaerosim.proto`)
+### Filter State vs. Filter Output
+
+The `spool_state`, `ab_state`, and `rotor_state` fields store the **raw internal state
+vector `x`** of the embedded `FilterSS2Clip`, not the filter's scalar output.
+
+Storing `x` directly enables exact reconstruction at any point in a transient. The
+alternative — storing `filter.out()` and restoring via `resetOutput()` — relies on a
+steady-state back-solve (`x = (I−Φ)⁻¹ Γ (out/dc_gain)`) that is only exact when the
+filter has converged. Storing `x` avoids this assumption.
+
+Deserialization restores the filter state with `resetState(x)` rather than `resetOutput()`.
+The `valLimit` upper bound is disabled before the restore and re-armed after, because the
+default upper bound (0) would clip the state output before the first `step()` call sets the
+correct per-flight-condition limit:
+
+```cpp
+filter.valLimit.disableUpper();
+filter.resetState(x);           // sets _x directly, recomputes _out = H·x + J·0
+filter.valLimit.enableUpper();  // upper will be set correctly on next step()
+```
+
+`thrust_n` is serialized as a direct read-back and is restored from the snapshot without
+recomputation from the filter state.
+
+### Protobuf Messages (defined in `proto/liteaerosim.proto`)
 
 ```proto
 message PropulsionJetState {
-    int32 schema_version = 1;
-    float thrust_n       = 2;
-    bool  ab_active      = 3;
-    repeated float spool_state = 4;   // FilterSS2Clip state vector x (2 elements)
-    repeated float ab_state    = 5;
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    bool           ab_active      = 3;
+    repeated float spool_state    = 4;  // FilterSS2Clip state vector x: [x[0], x[1]]
+    repeated float ab_state       = 5;  // FilterSS2Clip state vector x: [x[0], x[1]]
 }
 
 message PropulsionEdfState {
-    int32 schema_version    = 1;
-    float thrust_n          = 2;
-    repeated float spool_state = 3;   // FilterSS2Clip state vector x (2 elements)
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    repeated float spool_state    = 3;  // FilterSS2Clip state vector x: [x[0], x[1]]
 }
 
 message PropulsionPropState {
-    int32 schema_version    = 1;
-    float thrust_n          = 2;
-    repeated float rotor_state = 3;   // FilterSS2Clip state vector x (2 elements)
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    repeated float rotor_state    = 3;  // FilterSS2Clip state vector x: [x[0], x[1]]
 }
 ```
 
@@ -1117,7 +1142,7 @@ sequenceDiagram
     participant MOT  as V_Motor (concrete, Prop only)
 
     App ->> MOT : new MotorElectric / MotorPiston (params)
-    App ->> PP  : new PropulsionProp(propeller, motor, dt_s)
+    App ->> PP  : new PropulsionProp(propeller, motor, dt_s, rotor_tau_s)
     App ->> AC  : Aircraft(std::move(propulsion))
     App ->> AC  : initialize(json_config)
 
@@ -1178,3 +1203,4 @@ objects are constructed directly in application or test code.
 | `test/PropulsionEDF_test.cpp` | Unit tests for PropulsionEDF |
 | `test/PropulsionProp_test.cpp` | Unit tests for PropulsionProp (both motor types) |
 | `test/PropellerAero_test.cpp` | Unit tests for PropellerAero coefficients |
+| `test/Motor_test.cpp` | Unit tests for MotorElectric and MotorPiston |

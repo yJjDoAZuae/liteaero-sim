@@ -22,19 +22,19 @@ writing production code.
 | `AeroPerformance` | `include/aerodynamics/AeroPerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ⚠️ Plain struct — no serialization |
 | `Inertia` | `include/airframe/Inertia.hpp` | ⚠️ Plain struct — no serialization |
-| `V_Propulsion` | `include/propulsion/V_Propulsion.hpp` | ❌ Stub comment only |
-| `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ❌ Stub comment only |
-| `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ❌ Not started |
-| `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ❌ Not started |
-| `V_Motor` | `include/propulsion/V_Motor.hpp` | ❌ Not started |
-| `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ❌ Not started |
-| `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ❌ Not started |
-| `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ❌ Stub comment only |
+| `V_Propulsion` | `include/propulsion/V_Propulsion.hpp` | ✅ Implemented |
+| `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ✅ Implemented + serialization (JSON + proto) |
+| `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ✅ Implemented + serialization (JSON + proto) |
+| `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ✅ Implemented |
+| `V_Motor` | `include/propulsion/V_Motor.hpp` | ✅ Implemented |
+| `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ✅ Implemented |
+| `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ✅ Implemented |
+| `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `Aircraft` | `include/Aircraft.hpp` | ❌ Stub comment only |
 
 ---
 
-## 1. Propulsion Virtual Interface (`V_Propulsion`)
+## ~~1. Propulsion Virtual Interface (`V_Propulsion`)~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — V_Propulsion`](../architecture/propulsion.md#v_propulsion--abstract-interface).
 
@@ -49,7 +49,7 @@ Implement `include/propulsion/V_Propulsion.hpp` per the design. The interface in
 
 ---
 
-## 2. `PropulsionJet` — Physics-Based Jet Model
+## ~~2. `PropulsionJet` — Physics-Based Jet Model~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — PropulsionJet`](../architecture/propulsion.md#propulsionjet--physics-based-jet-engine-model).
 
@@ -65,8 +65,9 @@ All per-step limits are tracked using `valLimit.setLower` / `setUpper` on each f
 - **Spool lag:** after a step from 0 to full throttle, thrust after one step is less than `T_avail`; after many steps it converges to `T_avail`.
 - **Afterburner:** `setAfterburner(true)` causes `thrust_n()` to increase beyond dry thrust; `setAfterburner(false)` causes it to decay at the AB time constant.
 - **reset():** `thrust_n()` returns 0; spool and AB filter states are zeroed.
-- **JSON round-trip:** `deserializeJson(serializeJson())` restores spool state and `ab_active`.
-- **Proto round-trip:** same via `deserializeProto(serializeProto())`.
+- **JSON round-trip (steady-state):** `deserializeJson(serializeJson())` after convergence produces `EXPECT_FLOAT_EQ` on the next `step()`.
+- **JSON round-trip (mid-transient):** same snapshot taken after 5 steps (deep in spool transient) produces `EXPECT_FLOAT_EQ` — exact reconstruction via filter state vector `x`.
+- **Proto round-trip:** both variants via `deserializeProto(serializeProto())`.
 - **Type mismatch:** `deserializeJson()` with wrong `"type"` throws.
 
 ### CMake
@@ -76,7 +77,7 @@ Add `test/PropulsionJet_test.cpp` to the test executable.
 
 ---
 
-## 3. `PropulsionEDF` — Electric Ducted Fan Model (proposed)
+## ~~3. `PropulsionEDF` — Electric Ducted Fan Model~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — PropulsionEDF`](../architecture/propulsion.md#propulsionedf--electric-ducted-fan-proposed).
 
@@ -91,7 +92,7 @@ with a fixed density exponent of 1.0, no afterburner, a shorter `rotor_tau_s`, a
 - **Idle floor, spool lag, reset():** same patterns as PropulsionJet.
 - **Battery current — static:** `batteryCurrent_a(0, rho_sl)` is positive and consistent with `T² / (2 * rho * A_disk)` at idle and full throttle.
 - **Battery current — airspeed:** `batteryCurrent_a(tas_mps, rho)` increases with `tas_mps` at fixed thrust (momentum theory).
-- **JSON and proto round-trips.**
+- **JSON and proto round-trips** (steady-state and mid-transient, `EXPECT_FLOAT_EQ`).
 - **Type mismatch throws.**
 
 ### CMake
@@ -101,7 +102,7 @@ Add `test/PropulsionEDF_test.cpp` to the test executable.
 
 ---
 
-## 4. `PropellerAero` — Propeller Coefficient Model
+## ~~4. `PropellerAero` — Propeller Coefficient Model~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — PropellerAero`](../architecture/propulsion.md#propelleraero--propeller-aerodynamics-model).
 
@@ -122,7 +123,7 @@ Add `test/PropellerAero_test.cpp` to the test executable.
 
 ---
 
-## 5. `V_Motor`, `MotorElectric`, `MotorPiston`
+## ~~5. `V_Motor`, `MotorElectric`, `MotorPiston`~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — V_Motor`](../architecture/propulsion.md#v_motor--abstract-motor-interface),
 [`MotorElectric`](../architecture/propulsion.md#motorelectric--bldc-motor-and-controller),
@@ -155,7 +156,7 @@ Add `test/Motor_test.cpp` (covers both motor types) to the test executable.
 
 ---
 
-## 6. `PropulsionProp` — Propeller Propulsion Model
+## ~~6. `PropulsionProp` — Propeller Propulsion Model~~ ✅ Complete
 
 Design authority: [`docs/architecture/propulsion.md — PropulsionProp`](../architecture/propulsion.md#propulsionprop--propeller-propulsion-model).
 
@@ -169,8 +170,8 @@ Owns a `PropellerAero` value member and a `std::unique_ptr<V_Motor>`. One `Filte
 - **Density effect:** lower `rho_kgm3` reduces steady-state thrust.
 - **Airspeed effect:** increasing `tas_mps` at fixed throttle and density reduces thrust (advance ratio effect via $C_T(J)$).
 - **reset():** `thrust_n()` and `omega_rps()` return 0.
-- **JSON and proto round-trips** (both `MotorElectric` and `MotorPiston` variants).
-- **Type mismatch throws.**
+- **JSON and proto round-trips** (both `MotorElectric` and `MotorPiston` variants; steady-state and mid-transient, `EXPECT_FLOAT_EQ`).
+- **Type mismatch throws.****
 
 ### CMake
 

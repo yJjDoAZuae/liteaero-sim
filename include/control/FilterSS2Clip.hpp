@@ -1,12 +1,8 @@
 
 #pragma once
 
-#include "SISOBlock.hpp"
 #include "control/Filter.hpp"
 #include "control/Limit.hpp"
-#include "control/control.hpp"
-#include <Eigen/Dense>
-#include <unsupported/Eigen/MatrixFunctions>  // for Matrix::pow()
 
 namespace liteaerosim::control {
 
@@ -68,6 +64,10 @@ public:
     // If dc gain is zero, then the filter is
     // reset to zero regardless of argument value
     void resetOutput(float out);
+
+    // Directly restore the filter internal state vector.
+    // Exact warm-start: restores x without the steady-state backsolve assumption.
+    void resetState(const Mat21& x);
 
     uint8_t order() const override {return _order;}
     float dt() const {return _dt;}

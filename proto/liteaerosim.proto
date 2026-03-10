@@ -83,3 +83,32 @@ message AeroPerformanceParams {
     float cd0            = 5;
     float cl_y_beta      = 6;
 }
+
+// ---------------------------------------------------------------------------
+// PropulsionJetState — warm-start state for PropulsionJet
+// ---------------------------------------------------------------------------
+message PropulsionJetState {
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    bool           ab_active      = 3;
+    repeated float spool_state    = 4;  // FilterSS2Clip state vector x: [x[0], x[1]]
+    repeated float ab_state       = 5;  // FilterSS2Clip state vector x: [x[0], x[1]]
+}
+
+// ---------------------------------------------------------------------------
+// PropulsionEdfState — warm-start state for PropulsionEDF
+// ---------------------------------------------------------------------------
+message PropulsionEdfState {
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    repeated float spool_state    = 3;  // FilterSS2Clip state vector x: [x[0], x[1]]
+}
+
+// ---------------------------------------------------------------------------
+// PropulsionPropState — warm-start state for PropulsionProp
+// ---------------------------------------------------------------------------
+message PropulsionPropState {
+    int32          schema_version = 1;
+    float          thrust_n       = 2;
+    repeated float rotor_state    = 3;  // FilterSS2Clip state vector x: [x[0], x[1]]
+}

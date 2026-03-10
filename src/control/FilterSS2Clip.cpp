@@ -6,6 +6,7 @@
 #include "control/control.hpp"
 #include "control/filter_realizations.hpp"
 #include "control/FilterSS2Clip.hpp"
+#include <unsupported/Eigen/MatrixFunctions>  // for Matrix::pow() in controlGrammian/observeGrammian
 
 static float dcTol = 1e-6;
 
@@ -300,6 +301,14 @@ Mat22 FilterSS2Clip::observeGrammian() const
     }
 
     return C;
+}
+
+void FilterSS2Clip::resetState(const Mat21& x)
+{
+    _x = x;
+    _in = 0.f;
+    rateLimit.step(0.f);
+    _out = valLimit.step((_H * _x + _J * _in).value());
 }
 
 void FilterSS2Clip::backsolve1(float inPrev, float outPrev)
