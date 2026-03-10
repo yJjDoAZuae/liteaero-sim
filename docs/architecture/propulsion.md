@@ -128,8 +128,8 @@ classDiagram
         +blade_solidity : float
         +thrustCoeff(J) float
         +torqueCoeff(J) float
-        +thrust(Omega, V, rho) float
-        +torque(Omega, V, rho) float
+        +thrust_n(Omega_rps, tas_mps, rho_kgm3) float
+        +torque_nm(Omega_rps, tas_mps, rho_kgm3) float
         +advanceRatio(Omega, V) float
     }
 
