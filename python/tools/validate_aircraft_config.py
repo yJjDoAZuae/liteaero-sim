@@ -21,7 +21,11 @@ SCHEMA_VERSION = 1
 # All numeric values accept int | float (JSON may parse whole numbers as int).
 # ---------------------------------------------------------------------------
 
-_AIRCRAFT_FIELDS: list[str] = ["S_ref_m2", "mass_kg", "cl_y_beta"]
+_AIRCRAFT_FIELDS: list[str] = ["S_ref_m2", "cl_y_beta", "ar", "e", "cd0"]
+
+_AIRFRAME_FIELDS: list[str] = ["g_max_nd", "g_min_nd", "tas_max_mps", "mach_max_nd"]
+
+_INERTIA_FIELDS: list[str] = ["mass_kg", "Ixx_kgm2", "Iyy_kgm2", "Izz_kgm2"]
 
 _LIFT_CURVE_FIELDS: list[str] = [
     "cl_alpha",
@@ -106,26 +110,26 @@ def validate(config: dict) -> None:
         )
 
     # -- top-level sections -----------------------------------------------
-    for section_name in ("aircraft", "lift_curve", "initial_state"):
+    for section_name in ("aircraft", "airframe", "inertia", "lift_curve", "initial_state"):
         if section_name not in config:
             raise ValueError(f"Missing top-level section '{section_name}'.")
         if not isinstance(config[section_name], dict):
             raise ValueError(f"Section '{section_name}' must be a JSON object.")
 
     aircraft = config["aircraft"]
+    airframe = config["airframe"]
+    inertia = config["inertia"]
     lift_curve = config["lift_curve"]
     initial_state = config["initial_state"]
 
     # -- required fields and types ----------------------------------------
     _check_fields(aircraft, _AIRCRAFT_FIELDS, "aircraft")
+    _check_fields(airframe, _AIRFRAME_FIELDS, "airframe")
+    _check_fields(inertia, _INERTIA_FIELDS, "inertia")
     _check_fields(lift_curve, _LIFT_CURVE_FIELDS, "lift_curve")
     _check_fields(initial_state, _INITIAL_STATE_FIELDS, "initial_state")
 
     # -- range checks: aircraft -------------------------------------------
-    if aircraft["mass_kg"] <= 0:
-        raise ValueError(
-            f"'mass_kg' must be > 0, got {aircraft['mass_kg']}."
-        )
     if aircraft["S_ref_m2"] <= 0:
         raise ValueError(
             f"'S_ref_m2' must be > 0, got {aircraft['S_ref_m2']}."
@@ -133,6 +137,54 @@ def validate(config: dict) -> None:
     if aircraft["cl_y_beta"] >= 0:
         raise ValueError(
             f"'cl_y_beta' must be < 0, got {aircraft['cl_y_beta']}."
+        )
+    if aircraft["ar"] <= 0:
+        raise ValueError(
+            f"'ar' must be > 0, got {aircraft['ar']}."
+        )
+    if aircraft["e"] <= 0 or aircraft["e"] > 1.0:
+        raise ValueError(
+            f"'e' must be in (0, 1], got {aircraft['e']}."
+        )
+    if aircraft["cd0"] <= 0:
+        raise ValueError(
+            f"'cd0' must be > 0, got {aircraft['cd0']}."
+        )
+
+    # -- range checks: airframe -------------------------------------------
+    if airframe["g_max_nd"] <= 0:
+        raise ValueError(
+            f"'g_max_nd' must be > 0, got {airframe['g_max_nd']}."
+        )
+    if airframe["g_min_nd"] >= 0:
+        raise ValueError(
+            f"'g_min_nd' must be < 0, got {airframe['g_min_nd']}."
+        )
+    if airframe["tas_max_mps"] <= 0:
+        raise ValueError(
+            f"'tas_max_mps' must be > 0, got {airframe['tas_max_mps']}."
+        )
+    if airframe["mach_max_nd"] <= 0:
+        raise ValueError(
+            f"'mach_max_nd' must be > 0, got {airframe['mach_max_nd']}."
+        )
+
+    # -- range checks: inertia --------------------------------------------
+    if inertia["mass_kg"] <= 0:
+        raise ValueError(
+            f"'mass_kg' must be > 0, got {inertia['mass_kg']}."
+        )
+    if inertia["Ixx_kgm2"] <= 0:
+        raise ValueError(
+            f"'Ixx_kgm2' must be > 0, got {inertia['Ixx_kgm2']}."
+        )
+    if inertia["Iyy_kgm2"] <= 0:
+        raise ValueError(
+            f"'Iyy_kgm2' must be > 0, got {inertia['Iyy_kgm2']}."
+        )
+    if inertia["Izz_kgm2"] <= 0:
+        raise ValueError(
+            f"'Izz_kgm2' must be > 0, got {inertia['Izz_kgm2']}."
         )
 
     # -- range checks: lift_curve -----------------------------------------
@@ -152,11 +204,11 @@ def validate(config: dict) -> None:
     # -- cross-field invariants -------------------------------------------
     if lift_curve["cl_sep"] > lift_curve["cl_max"]:
         raise ValueError(
-            f"'cl_sep' ({lift_curve['cl_sep']}) must be ≤ 'cl_max' ({lift_curve['cl_max']})."
+            f"'cl_sep' ({lift_curve['cl_sep']}) must be <= 'cl_max' ({lift_curve['cl_max']})."
         )
     if lift_curve["cl_sep_neg"] < lift_curve["cl_min"]:
         raise ValueError(
-            f"'cl_sep_neg' ({lift_curve['cl_sep_neg']}) must be ≥ "
+            f"'cl_sep_neg' ({lift_curve['cl_sep_neg']}) must be >= "
             f"'cl_min' ({lift_curve['cl_min']})."
         )
 

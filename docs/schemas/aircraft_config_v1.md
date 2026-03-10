@@ -12,6 +12,8 @@ to initialize the simulation model.  The schema is validated by
 {
     "schema_version": 1,
     "aircraft":      { ... },
+    "airframe":      { ... },
+    "inertia":       { ... },
     "lift_curve":    { ... },
     "initial_state": { ... }
 }
@@ -20,7 +22,9 @@ to initialize the simulation model.  The schema is validated by
 | Field | Type | Description |
 |-------|------|-------------|
 | `schema_version` | integer | Must equal `1`.  Increment when backward-incompatible changes are made. |
-| `aircraft` | object | Mass and geometry parameters. |
+| `aircraft` | object | Aerodynamic geometry and drag polar parameters. |
+| `airframe` | object | Structural and operational performance limits (envelope). |
+| `inertia` | object | Mass and moment-of-inertia properties. |
 | `lift_curve` | object | Lift-curve model parameters. |
 | `initial_state` | object | Initial kinematic state. |
 
@@ -33,8 +37,43 @@ Maps to `LoadFactorAllocator` and `AeroPerformance` constructor parameters.
 | Field | Type | Unit | Constraint | Description |
 |-------|------|------|------------|-------------|
 | `S_ref_m2` | float | m² | > 0 | Reference wing area. |
-| `mass_kg` | float | kg | > 0 | Aircraft mass. |
 | `cl_y_beta` | float | rad⁻¹ | < 0 | Lateral force coefficient slope C_Yβ. |
+| `ar` | float | — | > 0 | Wing aspect ratio b²/S. |
+| `e` | float | — | 0 < e ≤ 1 | Oswald span efficiency factor. |
+| `cd0` | float | — | > 0 | Zero-lift drag coefficient. |
+
+`S_ref_m2` and `cl_y_beta` are shared inputs to both `LoadFactorAllocator` and
+`AeroPerformance`. `ar`, `e`, and `cd0` are used exclusively by `AeroPerformance` to
+compute the drag polar: CD = cd0 + CL² / (π · e · ar).
+
+---
+
+## `airframe` Section
+
+Maps to `AirframePerformance`. Used by `Aircraft::step()` to clamp commanded load factors
+before passing them to `LoadFactorAllocator`.
+
+| Field | Type | Unit | Constraint | Description |
+|-------|------|------|------------|-------------|
+| `g_max_nd` | float | g | > 0 | Maximum positive load factor. |
+| `g_min_nd` | float | g | < 0 | Maximum negative load factor (structural limit). |
+| `tas_max_mps` | float | m/s | > 0 | Never-exceed true airspeed. |
+| `mach_max_nd` | float | — | > 0 | Never-exceed Mach number. |
+
+---
+
+## `inertia` Section
+
+Maps to `Inertia`. `mass_kg` is used every step for force-to-acceleration conversion.
+Moment-of-inertia fields are stored and reserved for the 6-DOF moment equations (not yet
+active in the point-mass model).
+
+| Field | Type | Unit | Constraint | Description |
+|-------|------|------|------------|-------------|
+| `mass_kg` | float | kg | > 0 | Total aircraft mass. |
+| `Ixx_kgm2` | float | kg·m² | > 0 | Roll moment of inertia. |
+| `Iyy_kgm2` | float | kg·m² | > 0 | Pitch moment of inertia. |
+| `Izz_kgm2` | float | kg·m² | > 0 | Yaw moment of inertia. |
 
 ---
 

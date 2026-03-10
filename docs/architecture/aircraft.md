@@ -551,6 +551,9 @@ The `aircraft_config_v1` schema maps to `Aircraft` members as follows:
 | `airframe.mach_max_nd` | `float` | `_airframe.mach_max_nd` |
 | `aircraft.S_ref_m2` | `float` | `AeroPerformance`, `LoadFactorAllocator` constructor args |
 | `aircraft.cl_y_beta` | `float` | `AeroPerformance`, `LoadFactorAllocator` constructor args |
+| `aircraft.ar` | `float` | `AeroPerformance` constructor arg — wing aspect ratio |
+| `aircraft.e` | `float` | `AeroPerformance` constructor arg — Oswald efficiency |
+| `aircraft.cd0` | `float` | `AeroPerformance` constructor arg — zero-lift drag coefficient |
 | `lift_curve.cl_alpha` | `float` | `LiftCurveParams::cl_alpha` → `LiftCurveModel` |
 | `lift_curve.cl_max` | `float` | `LiftCurveParams::cl_max` |
 | `lift_curve.cl_min` | `float` | `LiftCurveParams::cl_min` |
@@ -567,19 +570,6 @@ The `aircraft_config_v1` schema maps to `Aircraft` members as follows:
 | `initial_state.wind_north_mps` | `float` | `wind_NED_mps(0)` → `KinematicState` |
 | `initial_state.wind_east_mps` | `float` | `wind_NED_mps(1)` → `KinematicState` |
 | `initial_state.wind_down_mps` | `float` | `wind_NED_mps(2)` → `KinematicState` |
-
-**Outstanding schema gaps:**
-
-- `aircraft_config_v1` does not yet contain `"inertia"` or `"airframe"` sections — these
-  must be added per roadmap items 1 and 2 before `Aircraft::initialize()` can construct
-  `AirframePerformance` or `Inertia` from config.
-- `AeroPerformance` requires `ar` (aspect ratio), `e` (Oswald efficiency), and `cd0`
-  (zero-lift drag coefficient). These are not present in `aircraft_config_v1`. The schema
-  must be extended before `Aircraft::initialize()` can construct `AeroPerformance` from
-  config. Until then, `AeroPerformance` is constructed with hardcoded defaults or injected
-  separately.
-- `aircraft.mass_kg` in the current schema is superseded by `inertia.mass_kg` — remove
-  the old field when the `"inertia"` section is added.
 
 ---
 
@@ -604,7 +594,7 @@ self-contained — a caller must not need to call `initialize()` before or after
 | `AirframePerformance` | No | Config params only |
 | `Inertia` | No | Config params only |
 
-### Protobuf Message (proposed addition to `proto/liteaerosim.proto`)
+### Protobuf Message (to be added to `proto/liteaerosim.proto` when `Aircraft` is implemented)
 
 ```proto
 message AircraftParams {

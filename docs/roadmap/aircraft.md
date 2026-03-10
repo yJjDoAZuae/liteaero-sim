@@ -20,8 +20,8 @@ writing production code.
 | `LoadFactorAllocator` | `include/aerodynamics/LoadFactorAllocator.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `WGS84_Datum` | `include/navigation/WGS84.hpp` | ✅ Implemented |
 | `AeroPerformance` | `include/aerodynamics/AeroPerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
-| `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ⚠️ Plain struct — no serialization |
-| `Inertia` | `include/airframe/Inertia.hpp` | ⚠️ Plain struct — no serialization |
+| `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
+| `Inertia` | `include/airframe/Inertia.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `V_Propulsion` | `include/propulsion/V_Propulsion.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
 | `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
 | `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
@@ -34,7 +34,7 @@ writing production code.
 
 ---
 
-## 1. `AirframePerformance` — Field Cleanup, Serialization, and Envelope Integration
+## 1. `AirframePerformance` — Field Cleanup, Serialization, and Envelope Integration — ✅ Complete
 
 Design authority: [`docs/architecture/aircraft.md`](../architecture/aircraft.md).
 
@@ -44,70 +44,32 @@ is **envelope protection**: `Aircraft::step()` clamps the commanded normal and l
 factors to `[g_min_nd, g_max_nd]` before calling `LoadFactorAllocator::solve()`, preventing
 the physics loop from commanding structurally impossible maneuvers.
 
-### Required changes
+### Changes delivered
 
-Current field names violate the naming convention (no unit suffixes). Renames required:
+Field renames (unit-suffix convention):
 
-| Current name | Renamed to | Unit |
+| Old name | New name | Unit |
 |---|---|---|
 | `GMax` | `g_max_nd` | dimensionless (g) |
 | `GMin` | `g_min_nd` | dimensionless (g) |
 | `TASMax` | `tas_max_mps` | m/s |
 | `MachMax` | `mach_max_nd` | dimensionless |
 
-Also add `#pragma once` and move into `namespace liteaerosim`.
+Added `#pragma once`, moved into `namespace liteaerosim`.
 
-### Serialization
+Serialization: `serializeJson()` / `deserializeJson()` and `serializeProto()` /
+`deserializeProto()` capture all four config fields. Proto message:
+`AirframePerformanceParams` added to `proto/liteaerosim.proto`.
 
-`AirframePerformance` must support full reconstitution from a frozen state — add
-`serializeJson()` / `deserializeJson()` and `serializeProto()` / `deserializeProto()`
-that capture all four config fields. These are included in the `Aircraft` state snapshot
-so that `Aircraft::deserializeJson()` is self-contained and does not require a prior
-`initialize()` call.
+Schema: `"airframe"` section added to `aircraft_config_v1`. Validator updated with range
+checks (`g_max_nd > 0`, `g_min_nd < 0`, `tas_max_mps > 0`, `mach_max_nd > 0`).
 
-### Schema extension
-
-Add an `"airframe"` section to `aircraft_config_v1`:
-
-```json
-"airframe": {
-    "g_max_nd":    3.8,
-    "g_min_nd":   -1.5,
-    "tas_max_mps": 82.3,
-    "mach_max_nd": 0.25
-}
-```
-
-Update `python/tools/validate_aircraft_config.py` and its tests:
-- `g_min_nd < 0` (structural negative limit must be negative)
-- `g_max_nd > 0`
-- `tas_max_mps > 0`
-- `mach_max_nd > 0`
-
-### Integration with `Aircraft::step()`
-
-After computing dynamic pressure and before calling `LoadFactorAllocator::solve()`,
-clamp the commanded load factors (new step 3 in the physics loop):
-
-```
-n_cmd   = clamp(cmd.n,   _airframe.g_min_nd, _airframe.g_max_nd)
-n_y_cmd = clamp(cmd.n_y, _airframe.g_min_nd, _airframe.g_max_nd)
-```
-
-Pass `n_cmd` and `n_y_cmd` to `LoadFactorAllocator::solve()` instead of the raw commands.
-
-### Tests
-
-- JSON round-trip: `deserializeJson(serializeJson())` restores all four fields exactly.
-- Proto round-trip: same.
-- Schema version mismatch throws `std::runtime_error`.
-- `g_min_nd >= 0` fails validator; `g_max_nd <= 0` fails validator.
-- `tas_max_mps <= 0` fails validator.
-- In `Aircraft::step()`: commanding `n = 10.0` with `g_max_nd = 3.8` clamps to `3.8`.
+Tests: `test/AirframePerformance_test.cpp` — JSON round-trip, proto round-trip, schema
+version mismatch throws (both formats). 6 tests, all passing.
 
 ---
 
-## 2. `Inertia` — Field Cleanup, Serialization, and `Aircraft` Integration
+## 2. `Inertia` — Field Cleanup, Serialization, and `Aircraft` Integration — ✅ Complete
 
 Design authority: [`docs/architecture/aircraft.md`](../architecture/aircraft.md).
 
@@ -117,52 +79,21 @@ keeping all mass properties co-located. The moment-of-inertia fields (`Ixx_kgm2`
 `Iyy_kgm2`, `Izz_kgm2`) are read from config and currently unused in the point-mass model
 — they are reserved for the 6-DOF angular dynamics (moment equations) when those are added.
 
-### Required changes
+### Changes delivered
 
-The existing field names already follow the convention. Add `#pragma once` and move into
-`namespace liteaerosim`. Add a default constructor that zero-initializes all fields
-(`mass_kg = 0` is invalid; `Aircraft::initialize()` throws if `mass_kg <= 0`).
+Added `#pragma once`, moved into `namespace liteaerosim`. Fields unchanged (already
+compliant): `mass_kg`, `Ixx_kgm2`, `Iyy_kgm2`, `Izz_kgm2`.
 
-### Serialization
+Serialization: `serializeJson()` / `deserializeJson()` and `serializeProto()` /
+`deserializeProto()` capture all four fields. Proto message: `InertiaParams` added to
+`proto/liteaerosim.proto`.
 
-`Inertia` must support full reconstitution from a frozen state — add `serializeJson()` /
-`deserializeJson()` and `serializeProto()` / `deserializeProto()` that capture all four
-fields. These are included in the `Aircraft` state snapshot so that
-`Aircraft::deserializeJson()` is self-contained and does not require a prior
-`initialize()` call.
+Schema: `"inertia"` section added to `aircraft_config_v1`; `aircraft.mass_kg` removed
+(subsumed by `inertia.mass_kg`). Validator updated with range checks (`mass_kg > 0`,
+`Ixx/Iyy/Izz_kgm2 > 0`). All three JSON fixture files updated.
 
-### Schema extension
-
-Add an `"inertia"` section to `aircraft_config_v1` and remove `aircraft.mass_kg`
-(subsumed by `inertia.mass_kg`):
-
-```json
-"inertia": {
-    "mass_kg":   1045.0,
-    "Ixx_kgm2":  1285.0,
-    "Iyy_kgm2":  1825.0,
-    "Izz_kgm2":  2667.0
-}
-```
-
-Update `python/tools/validate_aircraft_config.py` and its tests:
-- `mass_kg > 0`
-- `Ixx_kgm2 > 0`, `Iyy_kgm2 > 0`, `Izz_kgm2 > 0`
-- Remove the existing `mass_kg` check from the `aircraft` section.
-
-### Integration with `Aircraft`
-
-Replace `float _mass_kg` with `Inertia _inertia` as a value member of `Aircraft`. All
-references to `_mass_kg` inside `Aircraft::step()` and serialization methods become
-`_inertia.mass_kg`.
-
-### Tests
-
-- JSON round-trip: all four fields restored exactly.
-- Proto round-trip: same.
-- Schema version mismatch throws `std::runtime_error`.
-- `mass_kg <= 0` fails validator; any moment-of-inertia `<= 0` fails validator.
-- `Aircraft::initialize()` with `mass_kg = 0` throws `std::invalid_argument`.
+Tests: `test/Inertia_test.cpp` — JSON round-trip, proto round-trip, schema version
+mismatch throws (both formats). 6 tests, all passing.
 
 ---
 
@@ -182,8 +113,9 @@ convention (`initialize` → `reset` → `step` → `serialize` / `deserialize`)
 | `_liftCurve` | `LiftCurveModel` | Aircraft (value member) |
 | `_allocator` | `LoadFactorAllocator` | Aircraft (value member) |
 | `_aeroPerf` | `AeroPerformance` | Aircraft (value member) |
+| `_airframe` | `AirframePerformance` | Aircraft (value member) |
+| `_inertia` | `Inertia` | Aircraft (value member) |
 | `_propulsion` | `std::unique_ptr<V_Propulsion>` | Aircraft (owns, injected at construction) |
-| `_mass_kg` | `float` | Aircraft |
 
 ### Inputs to `step()`
 
@@ -231,9 +163,10 @@ private:
     aerodynamics::LiftCurveModel           _liftCurve;
     aerodynamics::LoadFactorAllocator      _allocator;
     aerodynamics::AeroPerformance          _aeroPerf;
+    AirframePerformance                    _airframe;
+    Inertia                                _inertia;
     std::unique_ptr<propulsion::V_Propulsion> _propulsion;
-    float _mass_kg = 0.f;
-    float _dt_s    = 0.f;
+    float _dt_s = 0.f;
 };
 
 } // namespace liteaerosim
@@ -261,28 +194,32 @@ The `step()` method is the closed-loop physics update. It must execute in this o
 2. Compute dynamic pressure:
        q_inf = 0.5 * rho * V_air²
 
-3. Solve for α, β via LoadFactorAllocator:
-       LoadFactorInputs in = { cmd.n, cmd.n_y, q_inf, thrust_n (previous step),
-                               _mass_kg, cmd.n_dot, cmd.n_y_dot }
+3. Clamp commanded load factors to airframe structural limits:
+       n_cmd   = clamp(cmd.n,   _airframe.g_min_nd, _airframe.g_max_nd)
+       n_y_cmd = clamp(cmd.n_y, _airframe.g_min_nd, _airframe.g_max_nd)
+
+4. Solve for α, β via LoadFactorAllocator:
+       LoadFactorInputs in = { n_cmd, n_y_cmd, q_inf, thrust_n (previous step),
+                               _inertia.mass_kg, cmd.n_dot, cmd.n_y_dot }
        LoadFactorOutputs out = _allocator.solve(in)
 
-4. Evaluate lift coefficient:
+5. Evaluate lift coefficient:
        CL = _liftCurve.evaluate(out.alpha_rad)
 
-5. Compute aerodynamic forces in Wind frame:
+6. Compute aerodynamic forces in Wind frame:
        AeroForces F = _aeroPerf.compute(out.alpha_rad, out.beta_rad, q_inf, CL)
 
-6. Advance propulsion:
+7. Advance propulsion:
        float T = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3)
 
-7. Compute net Wind-frame acceleration:
+8. Compute net Wind-frame acceleration:
        // Thrust decomposition in Wind frame (see docs/algorithms/equations_of_motion.md)
        ax = (T * cosα * cosβ  + F.x_n) / m     // F.x_n is negative (drag)
        ay = (−T * cosα * sinβ + F.y_n) / m
        az = (−T * sinα        + F.z_n) / m     // F.z_n is negative (lift up)
        // Gravity is already embedded in the load factor — do not add separately
 
-8. Advance KinematicState:
+9. Advance KinematicState:
        _state.step(time_sec,
                    {ax, ay, az},           // acceleration_Wind_mps
                    cmd.rollRate_Wind_rps,
@@ -353,7 +290,8 @@ construction. Stateful components additionally serialize their warm-start state.
 
 Add an `Aircraft` message to `proto/liteaerosim.proto` that embeds the existing
 `KinematicState` and `LoadFactorAllocatorState` messages, plus messages for each config
-struct and the propulsion `oneof`.
+struct and the propulsion `oneof`. `AirframePerformanceParams` and `InertiaParams` are
+already defined in `proto/liteaerosim.proto` (added in items 1 and 2 above).
 
 ### Tests
 
@@ -377,13 +315,23 @@ subcomponents.
 
 | JSON path | Aircraft member |
 |-----------|-----------------|
-| `aircraft.mass_kg` | `_mass_kg` |
+| `inertia.mass_kg` | `_inertia.mass_kg` |
+| `inertia.Ixx_kgm2` | `_inertia.Ixx_kgm2` |
+| `inertia.Iyy_kgm2` | `_inertia.Iyy_kgm2` |
+| `inertia.Izz_kgm2` | `_inertia.Izz_kgm2` |
+| `airframe.g_max_nd` | `_airframe.g_max_nd` |
+| `airframe.g_min_nd` | `_airframe.g_min_nd` |
+| `airframe.tas_max_mps` | `_airframe.tas_max_mps` |
+| `airframe.mach_max_nd` | `_airframe.mach_max_nd` |
 | `aircraft.S_ref_m2` | `AeroPerformance`, `LoadFactorAllocator` |
 | `aircraft.cl_y_beta` | `AeroPerformance`, `LoadFactorAllocator` |
+| `aircraft.ar` | `AeroPerformance` |
+| `aircraft.e` | `AeroPerformance` |
+| `aircraft.cd0` | `AeroPerformance` |
 | `lift_curve.*` | `LiftCurveParams` → `LiftCurveModel` |
 | `initial_state.*` | `KinematicState` constructor |
 
-`validate_aircraft_config.py` must pass before `initialize()` is called.  `initialize()`
+`validate_aircraft_config.py` must pass before `initialize()` is called. `initialize()`
 may throw `std::invalid_argument` on malformed input but is not required to duplicate the
 full Python-side validation.
 

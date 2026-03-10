@@ -2,8 +2,22 @@
     "schema_version": 1,
     "aircraft": {
         "S_ref_m2": 16.2,
+        "cl_y_beta": -0.60,
+        "ar": 7.47,
+        "e": 0.80,
+        "cd0": 0.027
+    },
+    "airframe": {
+        "g_max_nd": 3.8,
+        "g_min_nd": -1.52,
+        "tas_max_mps": 82.3,
+        "mach_max_nd": 0.25
+    },
+    "inertia": {
         "mass_kg": 1045.0,
-        "cl_y_beta": -0.60
+        "Ixx_kgm2": 1285.0,
+        "Iyy_kgm2": 1825.0,
+        "Izz_kgm2": 2667.0
     },
     "lift_curve": {
         "cl_alpha": 5.1,

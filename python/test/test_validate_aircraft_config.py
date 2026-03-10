@@ -14,8 +14,22 @@ VALID_CONFIG: dict = {
     "schema_version": 1,
     "aircraft": {
         "S_ref_m2": 16.2,
-        "mass_kg": 1045.0,
         "cl_y_beta": -0.60,
+        "ar": 7.47,
+        "e": 0.80,
+        "cd0": 0.027,
+    },
+    "airframe": {
+        "g_max_nd": 3.8,
+        "g_min_nd": -1.52,
+        "tas_max_mps": 82.3,
+        "mach_max_nd": 0.25,
+    },
+    "inertia": {
+        "mass_kg": 1045.0,
+        "Ixx_kgm2": 1285.0,
+        "Iyy_kgm2": 1825.0,
+        "Izz_kgm2": 2667.0,
     },
     "lift_curve": {
         "cl_alpha": 5.1,
@@ -86,6 +100,20 @@ def test_missing_aircraft_section_raises() -> None:
         validate(cfg)
 
 
+def test_missing_airframe_section_raises() -> None:
+    cfg = valid()
+    del cfg["airframe"]
+    with pytest.raises(ValueError, match="airframe"):
+        validate(cfg)
+
+
+def test_missing_inertia_section_raises() -> None:
+    cfg = valid()
+    del cfg["inertia"]
+    with pytest.raises(ValueError, match="inertia"):
+        validate(cfg)
+
+
 def test_missing_lift_curve_section_raises() -> None:
     cfg = valid()
     del cfg["lift_curve"]
@@ -105,10 +133,36 @@ def test_missing_initial_state_section_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("field", ["S_ref_m2", "mass_kg", "cl_y_beta"])
+@pytest.mark.parametrize("field", ["S_ref_m2", "cl_y_beta", "ar", "e", "cd0"])
 def test_missing_aircraft_field_raises(field: str) -> None:
     cfg = valid()
     del cfg["aircraft"][field]
+    with pytest.raises(ValueError, match=field):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Missing required fields — airframe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["g_max_nd", "g_min_nd", "tas_max_mps", "mach_max_nd"])
+def test_missing_airframe_field_raises(field: str) -> None:
+    cfg = valid()
+    del cfg["airframe"][field]
+    with pytest.raises(ValueError, match=field):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Missing required fields — inertia
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["mass_kg", "Ixx_kgm2", "Iyy_kgm2", "Izz_kgm2"])
+def test_missing_inertia_field_raises(field: str) -> None:
+    cfg = valid()
+    del cfg["inertia"][field]
     with pytest.raises(ValueError, match=field):
         validate(cfg)
 
@@ -170,8 +224,8 @@ def test_missing_initial_state_field_raises(field: str) -> None:
 
 def test_wrong_type_aircraft_field_raises() -> None:
     cfg = valid()
-    cfg["aircraft"]["mass_kg"] = "1045"  # string instead of number
-    with pytest.raises(ValueError, match="mass_kg"):
+    cfg["aircraft"]["S_ref_m2"] = "16.2"  # string instead of number
+    with pytest.raises(ValueError, match="S_ref_m2"):
         validate(cfg)
 
 
@@ -185,7 +239,7 @@ def test_wrong_type_lift_curve_field_raises() -> None:
 def test_bool_type_rejected() -> None:
     """Booleans must not be accepted as numeric values even though bool is a subtype of int."""
     cfg = valid()
-    cfg["aircraft"]["mass_kg"] = True
+    cfg["inertia"]["mass_kg"] = True
     with pytest.raises(ValueError, match="mass_kg"):
         validate(cfg)
 
@@ -197,28 +251,14 @@ def test_bool_type_rejected() -> None:
 
 def test_integer_values_accepted() -> None:
     cfg = valid()
-    cfg["aircraft"]["mass_kg"] = 1045  # int, no decimal point
+    cfg["inertia"]["mass_kg"] = 1045  # int, no decimal point
     cfg["lift_curve"]["cl_max"] = 2  # int
     validate(cfg)  # must not raise
 
 
 # ---------------------------------------------------------------------------
-# Range / invariant violations
+# Range / invariant violations — aircraft
 # ---------------------------------------------------------------------------
-
-
-def test_mass_kg_zero_raises() -> None:
-    cfg = valid()
-    cfg["aircraft"]["mass_kg"] = 0.0
-    with pytest.raises(ValueError, match="mass_kg"):
-        validate(cfg)
-
-
-def test_mass_kg_negative_raises() -> None:
-    cfg = valid()
-    cfg["aircraft"]["mass_kg"] = -1.0
-    with pytest.raises(ValueError, match="mass_kg"):
-        validate(cfg)
 
 
 def test_S_ref_m2_zero_raises() -> None:
@@ -240,6 +280,140 @@ def test_cl_y_beta_positive_raises() -> None:
     cfg["aircraft"]["cl_y_beta"] = 0.5
     with pytest.raises(ValueError, match="cl_y_beta"):
         validate(cfg)
+
+
+def test_ar_zero_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["ar"] = 0.0
+    with pytest.raises(ValueError, match="ar"):
+        validate(cfg)
+
+
+def test_ar_negative_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["ar"] = -1.0
+    with pytest.raises(ValueError, match="ar"):
+        validate(cfg)
+
+
+def test_e_zero_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["e"] = 0.0
+    with pytest.raises(ValueError, match="'e'"):
+        validate(cfg)
+
+
+def test_e_greater_than_one_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["e"] = 1.1
+    with pytest.raises(ValueError, match="'e'"):
+        validate(cfg)
+
+
+def test_cd0_zero_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["cd0"] = 0.0
+    with pytest.raises(ValueError, match="cd0"):
+        validate(cfg)
+
+
+def test_cd0_negative_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["cd0"] = -0.01
+    with pytest.raises(ValueError, match="cd0"):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Range / invariant violations — airframe
+# ---------------------------------------------------------------------------
+
+
+def test_g_max_nd_zero_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["g_max_nd"] = 0.0
+    with pytest.raises(ValueError, match="g_max_nd"):
+        validate(cfg)
+
+
+def test_g_max_nd_negative_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["g_max_nd"] = -1.0
+    with pytest.raises(ValueError, match="g_max_nd"):
+        validate(cfg)
+
+
+def test_g_min_nd_zero_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["g_min_nd"] = 0.0
+    with pytest.raises(ValueError, match="g_min_nd"):
+        validate(cfg)
+
+
+def test_g_min_nd_positive_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["g_min_nd"] = 1.0
+    with pytest.raises(ValueError, match="g_min_nd"):
+        validate(cfg)
+
+
+def test_tas_max_mps_zero_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["tas_max_mps"] = 0.0
+    with pytest.raises(ValueError, match="tas_max_mps"):
+        validate(cfg)
+
+
+def test_mach_max_nd_zero_raises() -> None:
+    cfg = valid()
+    cfg["airframe"]["mach_max_nd"] = 0.0
+    with pytest.raises(ValueError, match="mach_max_nd"):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Range / invariant violations — inertia
+# ---------------------------------------------------------------------------
+
+
+def test_mass_kg_zero_raises() -> None:
+    cfg = valid()
+    cfg["inertia"]["mass_kg"] = 0.0
+    with pytest.raises(ValueError, match="mass_kg"):
+        validate(cfg)
+
+
+def test_mass_kg_negative_raises() -> None:
+    cfg = valid()
+    cfg["inertia"]["mass_kg"] = -1.0
+    with pytest.raises(ValueError, match="mass_kg"):
+        validate(cfg)
+
+
+def test_Ixx_kgm2_zero_raises() -> None:
+    cfg = valid()
+    cfg["inertia"]["Ixx_kgm2"] = 0.0
+    with pytest.raises(ValueError, match="Ixx_kgm2"):
+        validate(cfg)
+
+
+def test_Iyy_kgm2_zero_raises() -> None:
+    cfg = valid()
+    cfg["inertia"]["Iyy_kgm2"] = 0.0
+    with pytest.raises(ValueError, match="Iyy_kgm2"):
+        validate(cfg)
+
+
+def test_Izz_kgm2_zero_raises() -> None:
+    cfg = valid()
+    cfg["inertia"]["Izz_kgm2"] = 0.0
+    with pytest.raises(ValueError, match="Izz_kgm2"):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Range / invariant violations — lift_curve
+# ---------------------------------------------------------------------------
 
 
 def test_cl_min_zero_raises() -> None:
