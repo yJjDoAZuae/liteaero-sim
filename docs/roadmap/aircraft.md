@@ -46,6 +46,7 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 4 | `Aircraft::step()` — 9-step physics loop | `Aircraft_test.cpp` — 3 tests |
 | 5 | `Aircraft` serialization — JSON + proto round-trips, schema version checks | `Aircraft_test.cpp` — 4 tests |
 | 6 | JSON initialization — fixture-file tests (3 configs) and missing-field error path | `Aircraft_test.cpp` — 4 tests |
+| 7 | `Logger` design — architecture, data model, MCAP + CSV formats, C++ interface reference | [`docs/architecture/logger.md`](../architecture/logger.md) |
 
 ---
 
@@ -53,48 +54,36 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 
 `Logger` records simulation state at each timestep to a binary or structured-text file for
 post-flight analysis. It lives in the Infrastructure layer and has no physics logic.
+Architecture and interface are fully specified in [`docs/architecture/logger.md`](../architecture/logger.md).
 
 ### Responsibilities
 
-- Accept arbitrary key-value telemetry records (string key, scalar float value, timestep index).
-- Buffer writes and flush to disk efficiently (not every timestep).
-- Write a header that describes the channel layout so a reader can decode the file without
-  prior knowledge of the recording configuration.
-- Support at minimum one output format: line-delimited CSV with a header row.
-- Provide a `Reader` counterpart (Python or C++) that loads a logged file back into a
-  structured table indexed by channel name and timestep.
+- Accept `LogSource` registrations; each source pushes named float channels at each timestep.
+- Write MCAP (binary, protobuf-encoded) as the primary format; CSV as the text export.
+- Buffer writes in a lock-free ring buffer; a background `WriterThread` drains to disk.
+- Embed protobuf channel schemas in the MCAP header so files are self-describing.
+- Provide `LogReader` (C++) and `log_reader.py` (Python) to load recordings back into
+  structured tables indexed by channel name and timestamp.
 
-### Interface sketch
+### Tests (`test/Logger_test.cpp`)
 
-```cpp
-// include/logger/Logger.hpp
-namespace liteaerosim::logger {
-
-class Logger {
-public:
-    // Open a new log file.  Throws std::runtime_error on I/O failure.
-    void open(const std::filesystem::path& path, const std::vector<std::string>& channels);
-    void log(double time_s, const std::vector<float>& values);  // values.size() == channels.size()
-    void close();
-    bool is_open() const;
-};
-
-} // namespace liteaerosim::logger
-```
-
-### Tests
-
-- `open()` creates a file; `close()` flushes and closes it without throwing.
-- After `close()`, re-opening and reading the file back recovers the exact values written
-  by `log()` for all channels and all timesteps.
+- `open()` creates an MCAP file; `close()` flushes and closes without throwing.
+- After `close()`, `LogReader` recovers the exact values written for all channels and timesteps.
 - `log()` called after `close()` throws `std::logic_error`.
-- `open()` with mismatched `values.size()` on the first `log()` call throws.
 - Logger survives 10 000 consecutive `log()` calls without memory growth (smoke test).
+- Multiple `LogSource` registrations produce correctly interleaved channels in the output.
+- `LogReader` channel list matches the registered source channel names exactly.
 
 ### CMake
 
-Add `src/logger/Logger.cpp` to the `liteaerosim` target.
+Add `src/logger/Logger.cpp` and `src/logger/LogReader.cpp` to the `liteaerosim` target.
+Add `mcap` C++ library via FetchContent (MIT, header-only).
 Add `test/Logger_test.cpp` to the test executable.
+
+### Python
+
+Add `python/src/las/log_reader.py` wrapping the MCAP Python SDK.
+Add `mcap` and `mcap-protobuf-support` to `python/pyproject.toml`.
 
 ---
 
