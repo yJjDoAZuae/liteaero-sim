@@ -45,51 +45,11 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 3 | `Aircraft` class — `AircraftCommand`, `initialize()`, `reset()`, `state()` | `Aircraft_test.cpp` — 3 tests |
 | 4 | `Aircraft::step()` — 9-step physics loop | `Aircraft_test.cpp` — 3 tests |
 | 5 | `Aircraft` serialization — JSON + proto round-trips, schema version checks | `Aircraft_test.cpp` — 4 tests |
+| 6 | JSON initialization — fixture-file tests (3 configs) and missing-field error path | `Aircraft_test.cpp` — 4 tests |
 
 ---
 
-## 1. JSON Initialization — Remaining Tests
-
-Design authority: [`docs/architecture/aircraft.md — Initialization`](../architecture/aircraft.md#initialization--json-config-mapping).
-
-`Aircraft::initialize(config)` is implemented. The JSON parameter schema is complete (see
-[`docs/schemas/aircraft_config_v1.md`](../schemas/aircraft_config_v1.md)). The remaining
-deliverable is extended test coverage with all three fixture files and error-path validation.
-
-### Mapping from schema to Aircraft members
-
-| JSON path | Aircraft member |
-|-----------|-----------------|
-| `inertia.mass_kg` | `_inertia.mass_kg` |
-| `inertia.Ixx_kgm2` | `_inertia.Ixx_kgm2` |
-| `inertia.Iyy_kgm2` | `_inertia.Iyy_kgm2` |
-| `inertia.Izz_kgm2` | `_inertia.Izz_kgm2` |
-| `airframe.g_max_nd` | `_airframe.g_max_nd` |
-| `airframe.g_min_nd` | `_airframe.g_min_nd` |
-| `airframe.tas_max_mps` | `_airframe.tas_max_mps` |
-| `airframe.mach_max_nd` | `_airframe.mach_max_nd` |
-| `aircraft.S_ref_m2` | `AeroPerformance`, `LoadFactorAllocator` |
-| `aircraft.cl_y_beta` | `AeroPerformance`, `LoadFactorAllocator` |
-| `aircraft.ar` | `AeroPerformance` |
-| `aircraft.e` | `AeroPerformance` |
-| `aircraft.cd0` | `AeroPerformance` |
-| `lift_curve.*` | `LiftCurveParams` → `LiftCurveModel` |
-| `initial_state.*` | `KinematicState` constructor |
-
-`validate_aircraft_config.py` must pass before `initialize()` is called. `initialize()`
-may throw `std::invalid_argument` on malformed input but is not required to duplicate the
-full Python-side validation.
-
-### Tests
-
-- `initialize()` with each of the three fixture files (`test/data/aircraft/general_aviation.json`,
-  `test/data/aircraft/jet_trainer.json`, `test/data/aircraft/small_uas.json`) succeeds
-  without throwing.
-- `initialize()` with a missing required field throws `std::exception`.
-
----
-
-## 2. `Logger` — Telemetry Serialization
+## 1. `Logger` — Telemetry Serialization
 
 `Logger` records simulation state at each timestep to a binary or structured-text file for
 post-flight analysis. It lives in the Infrastructure layer and has no physics logic.
@@ -138,7 +98,7 @@ Add `test/Logger_test.cpp` to the test executable.
 
 ---
 
-## 3. `Atmosphere` — International Standard Atmosphere Model
+## 2. `Atmosphere` — International Standard Atmosphere Model
 
 `Atmosphere` provides density, temperature, and pressure as functions of geopotential
 altitude. It is a stateless value-type (no `step()`, no serialization). All dependent
@@ -184,7 +144,7 @@ Add `test/Atmosphere_test.cpp` to the test executable.
 
 ---
 
-## 4. `Wind` and `Gust` — Ambient Wind and Turbulence Models
+## 3. `Wind` and `Gust` — Ambient Wind and Turbulence Models
 
 `Wind` provides a spatially and temporally varying wind vector in NED coordinates. `Gust`
 provides a transient velocity disturbance (discrete gust or Dryden turbulence). Both are
@@ -248,7 +208,7 @@ Add `test/Wind_test.cpp` and `test/Gust_test.cpp` to the test executable.
 
 ---
 
-## 5. `Terrain` — Elevation Model
+## 4. `Terrain` — Elevation Model
 
 `Terrain` provides ground elevation (meters above mean sea level) at a given latitude and
 longitude. The Domain Layer uses it to compute height above ground (HAG) and to detect
@@ -293,7 +253,7 @@ Add `test/Terrain_test.cpp` to the test executable.
 
 ---
 
-## 6. Air Data Sensors — `SensorAirData`, `SensorAA`, `SensorAAR`
+## 5. Air Data Sensors — `SensorAirData`, `SensorAA`, `SensorAAR`
 
 Air data sensors derive indicated and calibrated quantities from the true atmospheric state
 and aircraft kinematics. They model systematic bias and measurement noise. All sensors
@@ -339,7 +299,7 @@ Add `test/SensorAirData_test.cpp` and `test/SensorAngle_test.cpp` to the test ex
 
 ---
 
-## 7. `SensorRadAlt` — Radar / Laser Altimeter
+## 6. `SensorRadAlt` — Radar / Laser Altimeter
 
 `SensorRadAlt` outputs height above ground (HAG) derived from `Terrain::heightAboveGround_m`.
 `SensorForwardTerrainProfile` returns a look-ahead terrain elevation vector along the
@@ -363,7 +323,7 @@ Add `test/SensorRadAlt_test.cpp` to the test executable.
 
 ---
 
-## 8. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
+## 7. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
 
 A `Path` is an ordered sequence of `V_PathSegment` objects. Each segment exposes a
 cross-track error, along-track distance, and desired heading at a query position. The
@@ -418,7 +378,7 @@ Add `test/Path_test.cpp` to the test executable.
 
 ---
 
-## 9. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
+## 8. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
 
 Guidance laws convert path and altitude errors into commanded load factors for `Aircraft::step()`.
 They live in the Domain Layer and have no I/O. Each is a stateful element (contains filter
@@ -459,7 +419,7 @@ Add `test/Guidance_test.cpp` to the test executable.
 
 ---
 
-## 10. Autopilot — Outer Loop Command Generation
+## 9. Autopilot — Outer Loop Command Generation
 
 `Autopilot` combines `PathGuidance`, `VerticalGuidance`, and `ParkTracking` into a single
 class that consumes the `KinematicState` and `PathResponse` and produces an `AircraftCommand`
@@ -510,7 +470,7 @@ Add `test/Autopilot_test.cpp` to the test executable.
 
 ---
 
-## 11. Plot Visualization — Python Post-Processing Tools
+## 10. Plot Visualization — Python Post-Processing Tools
 
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
@@ -544,7 +504,7 @@ dev = [
 
 ---
 
-## 12. Manual Input — Joystick and Keyboard
+## 11. Manual Input — Joystick and Keyboard
 
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
@@ -585,7 +545,7 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 13. Execution Modes — Real-Time, Scaled, and Batch Runners
+## 12. Execution Modes — Real-Time, Scaled, and Batch Runners
 
 The simulation runner controls the wall-clock relationship to simulation time. Three modes
 are required:
