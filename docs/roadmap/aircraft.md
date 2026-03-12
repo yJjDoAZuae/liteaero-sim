@@ -47,43 +47,7 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 5 | `Aircraft` serialization — JSON + proto round-trips, schema version checks | `Aircraft_test.cpp` — 4 tests |
 | 6 | JSON initialization — fixture-file tests (3 configs) and missing-field error path | `Aircraft_test.cpp` — 4 tests |
 | 7 | `Logger` design — architecture, data model, MCAP + CSV formats, C++ interface reference | [`docs/architecture/logger.md`](../architecture/logger.md) |
-
----
-
-## 1. `Logger` — Telemetry Serialization
-
-`Logger` records simulation state at each timestep to a binary or structured-text file for
-post-flight analysis. It lives in the Infrastructure layer and has no physics logic.
-Architecture and interface are fully specified in [`docs/architecture/logger.md`](../architecture/logger.md).
-
-### Responsibilities
-
-- Accept `LogSource` registrations; each source pushes named float channels at each timestep.
-- Write MCAP (binary, protobuf-encoded) as the primary format; CSV as the text export.
-- Buffer writes in a lock-free ring buffer; a background `WriterThread` drains to disk.
-- Embed protobuf channel schemas in the MCAP header so files are self-describing.
-- Provide `LogReader` (C++) and `log_reader.py` (Python) to load recordings back into
-  structured tables indexed by channel name and timestamp.
-
-### Tests (`test/Logger_test.cpp`)
-
-- `open()` creates an MCAP file; `close()` flushes and closes without throwing.
-- After `close()`, `LogReader` recovers the exact values written for all channels and timesteps.
-- `log()` called after `close()` throws `std::logic_error`.
-- Logger survives 10 000 consecutive `log()` calls without memory growth (smoke test).
-- Multiple `LogSource` registrations produce correctly interleaved channels in the output.
-- `LogReader` channel list matches the registered source channel names exactly.
-
-### CMake
-
-Add `src/logger/Logger.cpp` and `src/logger/LogReader.cpp` to the `liteaerosim` target.
-Add `mcap` C++ library via FetchContent (MIT, header-only).
-Add `test/Logger_test.cpp` to the test executable.
-
-### Python
-
-Add `python/src/las/log_reader.py` wrapping the MCAP Python SDK.
-Add `mcap` and `mcap-protobuf-support` to `python/pyproject.toml`.
+| 8 | `Logger` implementation — `Logger`, `LogSource`, `LogReader`; MCAP + `FloatArray` proto; 6 tests | `test/Logger_test.cpp` — 6 tests |
 
 ---
 

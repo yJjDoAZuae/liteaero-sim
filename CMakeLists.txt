@@ -27,6 +27,7 @@ enable_testing()
 #   googletest       | v1.17.0                                  | BSD-3-Clause | FetchContent (1a)
 #   trochoids        | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (1b)
 #   protobuf         | v3.21.12                                 | BSD-3-Clause | find_package + FetchContent (1a)
+#   mcap             | releases/cpp/v1.4.0                      | MIT          | FetchContent (1b)
 # ---------------------------------------------------------------------------
 include(FetchContent)
 
@@ -110,6 +111,29 @@ if(NOT Protobuf_FOUND)
     set(protobuf_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
     set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(protobuf)
+endif()
+
+# --- mcap (MIT) — MCAP binary log format; C++ header-with-implementation library ---
+# Pattern 1b: upstream CMakeLists in cpp/mcap/ pulls in optional compression deps.
+# We download source and expose only the include path via an INTERFACE target.
+# MCAP_IMPLEMENTATION is defined in src/logger/mcap_impl.cpp.
+# Compression is disabled at compile time (no lz4/zstd deps required).
+FetchContent_Declare(
+    mcap
+    GIT_REPOSITORY https://github.com/foxglove/mcap.git
+    GIT_TAG        releases/cpp/v1.4.0
+)
+FetchContent_GetProperties(mcap)
+if(NOT mcap_POPULATED)
+    FetchContent_Populate(mcap)
+    add_library(mcap_headers INTERFACE)
+    target_include_directories(mcap_headers SYSTEM INTERFACE
+        ${mcap_SOURCE_DIR}/cpp/mcap/include
+    )
+    target_compile_definitions(mcap_headers INTERFACE
+        MCAP_COMPRESSION_NO_LZ4
+        MCAP_COMPRESSION_NO_ZSTD
+    )
 endif()
 
 # ---------------------------------------------------------------------------

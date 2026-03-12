@@ -136,6 +136,14 @@ message PropulsionPropState {
 }
 
 // ---------------------------------------------------------------------------
+// FloatArray — lightweight log message for float-vector log sources.
+// Used by LogSource (float-array variant) as the MCAP message schema.
+// ---------------------------------------------------------------------------
+message FloatArray {
+    repeated float values = 1;
+}
+
+// ---------------------------------------------------------------------------
 // AircraftState — full restart snapshot for Aircraft
 // ---------------------------------------------------------------------------
 message AircraftState {
