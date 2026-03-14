@@ -46,19 +46,19 @@ separate future steps.
 | `include/environment/Terrain.hpp` | ✅ Done (Step 2) — `V_Terrain` + `FlatTerrain` |
 | `include/environment/TerrainTile.hpp` | ✅ Done (Step 3) — includes `TerrainLod` enum class |
 | `include/environment/TerrainCell.hpp` | ✅ Done (Step 3) |
-| `include/environment/TerrainMesh.hpp` | **Create** |
+| `include/environment/TerrainMesh.hpp` | ✅ Done (Steps 4–6) |
 | `include/environment/LodSelector.hpp` | **Create** |
 | `include/environment/MeshQualityVerifier.hpp` | **Create** |
 | `include/SimulationFrame.hpp` | **Create** |
 | `src/environment/Terrain.cpp` | ✅ Done (Step 2) |
 | `src/environment/TerrainTile.cpp` | ✅ Done (Step 3) |
 | `src/environment/TerrainCell.cpp` | ✅ Done (Step 3) |
-| `src/environment/TerrainMesh.cpp` | **Create** |
+| `src/environment/TerrainMesh.cpp` | ✅ Done (Steps 4–6) |
 | `src/environment/LodSelector.cpp` | **Create** |
 | `src/environment/MeshQualityVerifier.cpp` | **Create** |
 | `test/Terrain_test.cpp` | ✅ Done (Step 2) — 4 tests |
 | `test/TerrainTile_test.cpp` | ✅ Done (Step 3) — 8 tests |
-| `test/TerrainMesh_test.cpp` | **Create** — steps 4–8, 11–12; ~25 tests |
+| `test/TerrainMesh_test.cpp` | ✅ Done (Steps 4–6, 15 tests); steps 7–8, 11 to be added |
 | `test/LodSelector_test.cpp` | **Create** — 5 tests |
 | `test/MeshQualityVerifier_test.cpp` | **Create** — 4 tests |
 | `test/TrajectoryFile_test.cpp` | **Create** — 2 tests |
@@ -247,7 +247,7 @@ private:
 
 ---
 
-## Step 4 — `TerrainMesh` Core: `addCell()`, `cellAt()`, `elevation_m()` (5 tests)
+## Step 4 — `TerrainMesh` Core: `addCell()`, `cellAt()`, `elevation_m()` (5 tests) ✅
 
 ### Failing Tests — `test/TerrainMesh_test.cpp`
 
@@ -276,7 +276,7 @@ Concrete `V_Terrain`. Key interface (full interface in design authority):
 
 ---
 
-## Step 5 — Coordinate Transforms: `toECEF()`, `toNED()` (4 tests)
+## Step 5 — Coordinate Transforms: `toECEF()`, `toNED()` (4 tests) ✅
 
 ### Failing Tests (add to `test/TerrainMesh_test.cpp`)
 
@@ -301,7 +301,7 @@ NED from ECEF: apply `R_ned` at the reference point; `P_NED = R_ned * (P_ecef - 
 
 ---
 
-## Step 6 — Subset Queries: `queryLocalAABB()`, `queryGeodeticAABB()`, `querySphere()` (6 tests)
+## Step 6 — Subset Queries: `queryLocalAABB()`, `queryGeodeticAABB()`, `querySphere()` (6 tests) ✅
 
 ### Failing Tests (add to `test/TerrainMesh_test.cpp`)
 

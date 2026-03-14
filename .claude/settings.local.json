@@ -154,7 +154,8 @@
       "Bash(uv run pytest test/ -v)",
       "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/general_aviation.json)",
       "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/jet_trainer.json)",
-      "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/small_uas.json)"
+      "Bash(uv run python tools/validate_aircraft_config.py ../test/data/aircraft/small_uas.json)",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=TerrainMeshTest.* 2>&1\")"
     ]
   }
 }
