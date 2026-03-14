@@ -150,7 +150,7 @@ public:
 - `TerrainCell::tile(missing_lod)` throws `std::out_of_range`.
 - `finestAvailableLod()` / `coarsestAvailableLod()` correct for mixed population.
 
-**Core + transforms** (`test/TerrainMesh_test.cpp` — 11 tests):
+**Core + transforms + LOS + serialization** (`test/TerrainMesh_test.cpp` — 26 tests):
 
 - `addCell()` + `cellAt()` round-trip; offset point within extent also finds cell.
 - `cellAt()` outside all cells returns `nullptr`.
@@ -164,13 +164,13 @@ public:
 - `querySphere()`: returns tile within radius; excludes tile entirely outside.
 - `max_lod` filtering: only returns tiles at or coarser than requested LOD.
 
-**LOS** (add to `test/TerrainMesh_test.cpp` — 3 tests):
+**LOS** (`test/TerrainMesh_test.cpp` — 3 tests, ✅ Done):
 
 - Clear sky above flat terrain → `lineOfSight()` returns true.
 - Point below terrain elevation → returns false.
 - Ridge mesh between two points → returns false.
 
-**LOD selection** (`test/LodSelector_test.cpp` — 5 tests):
+**LOD selection** (`test/LodSelector_test.cpp` — 5 tests, ✅ Done):
 
 - `selectLodBySlantRange()`: L0 at r < 300 m; L1 at r = 500 m.
 - `LodSelector::select()` first call uses nominal formula.
@@ -178,18 +178,18 @@ public:
 - Transition to coarser when r exceeds `r_b × (1 + δ)`.
 - `LodSelector::reset()` clears committed state.
 
-**Quality verification** (`test/MeshQualityVerifier_test.cpp` — 4 tests):
+**Quality verification** (`test/MeshQualityVerifier_test.cpp` — 4 tests, ✅ Done):
 
 - Equilateral mesh: `passes()` true, `min_interior_angle_deg` ≈ 60°.
 - Zero-area triangle: `degenerate_facet_count > 0`; `passes()` false.
 - Single-triangle mesh: `open_boundary_edge_count == 3`.
 - Very thin triangle: `max_aspect_ratio > 15`; `passes()` false.
 
-**Serialization** (add to test files — 5 tests):
+**Serialization** (`test/TerrainMesh_test.cpp` — 5 tests, ✅ Done):
 
 - JSON round-trip: `TerrainMesh` with 2 tiles — tile count and centroid preserved.
 - Proto round-trip.
-- `.las_terrain` binary: `TerrainTile` write/read preserves all vertices and facet indices.
+- `.las_terrain` binary: write/read preserves all vertices and facet indices.
 - Schema version mismatch → `std::runtime_error`.
 - Empty `TerrainMesh` round-trips without error.
 
@@ -216,21 +216,21 @@ public:
 | `include/environment/LocalAABB.hpp` | ✅ Done — metric vehicle-centered AABB |
 | `include/environment/TerrainTile.hpp` | ✅ Done — `TerrainLod` enum + `TerrainTile` |
 | `include/environment/TerrainCell.hpp` | ✅ Done |
-| `include/environment/TerrainMesh.hpp` | Create |
-| `include/environment/MeshQualityVerifier.hpp` | Create |
-| `include/environment/LodSelector.hpp` | Create — hysteresis state |
+| `include/environment/TerrainMesh.hpp` | ✅ Done — Steps 4–10 |
+| `include/environment/MeshQualityVerifier.hpp` | ✅ Done — Step 9 |
+| `include/environment/LodSelector.hpp` | ✅ Done — Step 7 |
 | `include/SimulationFrame.hpp` | Create — Domain Layer value object |
-| `src/environment/TerrainTile.cpp` | ✅ Done |
+| `src/environment/TerrainTile.cpp` | ✅ Done — Steps 3, 10 (proto serialization) |
 | `src/environment/TerrainCell.cpp` | ✅ Done |
-| `src/environment/TerrainMesh.cpp` | Create |
-| `src/environment/LodSelector.cpp` | Create |
-| `src/environment/MeshQualityVerifier.cpp` | Create |
+| `src/environment/TerrainMesh.cpp` | ✅ Done — Steps 4–10 |
+| `src/environment/LodSelector.cpp` | ✅ Done — Step 7 |
+| `src/environment/MeshQualityVerifier.cpp` | ✅ Done — Step 9 |
 | `test/TerrainTile_test.cpp` | ✅ Done — 8 tests |
-| `test/TerrainMesh_test.cpp` | Create — ~25 tests |
-| `test/LodSelector_test.cpp` | Create — 5 tests |
-| `test/MeshQualityVerifier_test.cpp` | Create — 4 tests |
+| `test/TerrainMesh_test.cpp` | ✅ Done — 26 tests (Steps 4–10); Step 11 tests still to add |
+| `test/LodSelector_test.cpp` | ✅ Done — 5 tests |
+| `test/MeshQualityVerifier_test.cpp` | ✅ Done — 4 tests |
 | `test/TrajectoryFile_test.cpp` | Create — 2 tests |
-| `proto/liteaerosim.proto` | Modify — add `TerrainTileProto`, `TerrainMeshState`, `TrajectoryFrame`, `TrajectoryFile` |
+| `proto/liteaerosim.proto` | ✅ Done (Step 10) — `TerrainTileProto`, `TerrainMeshProto`, `TerrainMeshState` added; `TrajectoryFrame`/`TrajectoryFile` still pending |
 | `cmake/Dependencies.cmake` | Modify — add `tinygltf` FetchContent (MIT, header-only) |
 
 ---

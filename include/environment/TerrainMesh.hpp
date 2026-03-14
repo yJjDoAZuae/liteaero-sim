@@ -102,10 +102,14 @@ public:
     // Serialization (Step 10)
     // ---------------------------------------------------------------------------
 
-    [[nodiscard]] nlohmann::json       serializeJson()                              const;
-    void                               deserializeJson(const nlohmann::json&        j);
-    [[nodiscard]] std::vector<uint8_t> serializeProto()                             const;
-    void                               deserializeProto(const std::vector<uint8_t>& bytes);
+    [[nodiscard]] nlohmann::json       serializeJson()                               const;
+    void                               deserializeJson(const nlohmann::json&         j);
+    [[nodiscard]] std::vector<uint8_t> serializeProto()                              const;
+    void                               deserializeProto(const std::vector<uint8_t>&  bytes);
+
+    // .las_terrain binary format: magic "LAST", version, tile list.
+    [[nodiscard]] std::vector<uint8_t> serializeLasTerrain()                         const;
+    void                               deserializeLasTerrain(const std::vector<uint8_t>& data);
 
 private:
     // Spatial index keyed by encoded (lat_idx, lon_idx, lod).

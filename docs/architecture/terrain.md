@@ -214,8 +214,9 @@ public:
     void reset();
 
 private:
-    LodSelectorConfig                        _config;
-    std::unordered_map<uint64_t, TerrainLod> _committed_lod;  // key: cell hash
+    LodSelectorConfig                        config_;
+    // Key: reinterpret_cast<uint64_t>(cell ptr) — stable for the mesh lifetime.
+    std::unordered_map<uint64_t, TerrainLod> committed_lod_;
 };
 
 } // namespace liteaerosim::environment
@@ -845,7 +846,7 @@ namespace liteaerosim::environment {
 
 class TerrainMesh : public V_Terrain {
 public:
-    // V_Terrain — bilinear interpolation using the finest available LOD tile.
+    // V_Terrain — barycentric interpolation using the finest available LOD tile.
     [[nodiscard]] float elevation_m(double latitude_rad,
                                     double longitude_rad) const override;
 
@@ -894,16 +895,20 @@ public:
                     TerrainLod                   max_lod,
                     const GeodeticPoint*         world_origin = nullptr) const;
 
-    // Serialization
+    // Serialization — all three formats embed full tile geometry (vertices + facets).
     nlohmann::json        serializeJson()                               const;
     void                  deserializeJson(const nlohmann::json&         j);
     std::vector<uint8_t>  serializeProto()                             const;
     void                  deserializeProto(const std::vector<uint8_t>&  bytes);
 
+    // .las_terrain binary format (see §`.las_terrain` File Format).
+    [[nodiscard]] std::vector<uint8_t> serializeLasTerrain()                          const;
+    void                               deserializeLasTerrain(const std::vector<uint8_t>& data);
+
 private:
-    // Spatial index: quadtree or hash grid of TerrainCell, keyed by LOD + cell origin.
-    // Implementation detail; not part of the public contract.
-    std::unordered_map<uint64_t, TerrainCell> _cells;  // key: encoded (lod, lat_idx, lon_idx)
+    // Cells keyed by encoded (lat_idx, lon_idx, lod) — used for O(1) dedup in addCell().
+    // Query methods (cellAt, queryAABB, querySphere) iterate all entries — see §Internal Spatial Index.
+    std::unordered_map<uint64_t, TerrainCell> cells_;
 };
 
 } // namespace liteaerosim::environment
@@ -1123,25 +1128,49 @@ vehicle actor transform each render frame.
 
 ## Serialization
 
-`TerrainMesh` supports two serialization modes:
+`TerrainMesh` supports three serialization modes, all of which embed full tile geometry
+(vertices + facets):
 
-| Mode | Use case | Format |
-|------|----------|--------|
-| `serializeJson()` | Small test scenarios, human-readable diagnostics | Embedded JSON — only metadata; geometry referenced by file path |
-| `serializeProto()` | High-performance warm-start in CI batch runs | Protobuf message wrapping file path references |
+| Mode | Method | Use case |
+|------|--------|----------|
+| JSON | `serializeJson()` / `deserializeJson()` | Human-readable diagnostics and small test scenarios |
+| Protobuf | `serializeProto()` / `deserializeProto()` | High-performance warm-start; compact binary |
+| `.las_terrain` binary | `serializeLasTerrain()` / `deserializeLasTerrain()` | Primary simulation storage format (see §`.las_terrain` File Format) |
 
-For large operational terrain meshes, full geometry is not embedded in JSON or proto
-blobs.  Instead the serialized form stores the path(s) to `.las_terrain` files, and
-`deserializeJson()`/`deserializeProto()` loads geometry from those files.
-
-A new proto message `TerrainMeshState` is added to `proto/liteaerosim.proto`:
+Three proto messages are added to `proto/liteaerosim.proto`:
 
 ```proto
+// Full tile geometry — used by TerrainTile::serializeProto() and embedded in TerrainMeshProto.
+message TerrainTileProto {
+    int32          schema_version    = 1;
+    int32          lod               = 2;
+    double         centroid_lat_rad  = 3;
+    double         centroid_lon_rad  = 4;
+    float          centroid_height_m = 5;
+    double         lat_min_rad       = 6;
+    double         lat_max_rad       = 7;
+    double         lon_min_rad       = 8;
+    double         lon_max_rad       = 9;
+    float          height_min_m      = 10;
+    float          height_max_m      = 11;
+    repeated float vertices          = 12;  // packed: east0,north0,up0, east1,...
+    repeated uint32 indices          = 13;  // 3 per facet
+    repeated uint32 colors           = 14;  // packed R8G8B8 per facet
+}
+
+// Full mesh — used by TerrainMesh::serializeProto().
+message TerrainMeshProto {
+    int32                     schema_version = 1;
+    repeated TerrainTileProto tiles          = 2;
+}
+
+// Lightweight reference state — stores path and LOD range without embedding geometry.
+// Useful for session snapshots that reference pre-loaded .las_terrain files on disk.
 message TerrainMeshState {
     int32  schema_version   = 1;
-    string las_terrain_path = 2;   // path to the .las_terrain file
-    int32  lod_min          = 3;   // finest LOD loaded (0 = L0)
-    int32  lod_max          = 4;   // coarsest LOD loaded (6 = L6)
+    string las_terrain_path = 2;
+    int32  lod_min          = 3;
+    int32  lod_max          = 4;
 }
 ```
 
@@ -1149,9 +1178,8 @@ message TerrainMeshState {
 
 ## Internal Spatial Index
 
-`TerrainMesh` maintains an internal spatial index that maps a geographic point to its
-containing cell.  The key is a 64-bit integer derived from the tile centroid's quantized
-lat/lon position:
+`TerrainMesh` stores cells in a `std::unordered_map<uint64_t, TerrainCell>` keyed by a
+64-bit integer derived from the tile centroid's quantized lat/lon position:
 
 ```
 bits 63–48: latitude index  = floor((centroid_lat_rad  + π/2) / cell_extent_lat_rad)
@@ -1164,15 +1192,16 @@ bits 15–0:  reserved
 radius (6,371,000 m).  `cell_extent_lon_rad` uses the same value (consistent at the
 centroid latitude for regional extents).
 
-`TerrainMesh::cellAt()` performs a constant-time lookup: compute the query point's
-quantized index at the target LOD level, look up in `std::unordered_map`.  If absent,
-fall back to the next coarser LOD.
+The hash key is used only in `addCell()` for O(1) deduplication — inserting the same
+cell twice is a no-op.
 
-`queryAABB()` and `querySphere()` iterate over the range of lat/lon index values that
-cover the query region — O(k) where k is the number of cells in the result set.  For
-regional terrain (≤ 100 km extent) the total cell count across all LOD levels is at most
-~11,500 (dominated by L0 with ~10,000 cells), so brute-force iteration is acceptable as
-a fallback if the hash-range walk becomes complex.
+**`cellAt()`** iterates every cell in `cells_` and checks whether the query point falls
+inside the cell's `GeodeticAABB` bounds.  This is O(N) where N is the total cell count.
+For regional terrain (≤ 100 km extent) N ≤ ~11,500 (dominated by L0 with ~10,000 cells),
+making brute-force iteration acceptable.
+
+`queryAABB()` and `querySphere()` follow the same O(N) pattern, collecting all cells
+whose bounds overlap the query region.
 
 ---
 
@@ -1184,7 +1213,7 @@ a fallback if the hash-range walk becomes complex.
 | Precision | Tile centroid stored as `double` geodetic; vertex offsets stored as `float` ENU (m).  At 50 km range float32 has ~3 mm precision — adequate for 10 m LOD | — |
 | Antimeridian | Cell-centric ENU encoding eliminates antimeridian discontinuity in vertex storage.  Regional scope (≤ 100 km) means no cell spans ±180° | — |
 | Polar regions | Not a typical use case.  `queryLocalAABB` uses metric extents in the local tangent plane, which are well-defined at any latitude including poles.  No special handling needed. | — |
-| Thread safety | `TerrainMesh` query methods are `const` and safe for concurrent read.  `addCell()` is intended for the **single-threaded scenario load phase** before simulation starts.  `std::unordered_map` rehashing invalidates all iterators simultaneously; a concurrent query during a write is a data race.  If concurrent loading is ever needed, wrap `_cells` in a `std::shared_mutex` (write-lock for `addCell()`, shared read-lock for all queries).  `addCell()` does not support update or removal — each cell key is written once. | — |
+| Thread safety | `TerrainMesh` query methods are `const` and safe for concurrent read.  `addCell()` is intended for the **single-threaded scenario load phase** before simulation starts.  `std::unordered_map` rehashing invalidates all iterators simultaneously; a concurrent query during a write is a data race.  If concurrent loading is ever needed, wrap `cells_` in a `std::shared_mutex` (write-lock for `addCell()`, shared read-lock for all queries).  `addCell()` does not support update or removal — each cell key is written once. | — |
 | Maximum tile count | Regional scope (≤ 100 km): at L0 (~1 km cells) a 100 km region holds at most ~10,000 L0 cells; total across all LOD levels ≤ ~11,500.  All cells are pre-loaded before simulation starts.  No streaming needed. | — |
 | LOD hysteresis | Implemented via `LodSelector` with default δ = 0.15 (see §LOD Hysteresis Band).  `TerrainMesh::selectLodBySlantRange()` remains available for stateless one-shot use. | — |
 | Collision accuracy | `lineOfSight()` resolution bounded by 10 m L0 vertex spacing.  Sub-10 m precision is not required. | — |

@@ -47,22 +47,22 @@ separate future steps.
 | `include/environment/TerrainTile.hpp` | ✅ Done (Step 3) — includes `TerrainLod` enum class |
 | `include/environment/TerrainCell.hpp` | ✅ Done (Step 3) |
 | `include/environment/TerrainMesh.hpp` | ✅ Done (Steps 4–6) |
-| `include/environment/LodSelector.hpp` | **Create** |
-| `include/environment/MeshQualityVerifier.hpp` | **Create** |
+| `include/environment/LodSelector.hpp` | ✅ Done (Step 7) |
+| `include/environment/MeshQualityVerifier.hpp` | ✅ Done (Step 9) |
 | `include/SimulationFrame.hpp` | **Create** |
 | `src/environment/Terrain.cpp` | ✅ Done (Step 2) |
-| `src/environment/TerrainTile.cpp` | ✅ Done (Step 3) |
+| `src/environment/TerrainTile.cpp` | ✅ Done (Step 3, 10) |
 | `src/environment/TerrainCell.cpp` | ✅ Done (Step 3) |
-| `src/environment/TerrainMesh.cpp` | ✅ Done (Steps 4–6) |
-| `src/environment/LodSelector.cpp` | **Create** |
-| `src/environment/MeshQualityVerifier.cpp` | **Create** |
+| `src/environment/TerrainMesh.cpp` | ✅ Done (Steps 4–10) |
+| `src/environment/LodSelector.cpp` | ✅ Done (Step 7) |
+| `src/environment/MeshQualityVerifier.cpp` | ✅ Done (Step 9) |
 | `test/Terrain_test.cpp` | ✅ Done (Step 2) — 4 tests |
 | `test/TerrainTile_test.cpp` | ✅ Done (Step 3) — 8 tests |
-| `test/TerrainMesh_test.cpp` | ✅ Done (Steps 4–6, 15 tests); steps 7–8, 11 to be added |
-| `test/LodSelector_test.cpp` | **Create** — 5 tests |
-| `test/MeshQualityVerifier_test.cpp` | **Create** — 4 tests |
+| `test/TerrainMesh_test.cpp` | ✅ Done (Steps 4–10, 26 tests); step 11 to be added |
+| `test/LodSelector_test.cpp` | ✅ Done (Step 7) — 5 tests |
+| `test/MeshQualityVerifier_test.cpp` | ✅ Done (Step 9) — 4 tests |
 | `test/TrajectoryFile_test.cpp` | **Create** — 2 tests |
-| `proto/liteaerosim.proto` | **Modify** — append `TerrainTileProto`, `TerrainMeshState`, `TrajectoryFrame`, `TrajectoryFile` |
+| `proto/liteaerosim.proto` | ✅ Done (Step 10) — `TerrainTileProto`, `TerrainMeshProto`, `TerrainMeshState` added; `TrajectoryFrame`/`TrajectoryFile` still pending |
 | `cmake/Dependencies.cmake` | **Modify** — add `tinygltf` FetchContent block |
 
 `CMakeLists.txt`, `src/CMakeLists.txt`, and `test/CMakeLists.txt` need **no changes**.
@@ -333,7 +333,7 @@ std::vector<TileRef> querySphere(double     center_lat_rad,
 
 ---
 
-## Step 7 — LOD Selection + `LodSelector` (5 tests)
+## Step 7 — LOD Selection + `LodSelector` (5 tests) ✅
 
 ### Failing Tests — `test/LodSelector_test.cpp`
 
@@ -373,7 +373,7 @@ private:
 
 ---
 
-## Step 8 — Line-of-Sight Query (3 tests)
+## Step 8 — Line-of-Sight Query (3 tests) ✅
 
 ### Failing Tests (add to `test/TerrainMesh_test.cpp`)
 
@@ -394,7 +394,7 @@ equal to half the segment length plus maximum terrain height.
 
 ---
 
-## Step 9 — `MeshQualityVerifier` (4 tests)
+## Step 9 — `MeshQualityVerifier` (4 tests) ✅
 
 ### Failing Tests — `test/MeshQualityVerifier_test.cpp`
 
@@ -430,7 +430,7 @@ public:
 
 ---
 
-## Step 10 — Serialization: JSON + Proto + `.las_terrain` (5 tests)
+## Step 10 — Serialization: JSON + Proto + `.las_terrain` (5 tests) ✅
 
 ### Failing Tests (add to existing test files)
 

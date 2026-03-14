@@ -207,3 +207,36 @@ message AircraftState {
         PropulsionPropState prop = 11;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Terrain — TerrainTile and TerrainMesh serialization (Step 10)
+// ---------------------------------------------------------------------------
+
+message TerrainTileProto {
+    int32          schema_version    = 1;
+    int32          lod               = 2;
+    double         centroid_lat_rad  = 3;
+    double         centroid_lon_rad  = 4;
+    float          centroid_height_m = 5;
+    double         lat_min_rad       = 6;
+    double         lat_max_rad       = 7;
+    double         lon_min_rad       = 8;
+    double         lon_max_rad       = 9;
+    float          height_min_m      = 10;
+    float          height_max_m      = 11;
+    repeated float vertices          = 12;  // packed: east0,north0,up0, east1,...
+    repeated uint32 indices          = 13;  // 3 per facet
+    repeated uint32 colors           = 14;  // packed R8G8B8 per facet (upper byte unused)
+}
+
+message TerrainMeshProto {
+    int32                    schema_version = 1;
+    repeated TerrainTileProto tiles         = 2;
+}
+
+message TerrainMeshState {
+    int32  schema_version   = 1;
+    string las_terrain_path = 2;
+    int32  lod_min          = 3;
+    int32  lod_max          = 4;
+}

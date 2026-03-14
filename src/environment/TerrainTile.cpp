@@ -1,4 +1,5 @@
 #include "environment/TerrainTile.hpp"
+#include "liteaerosim.pb.h"
 #include <cmath>
 #include <stdexcept>
 
@@ -233,15 +234,94 @@ TerrainTile TerrainTile::deserializeJson(const nlohmann::json& j) {
 }
 
 // ---------------------------------------------------------------------------
-// Proto serialization — not yet implemented (Step 11)
+// Proto serialization
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> TerrainTile::serializeProto() const {
-    throw std::runtime_error("TerrainTile::serializeProto: not implemented until Step 11");
+    las_proto::TerrainTileProto proto;
+    proto.set_schema_version(1);
+    proto.set_lod(static_cast<int>(lod_));
+    proto.set_centroid_lat_rad(centroid_.latitude_rad);
+    proto.set_centroid_lon_rad(centroid_.longitude_rad);
+    proto.set_centroid_height_m(centroid_.height_wgs84_m);
+    proto.set_lat_min_rad(bounds_.lat_min_rad);
+    proto.set_lat_max_rad(bounds_.lat_max_rad);
+    proto.set_lon_min_rad(bounds_.lon_min_rad);
+    proto.set_lon_max_rad(bounds_.lon_max_rad);
+    proto.set_height_min_m(bounds_.height_min_m);
+    proto.set_height_max_m(bounds_.height_max_m);
+    for (const auto& v : vertices_) {
+        proto.add_vertices(v.east_m);
+        proto.add_vertices(v.north_m);
+        proto.add_vertices(v.up_m);
+    }
+    for (const auto& f : facets_) {
+        proto.add_indices(f.v[0]);
+        proto.add_indices(f.v[1]);
+        proto.add_indices(f.v[2]);
+        const uint32_t rgb = (static_cast<uint32_t>(f.color.r) << 16) |
+                              (static_cast<uint32_t>(f.color.g) <<  8) |
+                               static_cast<uint32_t>(f.color.b);
+        proto.add_colors(rgb);
+    }
+    std::string buf;
+    proto.SerializeToString(&buf);
+    return {buf.begin(), buf.end()};
 }
 
-TerrainTile TerrainTile::deserializeProto(const std::vector<uint8_t>&) {
-    throw std::runtime_error("TerrainTile::deserializeProto: not implemented until Step 11");
+TerrainTile TerrainTile::deserializeProto(const std::vector<uint8_t>& bytes) {
+    las_proto::TerrainTileProto proto;
+    if (!proto.ParseFromArray(bytes.data(), static_cast<int>(bytes.size()))) {
+        throw std::runtime_error("TerrainTile::deserializeProto: failed to parse bytes");
+    }
+    if (proto.schema_version() != 1) {
+        throw std::runtime_error("TerrainTile::deserializeProto: unsupported schema_version");
+    }
+
+    const TerrainLod lod = static_cast<TerrainLod>(proto.lod());
+    const GeodeticPoint centroid{
+        proto.centroid_lat_rad(),
+        proto.centroid_lon_rad(),
+        proto.centroid_height_m(),
+    };
+    const GeodeticAABB bounds{
+        proto.lat_min_rad(),
+        proto.lat_max_rad(),
+        proto.lon_min_rad(),
+        proto.lon_max_rad(),
+        proto.height_min_m(),
+        proto.height_max_m(),
+    };
+
+    std::vector<TerrainVertex> vertices;
+    const int n_verts = proto.vertices_size() / 3;
+    vertices.reserve(static_cast<size_t>(n_verts));
+    for (int i = 0; i < n_verts; ++i) {
+        vertices.push_back({
+            proto.vertices(i * 3 + 0),
+            proto.vertices(i * 3 + 1),
+            proto.vertices(i * 3 + 2),
+        });
+    }
+
+    std::vector<TerrainFacet> facets;
+    const int n_facets = proto.indices_size() / 3;
+    facets.reserve(static_cast<size_t>(n_facets));
+    for (int i = 0; i < n_facets; ++i) {
+        TerrainFacet f;
+        f.v[0] = proto.indices(i * 3 + 0);
+        f.v[1] = proto.indices(i * 3 + 1);
+        f.v[2] = proto.indices(i * 3 + 2);
+        if (i < proto.colors_size()) {
+            const uint32_t rgb = proto.colors(i);
+            f.color.r = static_cast<uint8_t>((rgb >> 16) & 0xFF);
+            f.color.g = static_cast<uint8_t>((rgb >>  8) & 0xFF);
+            f.color.b = static_cast<uint8_t>( rgb        & 0xFF);
+        }
+        facets.push_back(f);
+    }
+
+    return TerrainTile(lod, centroid, bounds, std::move(vertices), std::move(facets));
 }
 
 } // namespace liteaerosim::environment

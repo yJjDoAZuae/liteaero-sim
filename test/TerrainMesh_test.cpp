@@ -2,6 +2,9 @@
 #include "environment/TerrainMesh.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <sstream>
 
 using namespace liteaerosim::environment;
 
@@ -206,4 +209,155 @@ TEST(TerrainMeshTest, Query_MaxLodFiltering) {
                                         TerrainLod::L1_VeryHighDetail);
     ASSERT_EQ(refs.size(), 1u);
     EXPECT_EQ(refs[0].lod, TerrainLod::L2_HighDetail);
+}
+
+// ---------------------------------------------------------------------------
+// Step 8 — Line-of-Sight
+// ---------------------------------------------------------------------------
+
+// Flat terrain at up=0.  Two points at h=100 m with no terrain in between.
+static TerrainMesh makeFlatZeroMesh() {
+    GeodeticPoint centroid{0.0, 0.0, 0.f};
+    GeodeticAABB  bounds{-1e-4, 1e-4, -1e-4, 1e-4, -2.f, 2.f};
+    std::vector<TerrainVertex> vertices{
+        {   0.f,    0.f, 0.f},
+        {1000.f,    0.f, 0.f},
+        {   0.f, 1000.f, 0.f},
+    };
+    std::vector<TerrainFacet> facets{{{0, 1, 2}, {128, 64, 32}}};
+    TerrainTile tile(TerrainLod::L0_Finest, centroid, bounds,
+                     std::move(vertices), std::move(facets));
+    TerrainCell cell;
+    cell.addTile(std::move(tile));
+    TerrainMesh mesh;
+    mesh.addCell(std::move(cell));
+    return mesh;
+}
+
+// Vertical triangle in the ENU east=0 plane (blocks east-west LOS).
+static TerrainMesh makeRidgeMesh() {
+    GeodeticPoint centroid{0.0, 0.0, 0.f};
+    GeodeticAABB  bounds{-1e-2, 1e-2, -1e-2, 1e-2, -2.f, 600.f};
+    std::vector<TerrainVertex> vertices{
+        {0.f, -5000.f,   0.f},  // V0 — south
+        {0.f,  5000.f,   0.f},  // V1 — north
+        {0.f,     0.f, 500.f},  // V2 — peak
+    };
+    std::vector<TerrainFacet> facets{{{0, 1, 2}, {128, 64, 32}}};
+    TerrainTile tile(TerrainLod::L0_Finest, centroid, bounds,
+                     std::move(vertices), std::move(facets));
+    TerrainCell cell;
+    cell.addTile(std::move(tile));
+    TerrainMesh mesh;
+    mesh.addCell(std::move(cell));
+    return mesh;
+}
+
+// Both endpoints well above flat terrain at h=0 — no intersection.
+TEST(TerrainMeshTest, LineOfSight_AboveFlatTerrain_ReturnsTrue) {
+    const TerrainMesh mesh = makeFlatZeroMesh();
+    EXPECT_TRUE(mesh.lineOfSight(0.0, 0.0, 100.f, 0.0, 0.00005, 100.f));
+}
+
+// P1 at h=-1 m (below terrain surface at h≈0) → segment crosses terrain.
+TEST(TerrainMeshTest, LineOfSight_BelowTerrain_ReturnsFalse) {
+    const TerrainMesh mesh = makeFlatZeroMesh();
+    // Segment goes from slightly underground to well above — crosses the flat triangle.
+    EXPECT_FALSE(mesh.lineOfSight(0.0, 0.0, -1.f, 0.0, 0.00005, 100.f));
+}
+
+// Vertical ridge triangle at east=0 blocks LOS between west and east points.
+TEST(TerrainMeshTest, LineOfSight_RidgeMesh_ReturnsFalse) {
+    const TerrainMesh mesh = makeRidgeMesh();
+    // Points on opposite sides of the ridge at h=100 m.
+    EXPECT_FALSE(mesh.lineOfSight(0.0, -0.001, 100.f, 0.0, 0.001, 100.f));
+}
+
+// ---------------------------------------------------------------------------
+// Step 10 — Serialization
+// ---------------------------------------------------------------------------
+
+// JSON round-trip with two tiles in different cells preserves centroid ± 1e-6.
+TEST(TerrainMeshTest, TerrainMesh_JsonRoundTrip_TwoTiles) {
+    TerrainMesh mesh;
+    {
+        GeodeticPoint c1{0.0, 0.0, 0.f};
+        TerrainCell cell1;
+        cell1.addTile(makeTriangleTile(TerrainLod::L0_Finest, c1));
+        mesh.addCell(std::move(cell1));
+    }
+    {
+        GeodeticPoint c2{0.1, 0.1, 0.f};
+        TerrainCell cell2;
+        cell2.addTile(makeTriangleTile(TerrainLod::L0_Finest, c2));
+        mesh.addCell(std::move(cell2));
+    }
+
+    const nlohmann::json j = mesh.serializeJson();
+    TerrainMesh mesh2;
+    mesh2.deserializeJson(j);
+
+    EXPECT_NE(mesh2.cellAt(0.0, 0.0),   nullptr);
+    EXPECT_NE(mesh2.cellAt(0.1, 0.1),   nullptr);
+    EXPECT_EQ(mesh2.cellAt(0.5, 0.5),   nullptr);
+}
+
+// Proto round-trip preserves vertex count and LOD.
+TEST(TerrainMeshTest, TerrainMesh_ProtoRoundTrip) {
+    TerrainMesh mesh;
+    {
+        GeodeticPoint c{0.0, 0.0, 0.f};
+        TerrainCell cell;
+        cell.addTile(makeTriangleTile(TerrainLod::L2_HighDetail, c));
+        mesh.addCell(std::move(cell));
+    }
+
+    const auto bytes = mesh.serializeProto();
+    TerrainMesh mesh2;
+    mesh2.deserializeProto(bytes);
+
+    const TerrainCell* cell = mesh2.cellAt(0.0, 0.0);
+    ASSERT_NE(cell, nullptr);
+    EXPECT_TRUE(cell->hasLod(TerrainLod::L2_HighDetail));
+    EXPECT_EQ(cell->tile(TerrainLod::L2_HighDetail).vertices().size(), 3u);
+}
+
+// .las_terrain binary: TerrainMesh with one tile survives write→read.
+TEST(TerrainMeshTest, TerrainTile_LasTerrain_BinaryRoundTrip) {
+    TerrainMesh mesh;
+    {
+        GeodeticPoint c{0.0, 0.0, 0.f};
+        TerrainCell cell;
+        cell.addTile(makeTriangleTile(TerrainLod::L0_Finest, c));
+        mesh.addCell(std::move(cell));
+    }
+
+    const std::vector<uint8_t> binary = mesh.serializeLasTerrain();
+    TerrainMesh mesh2;
+    mesh2.deserializeLasTerrain(binary);
+
+    const TerrainCell* cell = mesh2.cellAt(0.0, 0.0);
+    ASSERT_NE(cell, nullptr);
+    const TerrainTile& tile = cell->tile(TerrainLod::L0_Finest);
+    ASSERT_EQ(tile.vertices().size(), 3u);
+    EXPECT_NEAR(tile.vertices()[0].up_m, 100.f, 1e-4f);
+    EXPECT_NEAR(tile.vertices()[1].east_m, 1000.f, 1e-4f);
+}
+
+// JSON schema version mismatch throws std::runtime_error.
+TEST(TerrainMeshTest, TerrainMesh_JsonSchemaVersionMismatch_Throws) {
+    nlohmann::json j;
+    j["schema_version"] = 999;
+    j["tiles"]          = nlohmann::json::array();
+    TerrainMesh mesh;
+    EXPECT_THROW(mesh.deserializeJson(j), std::runtime_error);
+}
+
+// Empty TerrainMesh round-trips without error; cellAt returns nullptr.
+TEST(TerrainMeshTest, TerrainMesh_EmptySerializeDeserialize) {
+    TerrainMesh mesh;
+    const nlohmann::json j = mesh.serializeJson();
+    TerrainMesh mesh2;
+    mesh2.deserializeJson(j);
+    EXPECT_EQ(mesh2.cellAt(0.0, 0.0), nullptr);
 }
