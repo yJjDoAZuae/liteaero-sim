@@ -18,7 +18,7 @@ They live in the Domain Layer and have no I/O.
 | `TerrainTile` | A triangulated mesh at one LOD level covering one geographic cell |
 | `TerrainCell` | All LOD levels for one geographic cell |
 | `TerrainMesh` | Top-level container: quadtree of cells, LOD selection, coordinate transforms, spatial queries |
-| `TerrainSimplifier` | Mesh decimation: produces coarser LOD tiles from a fine-resolution source tile |
+| `TerrainSimplifier` | Mesh decimation: produces coarser LOD tiles — **Python ingestion pipeline only** (see §Mesh Simplification) |
 | `MeshQualityVerifier` | Computes mesh quality metrics and checks acceptance criteria |
 
 `V_Terrain` and `FlatTerrain` are stateless. `TerrainMesh` is stateful (owns mesh data)
@@ -497,32 +497,44 @@ values per target LOD transition:
 3. **Minimum angle floor**: no collapse is performed if it would produce a triangle with
    an interior angle below 5°.
 
-### `TerrainSimplifier` Interface
+### Python Implementation
 
-```cpp
-// include/environment/TerrainSimplifier.hpp
-namespace liteaerosim::environment {
+Simplification runs **offline in the Python ingestion pipeline only**.  There is no C++
+`TerrainSimplifier` class.  The Python implementation is the authoritative version
+because it lives in the user's data-preparation workflow.
 
-struct SimplificationParams {
-    float max_vertical_error_m = 10.f;   // stopping criterion
-    float crease_angle_rad     = 1.047f; // ~60° — crease edge threshold
-    float min_angle_rad        = 0.087f; // ~5° — collapse rejection floor
-};
+**Library stack** (`python/tools/terrain/simplify.py`):
 
-class TerrainSimplifier {
-public:
-    // Decimate source_tile until max_vertical_error_m is satisfied.
-    // The returned tile has lod = static_cast<TerrainLod>(source_tile.lod() + 1).
-    [[nodiscard]] static TerrainTile simplify(const TerrainTile&       source_tile,
-                                              const SimplificationParams& params = {});
-};
+| Library | License | Role |
+| ------- | ------- | ---- |
+| **pyfqmr** | MIT | QEM half-edge collapse with `preserve_border=True` (boundary locking) |
+| **trimesh** | MIT | Mesh I/O, per-face color transfer, GLB export |
+| **numpy** | BSD-3 | Vertex/index array manipulation |
 
-} // namespace liteaerosim::environment
-```
+**Simplification parameters** (configurable per LOD transition):
 
-Simplification is intended to run **offline** in the Python ingestion pipeline (see
-§Data Sources and Ingestion Pipeline).  The C++ interface is provided for in-process
-use by tests and for future runtime re-meshing.
+| Parameter | Default | Description |
+| --------- | ------- | ----------- |
+| `max_vertical_error_m` | see table below | QEM stopping criterion |
+| `preserve_border` | `True` | Lock all tile-boundary vertices (pyfqmr flag) |
+| `target_count` | derived | Target face count = source × (spacing ratio)² |
+
+**Recommended `max_vertical_error_m` per transition:**
+
+| Transition | `max_vertical_error_m` |
+| ---------- | ---------------------- |
+| L0 → L1 | 3 m |
+| L1 → L2 | 10 m |
+| L2 → L3 | 30 m |
+| L3 → L4 | 100 m |
+| L4 → L5 | 300 m |
+| L5 → L6 | 1,000 m |
+
+The terrain-specific constraints (boundary vertex locking, crease edge preservation,
+minimum angle floor) are enforced by the combination of pyfqmr's `preserve_border` flag
+and a post-simplification quality check via `MeshQualityVerifier` (see §Mesh Quality
+Verification).  Tiles that fail quality thresholds are rejected before being written to
+`.las_terrain`.
 
 ---
 
@@ -940,7 +952,7 @@ python/tools/terrain/
 ├── geoid_correct.py    — apply EGM2008 correction to convert MSL → WGS84 heights
 ├── triangulate.py      — build L0 TIN from elevation raster (Delaunay + boundary lock)
 ├── colorize.py         — sample imagery raster at facet centroids → FacetColor
-├── simplify.py         — call TerrainSimplifier chain to generate L1–L6 from L0
+├── simplify.py         — pyfqmr QEM (preserve_border=True) to generate L1–L6 from L0
 ├── verify.py           — call MeshQualityVerifier on all tiles; fail on threshold breach
 ├── export.py           — serialize TerrainMesh to .las_terrain binary format
 └── export_gltf.py      — call TerrainMesh::exportGltf() to produce per-LOD GLB files

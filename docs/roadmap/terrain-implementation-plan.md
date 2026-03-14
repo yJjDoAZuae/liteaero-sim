@@ -30,6 +30,7 @@ separate future steps.
 | `TerrainTile` is immutable after construction | Enforces const-correctness throughout the query pipeline |
 | `SimulationFrame` is a value object (no I/O) | Transport (UDP, shared memory) is Interface Layer — not in Domain Layer |
 | `.las_terrain` binary: 12 bytes/vertex | float32 east/north/up (was 20 bytes with double lat/lon) |
+| No C++ `TerrainSimplifier` | Simplification is Python-only (pyfqmr + trimesh); Python is the authoritative implementation because it lives in the user's data-preparation workflow |
 
 ---
 
@@ -47,7 +48,6 @@ separate future steps.
 | `include/environment/TerrainCell.hpp` | **Create** |
 | `include/environment/TerrainMesh.hpp` | **Create** |
 | `include/environment/LodSelector.hpp` | **Create** |
-| `include/environment/TerrainSimplifier.hpp` | **Create** |
 | `include/environment/MeshQualityVerifier.hpp` | **Create** |
 | `include/SimulationFrame.hpp` | **Create** |
 | `src/environment/Terrain.cpp` | **Create** |
@@ -55,13 +55,11 @@ separate future steps.
 | `src/environment/TerrainCell.cpp` | **Create** |
 | `src/environment/TerrainMesh.cpp` | **Create** |
 | `src/environment/LodSelector.cpp` | **Create** |
-| `src/environment/TerrainSimplifier.cpp` | **Create** |
 | `src/environment/MeshQualityVerifier.cpp` | **Create** |
 | `test/Terrain_test.cpp` | **Create** — 4 tests |
 | `test/TerrainTile_test.cpp` | **Create** — 8 tests |
 | `test/TerrainMesh_test.cpp` | **Create** — steps 4–8, 11–12; ~25 tests |
 | `test/LodSelector_test.cpp` | **Create** — 5 tests |
-| `test/TerrainSimplifier_test.cpp` | **Create** — 4 tests |
 | `test/MeshQualityVerifier_test.cpp` | **Create** — 4 tests |
 | `test/TrajectoryFile_test.cpp` | **Create** — 2 tests |
 | `proto/liteaerosim.proto` | **Modify** — append `TerrainTileProto`, `TerrainMeshState`, `TrajectoryFrame`, `TrajectoryFile` |
@@ -396,46 +394,7 @@ equal to half the segment length plus maximum terrain height.
 
 ---
 
-## Step 9 — `TerrainSimplifier` (4 tests)
-
-### Failing Tests — `test/TerrainSimplifier_test.cpp`
-
-- **T1** `OutputLod_IsInputPlusOne` — output `lod()` equals `static_cast<TerrainLod>(static_cast<int>(input.lod()) + 1)`
-- **T2** `OutputHasFewerVertices` — output `vertices().size()` < input `vertices().size()` for a mesh with many vertices
-- **T3** `MaxVerticalError_Respected` — for every output vertex, its height differs from the nearest input surface by ≤ `max_vertical_error_m`
-- **T4** `BoundaryVerticesPreserved` — every vertex that was on the input tile boundary is present in the output tile (boundary locking)
-
-### Header — `include/environment/TerrainSimplifier.hpp`
-
-```cpp
-namespace liteaerosim::environment {
-
-struct SimplificationParams {
-    float max_vertical_error_m = 10.f;
-    float crease_angle_rad     = 1.047f;  // ~60°
-    float min_angle_rad        = 0.087f;  // ~5°
-};
-
-class TerrainSimplifier {
-public:
-    [[nodiscard]] static TerrainTile simplify(const TerrainTile&          source_tile,
-                                              const SimplificationParams& params = {});
-};
-
-} // namespace liteaerosim::environment
-```
-
-### Implementation Notes
-
-Half-edge collapse with QEM (Quadric Error Metrics):
-- Vertical error metric augmented into the quadric.
-- Boundary vertices locked by checking if vertex lies on the tile `GeodeticAABB` edge.
-- Stopping criterion: next collapse would exceed `max_vertical_error_m`.
-- See Risk Note 2 for a simplified first-pass strategy.
-
----
-
-## Step 10 — `MeshQualityVerifier` (4 tests)
+## Step 9 — `MeshQualityVerifier` (4 tests)
 
 ### Failing Tests — `test/MeshQualityVerifier_test.cpp`
 
@@ -471,7 +430,7 @@ public:
 
 ---
 
-## Step 11 — Serialization: JSON + Proto + `.las_terrain` (5 tests)
+## Step 10 — Serialization: JSON + Proto + `.las_terrain` (5 tests)
 
 ### Failing Tests (add to existing test files)
 
@@ -517,7 +476,7 @@ Full specification in design authority §`.las_terrain` File Format.
 
 ---
 
-## Step 12 — `TerrainMesh::exportGltf()` (4 tests)
+## Step 11 — `TerrainMesh::exportGltf()` (4 tests)
 
 ### Failing Tests (add to `test/TerrainMesh_test.cpp`)
 
@@ -542,7 +501,7 @@ Vertex duplication: 3 unique vertices per triangle (required for per-vertex `COL
 
 ---
 
-## Step 13 — `SimulationFrame` + `TrajectoryFile` (2 tests)
+## Step 12 — `SimulationFrame` + `TrajectoryFile` (2 tests)
 
 ### Failing Tests — `test/TrajectoryFile_test.cpp`
 
@@ -593,10 +552,10 @@ message TrajectoryFile {
 
 ---
 
-## Step 14 — Build and Verify
+## Step 13 — Build and Verify
 
 ```bash
-cmd.exe /c "set PATH=C:\msys64\ucrt64\bin;%PATH% && cmake --build build && build\test\liteaerosim_test.exe --gtest_filter=TerrainTest.*:TerrainTileTest.*:TerrainMeshTest.*:LodSelectorTest.*:TerrainSimplifierTest.*:MeshQualityVerifierTest.*:TrajectoryFileTest.*"
+cmd.exe /c "set PATH=C:\msys64\ucrt64\bin;%PATH% && cmake --build build && build\test\liteaerosim_test.exe --gtest_filter=TerrainTest.*:TerrainTileTest.*:TerrainMeshTest.*:LodSelectorTest.*:MeshQualityVerifierTest.*:TrajectoryFileTest.*"
 ```
 
 All new tests pass. Pre-existing `FilterTFTest` failures unchanged.
@@ -606,8 +565,7 @@ All new tests pass. Pre-existing `FilterTFTest` failures unchanged.
 ## Risk Notes
 
 1. **`elevation_m()` performance** — point-in-triangle search is O(N_facets) per query; acceptable for regional meshes (≤10,000 facets) but may need a spatial acceleration structure (e.g. bounding-volume hierarchy or uniform grid) for dense L0 meshes.
-2. **QEM simplification complexity** — full QEM with priority queue is O(N log N); a simplified greedy approach may be sufficient for offline use. First pass: use edge-length heuristic without full quadric error matrix; upgrade if quality thresholds are not met.
-3. **`facetNormal()` precision** — ECEF cross-products use float32 vertex offsets; for very small facets at L0 (10 m spacing) the normal vector may have float32 rounding. Use double arithmetic internally.
-4. **tinygltf API surface** — tinygltf v2.x is header-only but pulls in `nlohmann_json` and `stb_image`; the project already has `nlohmann_json` so only `stb_image` is new (disable with `TINYGLTF_NO_STB_IMAGE`).
-5. **`.las_terrain` endianness** — write and read as little-endian (x86/ARM default); document in the file format spec.
-6. **`LodSelector` cell hash key** — must match the `TerrainMesh` internal key encoding exactly (see §Internal Spatial Index in `terrain.md`); mismatched keys cause silent LOD state carry-over on the wrong cell.
+2. **`facetNormal()` precision** — ECEF cross-products use float32 vertex offsets; for very small facets at L0 (10 m spacing) the normal vector may have float32 rounding. Use double arithmetic internally.
+3. **tinygltf API surface** — tinygltf v2.x is header-only but pulls in `nlohmann_json` and `stb_image`; the project already has `nlohmann_json` so only `stb_image` is new (disable with `TINYGLTF_NO_STB_IMAGE`).
+4. **`.las_terrain` endianness** — write and read as little-endian (x86/ARM default); document in the file format spec.
+5. **`LodSelector` cell hash key** — must match the `TerrainMesh` internal key encoding exactly (see §Internal Spatial Index in `terrain.md`); mismatched keys cause silent LOD state carry-over on the wrong cell.
