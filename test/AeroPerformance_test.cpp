@@ -14,7 +14,13 @@ using namespace liteaerosim::aerodynamics;
 // Derived:
 //   k = 1 / (π · 0.8 · 7.2) ≈ 0.05526
 static AeroPerformance gaAero() {
-    return AeroPerformance(16.f, 7.2f, 0.8f, 0.027f, -3.0f);
+    AeroPerformanceConfig cfg;
+    cfg.s_ref_m2  = 16.f;
+    cfg.ar        = 7.2f;
+    cfg.e         = 0.8f;
+    cfg.cd0       = 0.027f;
+    cfg.cl_y_beta = -3.0f;
+    return AeroPerformance(cfg);
 }
 
 static constexpr float kQ    = 1531.f;   // Pa (≈ 50 m/s at sea level)

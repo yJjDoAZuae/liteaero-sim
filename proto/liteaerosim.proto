@@ -104,6 +104,10 @@ message AeroPerformanceParams {
     float e              = 4;
     float cd0            = 5;
     float cl_y_beta      = 6;
+    float cl_q_nd        = 7;   // pitch-rate damping derivative C_Lq (rad⁻¹)
+    float mac_m          = 8;   // mean aerodynamic chord (m)
+    float cy_r_nd        = 9;   // yaw-rate lateral force derivative C_Yr (rad⁻¹)
+    float fin_arm_m      = 10;  // vertical tail moment arm (m)
 }
 
 // ---------------------------------------------------------------------------

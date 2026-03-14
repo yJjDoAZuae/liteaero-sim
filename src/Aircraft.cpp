@@ -52,12 +52,15 @@ void Aircraft::initialize(const nlohmann::json& config) {
 
     // 4. Aerodynamic performance
     const auto& ac = config.at("aircraft");
-    const float S_ref_m2  = ac.at("S_ref_m2").get<float>();
-    const float ar        = ac.at("ar").get<float>();
-    const float e         = ac.at("e").get<float>();
-    const float cd0       = ac.at("cd0").get<float>();
-    const float cl_y_beta = ac.at("cl_y_beta").get<float>();
-    _aeroPerf.emplace(S_ref_m2, ar, e, cd0, cl_y_beta);
+    aerodynamics::AeroPerformanceConfig aero_cfg;
+    aero_cfg.s_ref_m2  = ac.at("S_ref_m2").get<float>();
+    aero_cfg.ar        = ac.at("ar").get<float>();
+    aero_cfg.e         = ac.at("e").get<float>();
+    aero_cfg.cd0       = ac.at("cd0").get<float>();
+    aero_cfg.cl_y_beta = ac.at("cl_y_beta").get<float>();
+    const float S_ref_m2  = aero_cfg.s_ref_m2;
+    const float cl_y_beta = aero_cfg.cl_y_beta;
+    _aeroPerf.emplace(aero_cfg);
 
     // 5. Load factor allocator (references _liftCurve — must be emplaced after step 3)
     _allocator.emplace(*_liftCurve, S_ref_m2, cl_y_beta);
