@@ -38,6 +38,8 @@ writing production code.
 | `Gust` | `include/environment/Gust.hpp` | ✅ Implemented |
 | `TurbulenceVelocity` | `include/environment/TurbulenceVelocity.hpp` | ✅ Implemented |
 | `EnvironmentState` | `include/environment/EnvironmentState.hpp` | ✅ Implemented |
+| `SurfaceGeometry` / `AircraftGeometry` | `include/aerodynamics/AircraftGeometry.hpp` | ✅ Implemented |
+| `AeroCoeffEstimator` | `include/aerodynamics/AeroCoeffEstimator.hpp` | ✅ Implemented |
 
 ---
 
@@ -59,124 +61,192 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 10 | Aerodynamic coefficient estimation — derivation of all trim aero model inputs from wing/tail/fuselage geometry; DATCOM lift slope, Hoerner Oswald, Raymer $C_{D_0}$ buildup, $C_{L_q}$, $C_{Y_\beta}$, $C_{Y_r}$ | [`docs/algorithms/aerodynamics.md`](../algorithms/aerodynamics.md) |
 | 11 | `Atmosphere` — ISA 3-layer + ΔT + humidity + density altitude; JSON + proto serialization | `Atmosphere_test.cpp` — 12 tests |
 | 12 | `Wind` (Constant/PowerLaw/Log), `Turbulence` (Dryden 6-filter, Tustin-discretized), `Gust` (1-cosine MIL-SPEC-8785C); JSON serialization | `Wind_test.cpp` — 6 tests, `Turbulence_test.cpp` — 5 tests, `Gust_test.cpp` — 6 tests |
+| 13 | `AeroCoeffEstimator` — geometry-to-coefficient derivation (Parts 1–8: AR, MAC, $C_{L_\alpha}$, $C_{L_\text{max}}$, Oswald $e$, $C_{D_0}$ buildup, $C_{L_q}$, $C_{Y_\beta}$, $C_{Y_r}$); `AeroPerformanceConfig` struct; four new `AeroPerformance` fields (`cl_q_nd`, `mac_m`, `cy_r_nd`, `fin_arm_m`); `AircraftGeometry`/`SurfaceGeometry` structs; `AeroPerformance` schema bumped to v2 | `AeroCoeffEstimator_test.cpp` — 11 tests |
 
 ---
 
-## 1. `AeroCoeffEstimator` — Geometry-to-Coefficient Derivation
+## 1. `Terrain` — Elevation Model and Multi-Resolution Mesh
 
-Design authority: [`docs/algorithms/aerodynamics.md`](../algorithms/aerodynamics.md).
+Design authority: [`docs/architecture/terrain.md`](../architecture/terrain.md).
+Implementation plan: [`docs/roadmap/terrain-implementation-plan.md`](terrain-implementation-plan.md).
 
-`AeroCoeffEstimator` is a stateless utility class that accepts a compact aircraft geometry
-description and returns a fully populated `AeroPerformance` and `LiftCurveModel`
-configuration. It implements the derivation chain in `aerodynamics.md` Parts 1–8. No I/O;
-no units other than SI.
+This item delivers the full terrain subsystem in two sub-deliverables:
 
-This item also adds the four proposed fields to `AeroPerformance`:
-`cl_q_nd`, `mac_m`, `cy_r_nd`, `fin_arm_m`.
+**1a — `V_Terrain` + `FlatTerrain`** (prerequisite for sensors and guidance):
 
-### Input (`AircraftGeometry`)
+`V_Terrain` is the abstract base defining the elevation query interface used throughout the
+Domain Layer.  `FlatTerrain` is the constant-elevation trivial implementation used in unit
+tests and flat-earth simulation scenarios.
 
-```cpp
-// include/aerodynamics/AircraftGeometry.hpp
-namespace liteaerosim::aerodynamics {
+**1b — `TerrainMesh`** (multi-resolution mesh with LOD, simplification, and game engine integration):
 
-struct SurfaceGeometry {
-    float span_m;               // tip-to-tip (or root-to-tip for vertical tail)
-    float area_m2;              // reference area
-    float le_sweep_rad;         // leading-edge sweep
-    float taper_ratio_nd;       // c_tip / c_root
-    float x_le_root_m;          // body x of root leading edge
-};
+`TerrainMesh` is a concrete `V_Terrain` backed by a `TerrainCell` hash-map keyed on tile
+centroid position.  Seven LOD levels span 10 m – 10 km vertex spacing for a regional
+area ≤ 100 km.  Tile vertices are stored as float32 ENU offsets from a per-tile
+`GeodeticPoint` centroid (local grid encoding) — eliminating geodetic precision issues and
+antimeridian discontinuities.  Key capabilities:
 
-struct AircraftGeometry {
-    SurfaceGeometry wing;
-    SurfaceGeometry h_tail;
-    SurfaceGeometry v_tail;
-    float fuselage_length_m;
-    float fuselage_diameter_m;
-    float thickness_ratio_nd;           // wing t/c
-    float section_cl_alpha_rad;         // 2D lift slope (≈ 2π)
-    float section_cl_max_2d_nd;         // 2D section Cl_max
-    float x_cg_m;                       // body x of center of gravity
-    float mach_nd           = 0.f;      // design Mach (0 → incompressible)
-    float tail_efficiency_nd = 0.9f;    // η_t and η_v
-    float cd_misc_nd        = 0.003f;   // miscellaneous drag increment
-};
+- Coordinate transforms: `toECEF()`, `toNED()`
+- Queries: `queryLocalAABB()` (metric, vehicle-centered — primary simulation interface),
+  `queryGeodeticAABB()` (ingestion), `querySphere()`
+- LOD selection with hysteresis: `selectLodBySlantRange()` + stateful `LodSelector`
+- Line-of-sight: `lineOfSight()` via Möller–Trumbore ray–triangle intersection
+- Simplification: `TerrainSimplifier` (QEM with vertical error metric, boundary locking)
+- Quality verification: `MeshQualityVerifier`
+- Serialization: JSON + proto + `.las_terrain` binary
+- Game engine export: `exportGltf()` → Godot 4 / GLB (MIT, open source, zero cost)
+- Live rendering support: `SimulationFrame` value object + `TrajectoryFile` proto
 
-} // namespace liteaerosim::aerodynamics
-```
-
-### Output
-
-`estimate()` returns a `std::pair<AeroPerformance, LiftCurveParams>` populated from the
-derivation chain in `aerodynamics.md` §§1–8.
-
-### Tests
-
-- **AR**: computed `ar` matches $b^2 / S$ for the test wing.
-- **MAC**: computed `mac_m` matches the closed-form $\bar{c} = \tfrac{2}{3} c_\text{root} (1 + \lambda + \lambda^2)/(1 + \lambda)$.
-- **$C_{L_\alpha}$**: unswept wing at $M = 0$ matches $2\pi A\!\!R / (A\!\!R + 2)$ to within 0.5%.
-- **$C_{L_\text{max}}$**: equals $C_{l_{\max_{2D}}} \cos\Lambda_{QC}$ for a swept wing.
-- **$e$**: Hoerner value for $A\!\!R = 8$, $\Lambda_{QC} = 0$ matches $1/(1 + 0.007\pi \cdot 8)$ to within 0.1%.
-- **$C_{D_0}$**: component-buildup result for a known configuration is within 10% of a published reference value.
-- **$C_{Y_\beta}$**: negative (stabilizing); magnitude increases with $S_{VT} / S$.
-- **$C_{L_q}$**: tail-dominated configuration gives value in the range $[3, 12]$ rad⁻¹.
-- **$C_{Y_r}$**: positive; increases with $l_{VT}$.
-- **Round-trip**: `estimate()` applied to a reference UAV geometry produces an `AeroPerformance` that passes `AeroPerformance`'s existing JSON round-trip test.
-
-### CMake
-
-Add `src/aerodynamics/AeroCoeffEstimator.cpp` to `liteaerosim`.
-Add `test/AeroCoeffEstimator_test.cpp` to the test executable.
-
----
-
-## 2. `Terrain` — Elevation Model
-
-`Terrain` provides ground elevation (meters above mean sea level) at a given latitude and
-longitude. The Domain Layer uses it to compute height above ground (HAG) and to detect
-ground contact. An initial implementation may use a flat Earth at constant elevation.
-
-### Interface sketch
+### Sub-deliverable 1a — Interface sketch
 
 ```cpp
 // include/environment/Terrain.hpp
 namespace liteaerosim::environment {
 
-class Terrain {
+class V_Terrain {
 public:
-    // Returns ground elevation (m ASL) at the given geodetic position.
-    virtual float elevation_m(float latitude_rad, float longitude_rad) const = 0;
-
-    // Returns height above ground (m) given aircraft altitude (m ASL).
-    float heightAboveGround_m(float altitude_m, float latitude_rad, float longitude_rad) const;
-
-    virtual ~Terrain() = default;
+    [[nodiscard]] virtual float elevation_m(double latitude_rad,
+                                            double longitude_rad) const = 0;
+    [[nodiscard]] float heightAboveGround_m(float  altitude_m,
+                                            double latitude_rad,
+                                            double longitude_rad) const;
+    virtual ~V_Terrain() = default;
 };
 
-class FlatTerrain : public Terrain {
+class FlatTerrain : public V_Terrain {
 public:
     explicit FlatTerrain(float elevation_m = 0.f);
-    float elevation_m(float latitude_rad, float longitude_rad) const override;
+    [[nodiscard]] float elevation_m(double latitude_rad,
+                                    double longitude_rad) const override;
 };
 
 } // namespace liteaerosim::environment
 ```
 
-### Tests
+### Sub-deliverable 1a — Tests (4 tests, `test/Terrain_test.cpp`)
 
-- `FlatTerrain(300)`: `elevation_m()` returns 300 regardless of lat/lon.
-- `heightAboveGround_m(500, ...)` with `FlatTerrain(300)` returns 200.
-- `heightAboveGround_m` returns 0 (not negative) when aircraft is at terrain elevation.
+- `FlatTerrain(300.f)`: `elevation_m()` returns 300 regardless of lat/lon.
+- `heightAboveGround_m(500.f, ...)` with `FlatTerrain(300.f)` returns 200.f.
+- `heightAboveGround_m(300.f, ...)` returns 0.f (exactly at terrain level).
+- `heightAboveGround_m(100.f, ...)` returns 0.f (below terrain — no negative output).
 
-### CMake
+### Sub-deliverable 1a — New files
 
-Add `src/environment/Terrain.cpp` to `liteaerosim`.
-Add `test/Terrain_test.cpp` to the test executable.
+| File | Action |
+| ---- | ------ |
+| `include/environment/Terrain.hpp` | Create — `V_Terrain` + `FlatTerrain` |
+| `src/environment/Terrain.cpp` | Create |
+| `test/Terrain_test.cpp` | Create — 4 tests |
+
+### Sub-deliverable 1b — Tests
+
+**Data model** (`test/TerrainTile_test.cpp` — 8 tests):
+
+- Constructor accessors (`lod`, `centroid`, `bounds`, `vertices`, `facets`) match construction args.
+- `facetCentroid(0)` for a right triangle returns the ENU-averaged centroid.
+- `facetNormal(0)` for a horizontal face has outward Z-component > 0.99.
+- JSON round-trip: all vertex ENU values and facet indices preserved ± 1e-4.
+- Schema version mismatch throws `std::runtime_error`.
+- `TerrainCell::addTile()` + `hasLod()` + `tile()` round-trip.
+- `TerrainCell::tile(missing_lod)` throws `std::out_of_range`.
+- `finestAvailableLod()` / `coarsestAvailableLod()` correct for mixed population.
+
+**Core + transforms** (`test/TerrainMesh_test.cpp` — 11 tests):
+
+- `addCell()` + `cellAt()` round-trip; offset point within extent also finds cell.
+- `cellAt()` outside all cells returns `nullptr`.
+- `elevation_m()` at known vertex position returns stored height ± 0.01 m.
+- `elevation_m()` outside all cells returns 0.f.
+- `toECEF()`: vertex at (0°N, 0°E, 0 m) centroid → ECEF x ≈ 6,378,137 m ± 0.1 m.
+- `toECEF()`: vertex at (0°N, 90°E, 0 m) centroid → ECEF y ≈ 6,378,137 m ± 0.1 m.
+- `toNED()`: vertex at centroid → NED (0, 0, 0); vertex 100 m east → NED (0, 100, 0) ± 0.1 m.
+- `queryLocalAABB()`: returns tile within metric AABB; excludes tile 10 km away.
+- `queryGeodeticAABB()`: returns tile overlapping bounds; excludes non-overlapping tile.
+- `querySphere()`: returns tile within radius; excludes tile entirely outside.
+- `max_lod` filtering: only returns tiles at or coarser than requested LOD.
+
+**LOS** (add to `test/TerrainMesh_test.cpp` — 3 tests):
+
+- Clear sky above flat terrain → `lineOfSight()` returns true.
+- Point below terrain elevation → returns false.
+- Ridge mesh between two points → returns false.
+
+**LOD selection** (`test/LodSelector_test.cpp` — 5 tests):
+
+- `selectLodBySlantRange()`: L0 at r < 300 m; L1 at r = 500 m.
+- `LodSelector::select()` first call uses nominal formula.
+- No transition when r moves to just above nominal boundary but below hysteresis threshold.
+- Transition to coarser when r exceeds `r_b × (1 + δ)`.
+- `LodSelector::reset()` clears committed state.
+
+**Simplification** (`test/TerrainSimplifier_test.cpp` — 4 tests):
+
+- Output `lod()` == input `lod() + 1`.
+- Output has fewer vertices than input.
+- Max vertical deviation ≤ `max_vertical_error_m`.
+- Boundary vertices of input are present in output (boundary locking).
+
+**Quality verification** (`test/MeshQualityVerifier_test.cpp` — 4 tests):
+
+- Equilateral mesh: `passes()` true, `min_interior_angle_deg` ≈ 60°.
+- Zero-area triangle: `degenerate_facet_count > 0`; `passes()` false.
+- Single-triangle mesh: `open_boundary_edge_count == 3`.
+- Very thin triangle: `max_aspect_ratio > 15`; `passes()` false.
+
+**Serialization** (add to test files — 5 tests):
+
+- JSON round-trip: `TerrainMesh` with 2 tiles — tile count and centroid preserved.
+- Proto round-trip.
+- `.las_terrain` binary: `TerrainTile` write/read preserves all vertices and facet indices.
+- Schema version mismatch → `std::runtime_error`.
+- Empty `TerrainMesh` round-trips without error.
+
+**glTF / Godot 4 export** (add to `test/TerrainMesh_test.cpp` — 4 tests):
+
+- `exportGltf()` produces bytes with GLB magic `0x46546C67`.
+- JSON chunk contains `"liteaerosim_terrain": true` in root node `extras`.
+- `POSITION` accessor count == 3 × facet count (vertex duplication for per-facet color).
+- `COLOR_0` accessor count equals `POSITION` count.
+
+**Trajectory / live streaming** (`test/TrajectoryFile_test.cpp` — 2 tests):
+
+- `TrajectoryFile` with 100 frames survives proto round-trip; frame count and timestamps preserved.
+- All `TrajectoryFrame` fields survive round-trip within float/double precision.
+
+### Sub-deliverable 1b — New files
+
+| File | Action |
+| ---- | ------ |
+| `include/environment/GeodeticPoint.hpp` | Create |
+| `include/environment/TerrainVertex.hpp` | Create — float32 ENU offsets |
+| `include/environment/TerrainFacet.hpp` | Create — `FacetColor` + `TerrainFacet` |
+| `include/environment/GeodeticAABB.hpp` | Create |
+| `include/environment/LocalAABB.hpp` | Create — metric vehicle-centered AABB |
+| `include/environment/TerrainTile.hpp` | Create — `TerrainLod` enum + `TerrainTile` |
+| `include/environment/TerrainCell.hpp` | Create |
+| `include/environment/TerrainMesh.hpp` | Create |
+| `include/environment/TerrainSimplifier.hpp` | Create |
+| `include/environment/MeshQualityVerifier.hpp` | Create |
+| `include/environment/LodSelector.hpp` | Create — hysteresis state |
+| `include/SimulationFrame.hpp` | Create — Domain Layer value object |
+| `src/environment/TerrainTile.cpp` | Create |
+| `src/environment/TerrainCell.cpp` | Create |
+| `src/environment/TerrainMesh.cpp` | Create |
+| `src/environment/LodSelector.cpp` | Create |
+| `src/environment/TerrainSimplifier.cpp` | Create |
+| `src/environment/MeshQualityVerifier.cpp` | Create |
+| `test/TerrainTile_test.cpp` | Create — 8 tests |
+| `test/TerrainMesh_test.cpp` | Create — ~25 tests |
+| `test/LodSelector_test.cpp` | Create — 5 tests |
+| `test/TerrainSimplifier_test.cpp` | Create — 4 tests |
+| `test/MeshQualityVerifier_test.cpp` | Create — 4 tests |
+| `test/TrajectoryFile_test.cpp` | Create — 2 tests |
+| `proto/liteaerosim.proto` | Modify — add `TerrainTileProto`, `TerrainMeshState`, `TrajectoryFrame`, `TrajectoryFile` |
+| `cmake/Dependencies.cmake` | Modify — add `tinygltf` FetchContent (MIT, header-only) |
 
 ---
 
-## 3. Air Data Sensors — `SensorAirData`, `SensorAA`, `SensorAAR`
+## 2. Air Data Sensors — `SensorAirData`, `SensorAA`, `SensorAAR`
 
 Air data sensors derive indicated and calibrated quantities from the true atmospheric state
 and aircraft kinematics. They model systematic bias and measurement noise. All sensors
@@ -222,7 +292,7 @@ Add `test/SensorAirData_test.cpp` and `test/SensorAngle_test.cpp` to the test ex
 
 ---
 
-## 4. `SensorRadAlt` — Radar / Laser Altimeter
+## 3. `SensorRadAlt` — Radar / Laser Altimeter
 
 `SensorRadAlt` outputs height above ground (HAG) derived from `Terrain::heightAboveGround_m`.
 `SensorForwardTerrainProfile` returns a look-ahead terrain elevation vector along the
@@ -246,7 +316,7 @@ Add `test/SensorRadAlt_test.cpp` to the test executable.
 
 ---
 
-## 5. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
+## 4. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
 
 A `Path` is an ordered sequence of `V_PathSegment` objects. Each segment exposes a
 cross-track error, along-track distance, and desired heading at a query position. The
@@ -301,7 +371,7 @@ Add `test/Path_test.cpp` to the test executable.
 
 ---
 
-## 6. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
+## 5. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
 
 Guidance laws convert path and altitude errors into commanded load factors for `Aircraft::step()`.
 They live in the Domain Layer and have no I/O. Each is a stateful element (contains filter
@@ -342,7 +412,7 @@ Add `test/Guidance_test.cpp` to the test executable.
 
 ---
 
-## 7. Autopilot — Outer Loop Command Generation
+## 6. Autopilot — Outer Loop Command Generation
 
 `Autopilot` combines `PathGuidance`, `VerticalGuidance`, and `ParkTracking` into a single
 class that consumes the `KinematicState` and `PathResponse` and produces an `AircraftCommand`
@@ -393,7 +463,7 @@ Add `test/Autopilot_test.cpp` to the test executable.
 
 ---
 
-## 8. Plot Visualization — Python Post-Processing Tools
+## 7. Plot Visualization — Python Post-Processing Tools
 
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
@@ -427,7 +497,7 @@ dev = [
 
 ---
 
-## 9. Manual Input — Joystick and Keyboard
+## 8. Manual Input — Joystick and Keyboard
 
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
@@ -468,7 +538,7 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 10. Execution Modes — Real-Time, Scaled, and Batch Runners
+## 9. Execution Modes — Real-Time, Scaled, and Batch Runners
 
 The simulation runner controls the wall-clock relationship to simulation time. Three modes
 are required:
