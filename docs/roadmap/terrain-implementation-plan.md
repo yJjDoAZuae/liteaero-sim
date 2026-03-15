@@ -66,25 +66,26 @@ separate future steps.
 | `proto/liteaerosim.proto` | ✅ Done (Steps 10, 12) — terrain + trajectory messages added |
 | `CMakeLists.txt` | ✅ Done (Step 11) — `tinygltf` v2.9.3 FetchContent block |
 | `src/CMakeLists.txt` | ✅ Done (Step 11) — `tinygltf_headers` linked to `liteaerosim` |
-| `python/tools/terrain/__init__.py` | **Create** (Step 14) |
-| `python/tools/terrain/las_terrain.py` | **Create** (Step 14) — pure-Python `.las_terrain` reader/writer |
-| `python/tools/terrain/download.py` | **Create** (Step 15) |
-| `python/tools/terrain/mosaic.py` | **Create** (Step 15) |
-| `python/tools/terrain/geoid_correct.py` | **Create** (Step 15) |
-| `python/tools/terrain/triangulate.py` | **Create** (Step 16) |
-| `python/tools/terrain/colorize.py` | **Create** (Step 17) |
-| `python/tools/terrain/simplify.py` | **Create** (Step 18) |
-| `python/tools/terrain/verify.py` | **Create** (Step 19) |
-| `python/tools/terrain/export_gltf.py` | **Create** (Step 20) |
-| `python/test/test_las_terrain.py` | **Create** (Step 14) — 4 tests |
-| `python/test/test_geoid_correct.py` | **Create** (Step 15) — 3 tests |
-| `python/test/test_triangulate.py` | **Create** (Step 16) — 4 tests |
-| `python/test/test_colorize.py` | **Create** (Step 17) — 3 tests |
-| `python/test/test_simplify.py` | **Create** (Step 18) — 4 tests |
-| `python/test/test_verify.py` | **Create** (Step 19) — 4 tests |
-| `python/test/test_export_gltf.py` | **Create** (Step 20) — 3 tests |
-| `python/test/test_pipeline.py` | **Create** (Step 21) — 1 integration test |
-| `python/pyproject.toml` | **Modify** (Step 14) — add terrain tool dependencies |
+| `python/tools/terrain/__init__.py` | ✅ Done (Step 14) |
+| `python/tools/terrain/las_terrain.py` | ✅ Done (Step 14) — pure-Python `.las_terrain` reader/writer |
+| `python/tools/terrain/download.py` | ✅ Done (Step 15) |
+| `python/tools/terrain/mosaic.py` | ✅ Done (Step 15) |
+| `python/tools/terrain/geoid_correct.py` | ✅ Done (Step 15) |
+| `python/tools/terrain/triangulate.py` | ✅ Done (Step 16) |
+| `python/tools/terrain/colorize.py` | ✅ Done (Step 17) |
+| `python/tools/terrain/simplify.py` | ✅ Done (Step 18) |
+| `python/tools/terrain/verify.py` | ✅ Done (Step 19) |
+| `python/tools/terrain/export.py` | ✅ Done (Step 20) — thin wrapper |
+| `python/tools/terrain/export_gltf.py` | ✅ Done (Step 20) |
+| `python/test/test_las_terrain.py` | ✅ Done (Step 14) — 4 tests |
+| `python/test/test_geoid_correct.py` | ✅ Done (Step 15) — 3 tests (1 skipped without PROJ datum grid) |
+| `python/test/test_triangulate.py` | ✅ Done (Step 16) — 4 tests |
+| `python/test/test_colorize.py` | ✅ Done (Step 17) — 3 tests |
+| `python/test/test_simplify.py` | ✅ Done (Step 18) — 4 tests |
+| `python/test/test_verify.py` | ✅ Done (Step 19) — 4 tests |
+| `python/test/test_export_gltf.py` | ✅ Done (Step 20) — 3 tests |
+| `python/test/test_pipeline.py` | ✅ Done (Step 21) — 1 integration test |
+| `python/pyproject.toml` | ✅ Done (Step 14) — terrain dependency group added |
 
 `test/CMakeLists.txt` needs **no changes**.
 
