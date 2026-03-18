@@ -6,7 +6,7 @@
 #include "aerodynamics/LoadFactorAllocator.hpp"
 #include "airframe/AirframePerformance.hpp"
 #include "airframe/Inertia.hpp"
-#include "propulsion/V_Propulsion.hpp"
+#include "propulsion/Propulsion.hpp"
 #include <Eigen/Dense>
 #include <cstdint>
 #include <memory>
@@ -39,7 +39,7 @@ struct AircraftCommand {
 // Aircraft would invalidate that reference.
 class Aircraft {
 public:
-    explicit Aircraft(std::unique_ptr<propulsion::V_Propulsion> propulsion);
+    explicit Aircraft(std::unique_ptr<propulsion::Propulsion> propulsion);
 
     // Aircraft is non-copyable, non-movable (LoadFactorAllocator holds &_liftCurve).
     Aircraft(const Aircraft&)            = delete;
@@ -69,7 +69,7 @@ public:
 
     // Serialize / deserialize warm-start state.
     // Note: deserializeJson() restores _propulsion state via _propulsion->deserializeJson()
-    // but does not reconstruct the propulsion model itself — the correct V_Propulsion
+    // but does not reconstruct the propulsion model itself — the correct Propulsion
     // subclass must have been injected at construction before calling deserializeJson().
     nlohmann::json       serializeJson() const;
     void                 deserializeJson(const nlohmann::json& j);
@@ -84,7 +84,7 @@ private:
     std::optional<aerodynamics::AeroPerformance>        _aeroPerf;
     AirframePerformance                                 _airframe;
     Inertia                                             _inertia;
-    std::unique_ptr<propulsion::V_Propulsion>           _propulsion;
+    std::unique_ptr<propulsion::Propulsion>           _propulsion;
 };
 
 } // namespace liteaerosim

@@ -16,7 +16,7 @@ namespace liteaerosim {
 // Construction
 // ---------------------------------------------------------------------------
 
-Aircraft::Aircraft(std::unique_ptr<propulsion::V_Propulsion> propulsion)
+Aircraft::Aircraft(std::unique_ptr<propulsion::Propulsion> propulsion)
     : _propulsion(std::move(propulsion)) {}
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ void FilterFIR::setExpFIR(char order, float dt, float tau)
 }
 
 
-void FilterFIR::resetInput(float in)
+void FilterFIR::resetToInput(float in)
 {
     uBuff.setZero();
 
@@ -35,7 +35,7 @@ void FilterFIR::resetInput(float in)
     _out = _in*dcGain();
 }
 
-void FilterFIR::resetOutput(float out)
+void FilterFIR::resetToOutput(float out)
 {
     const float tol = 1e-6;
 

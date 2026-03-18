@@ -5,9 +5,9 @@
 
 namespace liteaerosim {
 
-/// Logging sink interface injected into DynamicBlock elements.
+/// Logging sink interface injected into DynamicElement components.
 /// Implementations write to CSV, binary ring buffer, in-memory store, etc.
-/// Attach via DynamicBlock::attachLogger(); pass nullptr to detach.
+/// Attach via DynamicElement::attachLogger(); pass nullptr to detach.
 class ILogger {
 public:
     virtual ~ILogger() = default;

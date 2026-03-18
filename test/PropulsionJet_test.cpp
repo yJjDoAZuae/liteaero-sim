@@ -4,23 +4,22 @@
 #include <gtest/gtest.h>
 
 using liteaerosim::propulsion::PropulsionJet;
-using liteaerosim::propulsion::PropulsionJetParams;
 
 // ── Shared test fixture ───────────────────────────────────────────────────────
 
 static constexpr float kRhoSL = 1.225f;
-static constexpr float kDt    = 0.01f;
 
-static PropulsionJetParams makeParams() {
-    PropulsionJetParams p;
-    p.thrust_sl_n    = 80000.f;
-    p.bypass_ratio   = 0.5f;    // n = 1/√1.5 ≈ 0.8165
-    p.inlet_area_m2  = 0.30f;
-    p.idle_fraction  = 0.05f;
-    p.spool_tau_s    = 2.0f;
-    p.ab_thrust_sl_n = 20000.f;
-    p.ab_spool_tau_s = 1.0f;
-    return p;
+static nlohmann::json makeConfig() {
+    return nlohmann::json{
+        {"thrust_sl_n",    80000.f},
+        {"bypass_ratio",   0.5f},    // n = 1/√1.5 ≈ 0.8165
+        {"inlet_area_m2",  0.30f},
+        {"idle_fraction",  0.05f},
+        {"spool_tau_s",    2.0f},
+        {"ab_thrust_sl_n", 20000.f},
+        {"ab_spool_tau_s", 1.0f},
+        {"dt_s",           0.01f},
+    };
 }
 
 // Run the filter to approximate steady state.
@@ -34,14 +33,16 @@ static void runToSteadyState(PropulsionJet& jet, float throttle, float tas = 0.f
 // ── Test cases ────────────────────────────────────────────────────────────────
 
 TEST(PropulsionJet, ZeroThrustBeforeFirstStep) {
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     EXPECT_FLOAT_EQ(jet.thrust_n(), 0.f);
 }
 
 TEST(PropulsionJet, ThrustAtSeaLevelFullThrottleNoAirspeed) {
     // At V=0, no ram drag.  T_avail = T_sl (full throttle), not limited.
     // After steady state, dry thrust ≈ T_sl.
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 1.0f, 0.f, kRhoSL);
     EXPECT_NEAR(jet.thrust_n(), 80000.f, 100.f);
 }
@@ -49,7 +50,8 @@ TEST(PropulsionJet, ThrustAtSeaLevelFullThrottleNoAirspeed) {
 TEST(PropulsionJet, IdleFloorAtThrottleZero) {
     // Throttle 0 → T_demand = 0, but filter lower limit is T_idle.
     // T_idle = 0.05 * 80000 = 4000 N at SL.
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 0.0f, 0.f, kRhoSL);
     EXPECT_NEAR(jet.thrust_n(), 4000.f, 50.f);
 }
@@ -61,7 +63,8 @@ TEST(PropulsionJet, AltitudeLapse) {
     const float rho_alt  = 0.5f * kRhoSL;
     const float expected = 80000.f * std::pow(0.5f, n);
 
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 1.0f, 0.f, rho_alt);
     EXPECT_NEAR(jet.thrust_n(), expected, 200.f);
 }
@@ -69,7 +72,8 @@ TEST(PropulsionJet, AltitudeLapse) {
 TEST(PropulsionJet, RamDragReducesThrust) {
     // At V=200 m/s, F_ram = rho * V^2 * A_inlet = 1.225 * 40000 * 0.3 = 14700 N.
     // T_avail = 80000 - 14700 = 65300 N (> T_idle, so not floored).
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 1.0f, 200.f, kRhoSL);
     const float expected = 80000.f - kRhoSL * 200.f * 200.f * 0.30f;
     EXPECT_NEAR(jet.thrust_n(), expected, 200.f);
@@ -77,14 +81,16 @@ TEST(PropulsionJet, RamDragReducesThrust) {
 
 TEST(PropulsionJet, SpoolDynamicsBuildUp) {
     // After reset, thrust should build from 0 toward T_demand but not reach it in 1 step.
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     (void)jet.step(1.0f, 0.f, kRhoSL);
     EXPECT_GT(jet.thrust_n(), 0.f);
     EXPECT_LT(jet.thrust_n(), 80000.f);
 }
 
 TEST(PropulsionJet, AfterburnerIncreasesThrust) {
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 1.0f, 0.f, kRhoSL);
     const float dry_thrust = jet.thrust_n();
 
@@ -94,7 +100,8 @@ TEST(PropulsionJet, AfterburnerIncreasesThrust) {
 }
 
 TEST(PropulsionJet, AfterburnerBlowoutDecaysThrust) {
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     jet.setAfterburner(true);
     runToSteadyState(jet, 1.0f, 0.f, kRhoSL);
     const float ab_thrust = jet.thrust_n();  // ≈ 80000 + 20000 = 100000 N
@@ -106,25 +113,29 @@ TEST(PropulsionJet, AfterburnerBlowoutDecaysThrust) {
 }
 
 TEST(PropulsionJet, ResetGivesThrustZero) {
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     runToSteadyState(jet, 1.0f);
     jet.reset();
     EXPECT_FLOAT_EQ(jet.thrust_n(), 0.f);
 }
 
 TEST(PropulsionJet, TypeMismatchThrowsOnDeserializeJson) {
-    PropulsionJet jet(makeParams(), kDt);
+    PropulsionJet jet;
+    jet.initialize(makeConfig());
     nlohmann::json bad = {{"schema_version", 1}, {"type", "PropulsionEDF"}, {"thrust_n", 0.f}};
     EXPECT_THROW(jet.deserializeJson(bad), std::runtime_error);
 }
 
 TEST(PropulsionJet, JsonRoundTrip) {
-    PropulsionJet jet1(makeParams(), kDt);
+    PropulsionJet jet1;
+    jet1.initialize(makeConfig());
     runToSteadyState(jet1, 1.0f, 0.f, kRhoSL);
 
     const nlohmann::json snap = jet1.serializeJson();
 
-    PropulsionJet jet2(makeParams(), kDt);
+    PropulsionJet jet2;
+    jet2.initialize(makeConfig());
     jet2.deserializeJson(snap);
 
     // One more step from both — results must match.
@@ -134,12 +145,14 @@ TEST(PropulsionJet, JsonRoundTrip) {
 }
 
 TEST(PropulsionJet, ProtoRoundTrip) {
-    PropulsionJet jet1(makeParams(), kDt);
+    PropulsionJet jet1;
+    jet1.initialize(makeConfig());
     runToSteadyState(jet1, 1.0f, 0.f, kRhoSL);
 
     const std::vector<uint8_t> bytes = jet1.serializeProto();
 
-    PropulsionJet jet2(makeParams(), kDt);
+    PropulsionJet jet2;
+    jet2.initialize(makeConfig());
     jet2.deserializeProto(bytes);
 
     const float t1 = jet1.step(1.0f, 0.f, kRhoSL);
@@ -149,13 +162,15 @@ TEST(PropulsionJet, ProtoRoundTrip) {
 
 TEST(PropulsionJet, JsonRoundTripMidTransient) {
     // Snapshot mid-transient (5 steps << tau_spool=2s): x[0] differs from steady-state.
-    PropulsionJet jet1(makeParams(), kDt);
+    PropulsionJet jet1;
+    jet1.initialize(makeConfig());
     for (int i = 0; i < 5; ++i)
         (void)jet1.step(1.0f, 0.f, kRhoSL);
 
     const nlohmann::json snap = jet1.serializeJson();
 
-    PropulsionJet jet2(makeParams(), kDt);
+    PropulsionJet jet2;
+    jet2.initialize(makeConfig());
     jet2.deserializeJson(snap);
 
     const float t1 = jet1.step(1.0f, 0.f, kRhoSL);
@@ -164,13 +179,15 @@ TEST(PropulsionJet, JsonRoundTripMidTransient) {
 }
 
 TEST(PropulsionJet, ProtoRoundTripMidTransient) {
-    PropulsionJet jet1(makeParams(), kDt);
+    PropulsionJet jet1;
+    jet1.initialize(makeConfig());
     for (int i = 0; i < 5; ++i)
         (void)jet1.step(1.0f, 0.f, kRhoSL);
 
     const std::vector<uint8_t> bytes = jet1.serializeProto();
 
-    PropulsionJet jet2(makeParams(), kDt);
+    PropulsionJet jet2;
+    jet2.initialize(makeConfig());
     jet2.deserializeProto(bytes);
 
     const float t1 = jet1.step(1.0f, 0.f, kRhoSL);

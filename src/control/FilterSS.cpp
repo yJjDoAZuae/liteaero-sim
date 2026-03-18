@@ -12,19 +12,9 @@ static float dcTol = 1e-6;
 using namespace liteaerosim::control;
 using namespace liteaerosim;
 
+FilterSS::~FilterSS() = default;
 
 void FilterSS::copy(FilterSS &filt)
-{
-    _Phi << filt.Phi();
-    _Gamma << filt.Gamma();
-    _H << filt.H();
-    _J << filt.J();
-    _x << filt.x();
-
-    _errorCode = filt.errorCode();
-}
-
-void FilterSS::copy(liteaerosim::control::FilterSS2 &filt)
 {
     _Phi << filt.Phi();
     _Gamma << filt.Gamma();
@@ -59,11 +49,11 @@ void FilterSS::setButterworthIIR(uint8_t order, float dt, float wn_rps)
 
     _errorCode += tustin_n_ss(A,B,C,D, dt, wn_rps, _Phi, _Gamma, _H, _J);
 
-    resetInput(0.0f);
+    resetToInput(0.0f);
 
 }
 
-void FilterSS::resetInput(float in)
+void FilterSS::resetToInput(float in)
 {
     _x.setZero();
     _out = 0.0f;
@@ -99,7 +89,7 @@ void FilterSS::resetInput(float in)
     }
 }
 
-void FilterSS::resetOutput(float out)
+void FilterSS::resetToOutput(float out)
 {
     _x.setZero();
     _out = 0.0f;

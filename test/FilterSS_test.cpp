@@ -157,7 +157,7 @@ TEST(FilterSSTest, SecondOrderLP00) {
     EXPECT_NEAR(G.step(1.0f), 0.09924343173467982, 1e-6);
     EXPECT_NEAR(G.step(1.0f), 0.1744469218931253, 1e-6);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 

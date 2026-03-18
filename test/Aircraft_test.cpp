@@ -2,7 +2,7 @@
 //                      5 (serialization), 1 (JSON initialization from fixture files).
 
 #include "Aircraft.hpp"
-#include "propulsion/V_Propulsion.hpp"
+#include "propulsion/Propulsion.hpp"
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <cstdint>
@@ -14,7 +14,7 @@
 // StubPropulsion — constant-thrust, stateless test double
 // ---------------------------------------------------------------------------
 
-class StubPropulsion : public liteaerosim::propulsion::V_Propulsion {
+class StubPropulsion : public liteaerosim::propulsion::Propulsion {
 public:
     explicit StubPropulsion(float thrust_n = 0.0f) : _thrust(thrust_n) {}
 
@@ -24,12 +24,17 @@ public:
         return _thrust;
     }
     [[nodiscard]] float thrust_n() const override { return _thrust; }
-    void reset() override {}
 
-    [[nodiscard]] nlohmann::json       serializeJson()                               const override { return {}; }
-    void                               deserializeJson(const nlohmann::json&)               override {}
     [[nodiscard]] std::vector<uint8_t> serializeProto()                             const override { return {}; }
     void                               deserializeProto(const std::vector<uint8_t>&)        override {}
+
+protected:
+    void           onInitialize(const nlohmann::json&)              override {}
+    void           onReset()                                        override {}
+    nlohmann::json onSerializeJson()                          const override { return {}; }
+    void           onDeserializeJson(const nlohmann::json&)         override {}
+    int            schemaVersion()                            const override { return 1; }
+    const char*    typeName()                                 const override { return "StubPropulsion"; }
 
 private:
     float _thrust;

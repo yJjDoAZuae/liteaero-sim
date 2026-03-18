@@ -178,7 +178,7 @@ void FilterSS2Clip::setDerivIIR(float dt, float tau)
     _dt = dt;
 }
 
-void FilterSS2Clip::resetInput(float in)
+void FilterSS2Clip::resetToInput(float in)
 {
     const float tol = 1e-6;
 
@@ -214,7 +214,7 @@ void FilterSS2Clip::resetInput(float in)
     }
 }
 
-void FilterSS2Clip::resetOutput(float out)
+void FilterSS2Clip::resetToOutput(float out)
 {
     const float tol = 1e-6;
 

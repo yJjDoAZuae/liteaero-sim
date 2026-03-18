@@ -44,7 +44,7 @@ void FilterSS2::copy(FilterSS2& filt) {
 }
 
 // ---------------------------------------------------------------------------
-// DynamicBlock hooks
+// DynamicElement / SisoElement hooks
 // ---------------------------------------------------------------------------
 
 void FilterSS2::onInitialize(const nlohmann::json& config) {
@@ -91,14 +91,18 @@ float FilterSS2::onStep(float u) {
     return y;
 }
 
-nlohmann::json FilterSS2::onSerialize() const {
+nlohmann::json FilterSS2::onSerializeJson() const {
     return {
         {"state",  {{"x0", x_(0)}, {"x1", x_(1)}}},
-        {"params", params_}
+        {"params", params_},
+        {"in",  in_},
+        {"out", out_}
     };
 }
 
-void FilterSS2::onDeserialize(const nlohmann::json& state) {
+void FilterSS2::onDeserializeJson(const nlohmann::json& state) {
+    in_  = state.at("in").get<float>();
+    out_ = state.at("out").get<float>();
     onInitialize(state.at("params"));
     const nlohmann::json& s = state.at("state");
     x_(0) = s.at("x0").get<float>();

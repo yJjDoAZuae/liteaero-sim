@@ -2,13 +2,13 @@
 #pragma once
 
 #include "control/control.hpp"
-#include "SISOBlock.hpp"
 #include "control/Filter.hpp"
-#include "control/FilterSS2.hpp"
 #include <Eigen/Dense>
 #include <unsupported/Eigen/MatrixFunctions>  // for Matrix::pow()
 
 namespace liteaerosim::control {
+
+class FilterSS2;  // forward declaration — full definition in FilterSS2.hpp
 
 // A single input, single output discrete filter implementation
 // with ARMA parameterization
@@ -36,7 +36,7 @@ public:
         copy(filt);
     }
 
-    ~FilterSS() override {}
+    ~FilterSS() override;
 
     void copy(FilterSS &filt);
     void copy(liteaerosim::control::FilterSS2 &filt);
@@ -54,12 +54,12 @@ public:
     float step(float in) override;
 
     // reset the fiter based on inputs
-    void resetInput(float in);
+    void resetToInput(float in_val);
 
     // Reset the filter based on outputs
     // If dc gain is zero, then the filter is
     // reset to zero regardless of argument value
-    void resetOutput(float out);
+    void resetToOutput(float out_val);
 
     // dc gain value of the filter
     float dcGain() const;

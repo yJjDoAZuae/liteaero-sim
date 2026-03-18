@@ -53,12 +53,12 @@ public:
     float step(float in) override;
 
     // reset the fiter based on inputs
-    void resetInput(float in);
+    void resetToInput(float in_val);
 
     // Reset the filter based on outputs
     // If dc gain is zero, then the filter is
     // reset to zero regardless of argument value
-    void resetOutput(float out);
+    void resetToOutput(float out_val);
 
     // dc gain value of the filter
     float dcGain() const;

@@ -60,7 +60,7 @@ void FilterTF::setButterworthIIR(char order, float dt, float wn_rps)
 
 }
 
-void FilterTF::resetInput(float in)
+void FilterTF::resetToInput(float in)
 {
     const float tol = 1e-6;
 
@@ -81,7 +81,7 @@ void FilterTF::resetInput(float in)
     _out = yBuff(0);
 }
 
-void FilterTF::resetOutput(float out)
+void FilterTF::resetToOutput(float out)
 {
     const float tol = 1e-6;
 

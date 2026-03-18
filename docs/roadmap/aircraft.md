@@ -22,11 +22,11 @@ writing production code.
 | `AeroPerformance` | `include/aerodynamics/AeroPerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `Inertia` | `include/airframe/Inertia.hpp` | ✅ Implemented + serialization (JSON + proto) |
-| `V_Propulsion` | `include/propulsion/V_Propulsion.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
+| `Propulsion` | `include/propulsion/Propulsion.hpp` | ✅ Implemented — derives from `DynamicElement`; replaces `V_Propulsion` |
 | `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
 | `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
 | `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
-| `V_Motor` | `include/propulsion/V_Motor.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
+| `Motor` | `include/propulsion/Motor.hpp` | ✅ Implemented — stateless abstract interface; replaces `V_Motor` |
 | `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
 | `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
 | `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
@@ -40,7 +40,8 @@ writing production code.
 | `EnvironmentState` | `include/environment/EnvironmentState.hpp` | ✅ Implemented |
 | `SurfaceGeometry` / `AircraftGeometry` | `include/aerodynamics/AircraftGeometry.hpp` | ✅ Implemented |
 | `AeroCoeffEstimator` | `include/aerodynamics/AeroCoeffEstimator.hpp` | ✅ Implemented |
-| `DynamicElement` | `include/DynamicElement.hpp` | 🔲 Planned — see [dynamic_element.md](../architecture/dynamic_element.md) |
+| `DynamicElement` | `include/DynamicElement.hpp` | ✅ Implemented — see [dynamic_element.md](../architecture/dynamic_element.md) |
+| `SisoElement` | `include/SisoElement.hpp` | ✅ Implemented — NVI SISO wrapper over `DynamicElement` |
 | `SensorAirData` | `include/sensor/SensorAirData.hpp` | 🔲 Stub only |
 | `SensorGnss` | `include/sensor/SensorGnss.hpp` | 🔲 Stub only |
 | `SensorLaserAlt` | `include/sensor/SensorLaserAlt.hpp` | 🔲 Stub only |
@@ -84,28 +85,11 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 12 | `Wind` (Constant/PowerLaw/Log), `Turbulence` (Dryden 6-filter, Tustin-discretized), `Gust` (1-cosine MIL-SPEC-8785C); JSON serialization | `Wind_test.cpp` — 6 tests, `Turbulence_test.cpp` — 5 tests, `Gust_test.cpp` — 6 tests |
 | 13 | `AeroCoeffEstimator` — geometry-to-coefficient derivation (Parts 1–8: AR, MAC, $C_{L_\alpha}$, $C_{L_\text{max}}$, Oswald $e$, $C_{D_0}$ buildup, $C_{L_q}$, $C_{Y_\beta}$, $C_{Y_r}$); `AeroPerformanceConfig` struct; four new `AeroPerformance` fields (`cl_q_nd`, `mac_m`, `cy_r_nd`, `fin_arm_m`); `AircraftGeometry`/`SurfaceGeometry` structs; `AeroPerformance` schema bumped to v2 | `AeroCoeffEstimator_test.cpp` — 11 tests |
 | 14 | `Terrain` subsystem — `V_Terrain`, `FlatTerrain`, `TerrainMesh` (7 LODs, LOS, glTF export), `LodSelector`, `MeshQualityVerifier`, `SimulationFrame`/`TrajectoryFile`; Python ingestion pipeline (download, mosaic, geoid correction, triangulate, colorize, simplify, verify, export) | C++: 53 tests across 6 test files; Python: 28 tests pass + 1 skip — see [`terrain-implementation-plan.md`](terrain-implementation-plan.md) |
+| 15 | `DynamicElement` refactoring — unified root base for all stateful components; `SisoElement` NVI SISO wrapper; `Filter` → `SisoElement`; `Propulsion` / `Motor` bases; deleted `DynamicBlock`, `DynamicFilterBlock`, `DynamicLimitBlock`, `V_Sensor`, `V_Propulsion`, `V_Motor` | No new tests — all 378 pre-existing tests pass |
 
 ---
 
-## 1. `DynamicElement` Refactoring
-
-Unify the `DynamicBlock`, `V_Sensor`, and `V_Propulsion` base class hierarchies under a
-single `DynamicElement` root. Design authority: [dynamic_element.md](../architecture/dynamic_element.md).
-Migration is mechanical with no behavioral changes.
-
-| Step | Action |
-| --- | --- |
-| 1 | Create `DynamicElement` (`include/DynamicElement.hpp`, `src/DynamicElement.cpp`) |
-| 2 | Rename `DynamicBlock` → `SisoElement`; merge `SISOBlock`; derive from `DynamicElement`; rename `serialize()` → `serializeJson()` / `deserialize()` → `deserializeJson()` on all subclasses |
-| 3 | Migrate `Filter` to derive from `SisoElement`; retire `DynamicFilterBlock`; rename `resetInput()`/`resetOutput()` → `resetToInput()`/`resetToOutput()`; move `FilterSS2`, `FilterSS2Clip`, `FilterTF`, `FilterTF2`, `FilterFIR` under `Filter` |
-| 4 | Rename `DynamicLimitBlock` → `LimitElement` |
-| 5 | Migrate all sensor classes (`SensorAirData`, `SensorGnss`, etc.) to derive from `DynamicElement` directly; delete `include/sensor/V_Sensor.hpp` |
-| 6 | Migrate all propulsion classes to derive from `DynamicElement` directly; add `initialize(json)` / NVI pattern; delete `include/propulsion/V_Propulsion.hpp`, `V_Motor.hpp` |
-| 7 | Evaluate `include/guidance/`, `include/aerodynamics/`, `include/environment/`, `include/path/` — migrate qualifying classes |
-
----
-
-## 2. `SensorAirData` — Air Data System
+## 1. `SensorAirData` — Air Data System
 
 Stub header exists at `include/sensor/SensorAirData.hpp`. `liteaerosim::DynamicElement` is the
 abstract base (see [dynamic_element.md](../architecture/dynamic_element.md)).
@@ -143,10 +127,10 @@ Add `test/SensorAirData_test.cpp` to the test executable.
 
 ---
 
-## 3. Autopilot Gain Design — Python Tooling
+## 2. Autopilot Gain Design — Python Tooling
 
 Python workflow that derives autopilot control gains from the aircraft model. This is a
-prerequisite for item 4 (`Autopilot`) — the C++ implementation is parameterized by gains
+prerequisite for item 3 (`Autopilot`) — the C++ implementation is parameterized by gains
 computed here.
 
 Scope to be defined when this item is scheduled. Expected to use Python control-system
@@ -155,15 +139,15 @@ from `Aircraft` trim and `AeroCoeffEstimator` outputs.
 
 ---
 
-## 4. Autopilot — Inner Loop Knobs-Mode Tracking
+## 3. Autopilot — Inner Loop Knobs-Mode Tracking
 
 Stub header exists at `include/control/Autopilot.hpp`.
 
 `Autopilot` implements the inner closed-loop layer. It tracks pilot-style set point commands
 corresponding to "knobs" modes — altitude hold, vertical speed hold, heading hold, and roll
-attitude hold — and produces an `AircraftCommand` for `Aircraft::step()`. Guidance (item 6)
+attitude hold — and produces an `AircraftCommand` for `Aircraft::step()`. Guidance (item 5)
 is the outer loop that wraps around it and supplies the set point commands. Control gains are
-derived by the Python gain design workflow (item 3).
+derived by the Python gain design workflow (item 2).
 
 ### Interface sketch
 
@@ -188,7 +172,7 @@ Add `test/Autopilot_test.cpp` to the test executable.
 
 ---
 
-## 5. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
+## 4. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
 
 Stub headers exist in `include/path/` for all three classes.
 
@@ -245,7 +229,7 @@ Add `test/Path_test.cpp` to the test executable.
 
 ---
 
-## 6. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
+## 5. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
 
 Stub headers exist in `include/guidance/` for all three classes.
 
@@ -295,7 +279,7 @@ Add `test/Guidance_test.cpp` to the test executable.
 
 ---
 
-## 7. Plot Visualization — Python Post-Processing Tools
+## 6. Plot Visualization — Python Post-Processing Tools
 
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
@@ -329,7 +313,7 @@ dev = [
 
 ---
 
-## 8. Manual Input — Joystick and Keyboard
+## 7. Manual Input — Joystick and Keyboard
 
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
@@ -370,7 +354,7 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 9. Execution Modes — Real-Time, Scaled, and Batch Runners
+## 8. Execution Modes — Real-Time, Scaled, and Batch Runners
 
 The simulation runner controls the wall-clock relationship to simulation time. Three modes
 are required:
@@ -422,7 +406,7 @@ Add `test/SimRunner_test.cpp` to the test executable.
 
 ---
 
-## 10. Remaining Sensor Models
+## 9. Remaining Sensor Models
 
 Not blocking any higher-priority item. Stub headers exist in `include/sensor/`.
 Implement when needed; order within this group follows dependency.
@@ -441,7 +425,7 @@ Implement when needed; order within this group follows dependency.
 
 ---
 
-## 11. Estimation Subsystem
+## 10. Estimation Subsystem
 
 Flight code estimation algorithms. Stub headers exist in `include/estimation/` (to be
 created). Each derives from `DynamicElement` directly. Design authorities listed below.

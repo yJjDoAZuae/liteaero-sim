@@ -7,8 +7,8 @@ namespace liteaerosim {
 /// Tier 1 of the two-tier dynamic element hierarchy.
 /// Use directly for composable primitives embedded inside a larger element
 /// (e.g. a Limit embedded inside SISOPIDFF).
-/// Use DynamicBlock (Tier 2) for standalone elements that need their own
-/// lifecycle (initialize / reset / serialize / deserialize).
+/// Use SisoElement (Tier 2) for standalone elements that need their own
+/// lifecycle (initialize / reset / serializeJson / deserializeJson).
 class SISOBlock {
 public:
     SISOBlock() = default;

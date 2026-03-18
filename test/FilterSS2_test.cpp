@@ -128,10 +128,10 @@ TEST(FilterSS2Test, SecondOrderLP00) {
 }
 
 // ---------------------------------------------------------------------------
-// DynamicBlock lifecycle — reset()
+// DynamicElement lifecycle — reset()
 // ---------------------------------------------------------------------------
 
-TEST(FilterSS2Test, DynamicBlockReset) {
+TEST(FilterSS2Test, DynamicElementReset) {
     FilterSS2 G;
     G.initialize({{"dt_s", 0.1f}, {"design", "low_pass_first"}, {"tau_s", 10.0f}});
     G.step(1.0f);
@@ -156,7 +156,7 @@ TEST(FilterSS2Test, SerializeRoundTrip) {
     const float out_before = G.out();
     const float in_before  = G.in();
 
-    nlohmann::json snapshot = G.serialize();
+    nlohmann::json snapshot = G.serializeJson();
 
     EXPECT_EQ(snapshot.at("schema_version").get<int>(), 1);
     EXPECT_EQ(snapshot.at("type").get<std::string>(), "FilterSS2");
@@ -164,7 +164,7 @@ TEST(FilterSS2Test, SerializeRoundTrip) {
     EXPECT_FLOAT_EQ(snapshot.at("out").get<float>(), out_before);
 
     FilterSS2 G2;
-    G2.deserialize(snapshot);
+    G2.deserializeJson(snapshot);
 
     EXPECT_FLOAT_EQ(G2.in(),  in_before);
     EXPECT_FLOAT_EQ(G2.out(), out_before);
@@ -182,8 +182,8 @@ TEST(FilterSS2Test, SerializeSchemaVersionReject) {
     FilterSS2 G;
     G.initialize({{"dt_s", 0.1f}, {"design", "low_pass_first"}, {"tau_s", 10.0f}});
 
-    nlohmann::json snapshot = G.serialize();
+    nlohmann::json snapshot = G.serializeJson();
     snapshot["schema_version"] = 999;
 
-    EXPECT_THROW(G.deserialize(snapshot), std::runtime_error);
+    EXPECT_THROW(G.deserializeJson(snapshot), std::runtime_error);
 }

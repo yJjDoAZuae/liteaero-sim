@@ -50,7 +50,7 @@ TEST(FilterTF2Test, FirstOrderLP00) {
     EXPECT_NEAR(G.step(1.0f), 0.024678099564305757f, 1e-3);
     EXPECT_NEAR(G.step(1.0f), 0.03438279509102915f, 1e-3);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 
@@ -120,7 +120,7 @@ TEST(FilterTF2Test, SecondOrderLP00) {
     EXPECT_NEAR(G.step(1.0f), 0.09867421021567828f, 1e-3);
     EXPECT_NEAR(G.step(1.0f), 0.1735006625919544f, 1e-3);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 

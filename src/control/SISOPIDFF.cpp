@@ -93,13 +93,13 @@ float SISOPIDFF::step(float cmdIn, float measIn, float measDotIn)
             // -pi + wrapToPi(pi/4-0.01 - - pi) = -pi -3*pi/4 - 0.01
             // but the value limit will clip the errSignal output (and state) to -pi/4.
 
-            errSignal.resetInput(piBoundNearest + MathUtil::wrapToPi(errSignal.out() - piBoundNearest));
+            errSignal.resetToInput(piBoundNearest + MathUtil::wrapToPi(errSignal.out() - piBoundNearest));
         }
 
         errSignal.step(errorUnfiltered);
 
         // feed forward should probably only be used for cartesian input coordinates
-        ffwdSignal.resetInput(0.0f);
+        ffwdSignal.resetToInput(0.0f);
 
     } else {
         errSignal.step(errorUnfiltered);
@@ -156,16 +156,16 @@ void SISOPIDFF::reset(float cmdIn, float measIn, float measDotIn, float outIn)
         cmdUnwrap.reset(cmdIn);
     }
 
-    cmdSignal.resetInput(cmdUnwrap.out());
-    measSignal.resetInput(measUnwrap.out());
-    errSignal.resetInput(cmdSignal.out() - measSignal.out());
-    ffwdSignal.resetInput(cmdUnwrap.out());
+    cmdSignal.resetToInput(cmdUnwrap.out());
+    measSignal.resetToInput(measUnwrap.out());
+    errSignal.resetToInput(cmdSignal.out() - measSignal.out());
+    ffwdSignal.resetToInput(cmdUnwrap.out());
 
     D.reset(measIn, measDotIn);
 
-    measDotSignal.resetInput(D.out());
+    measDotSignal.resetToInput(D.out());
 
-    outSignal.resetOutput( outIn );
+    outSignal.resetToOutput( outIn );
 
     I.reset(outIn - (feedfwd() + prop() + deriv()));
 

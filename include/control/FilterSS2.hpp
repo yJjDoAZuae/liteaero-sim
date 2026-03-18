@@ -1,6 +1,6 @@
 #pragma once
 
-#include "control/DynamicFilterBlock.hpp"
+#include "control/Filter.hpp"
 #include "control/control.hpp"
 #include <Eigen/Dense>
 #include <unsupported/Eigen/MatrixFunctions>
@@ -22,7 +22,7 @@ namespace liteaerosim::control {
 ///   {"dt_s": 0.01, "design": "high_pass_second", "wn_rad_s": 10.0, "zeta": 0.707, "c_zero": 0.0}
 ///   {"dt_s": 0.01, "design": "deriv",             "tau_s": 0.05}
 ///   {"dt_s": 0.01, "design": "notch_second",      "wn_rad_s": 10.0, "zeta_den": 0.05, "zeta_num": 0.7}
-class FilterSS2 : public DynamicFilterBlock {
+class FilterSS2 : public Filter {
 public:
     FilterSS2();
     explicit FilterSS2(FilterSS2& filt);
@@ -32,7 +32,7 @@ public:
     void copy(FilterSS2& filt);
 
     // -----------------------------------------------------------------------
-    // DynamicFilterBlock interface
+    // Filter interface
     // -----------------------------------------------------------------------
     uint8_t  order()                        const override { return order_; }
     float    dcGain()                       const override;
@@ -54,13 +54,13 @@ public:
 
 protected:
     // -----------------------------------------------------------------------
-    // DynamicBlock hooks
+    // DynamicElement / SisoElement hooks
     // -----------------------------------------------------------------------
     void           onInitialize(const nlohmann::json& config)        override;
     void           onReset()                                         override;
     float          onStep(float u)                                   override;
-    nlohmann::json onSerialize()                               const override;
-    void           onDeserialize(const nlohmann::json& state)        override;
+    nlohmann::json onSerializeJson()                           const override;
+    void           onDeserializeJson(const nlohmann::json& state)    override;
     void           onLog(liteaerosim::ILogger& logger)         const override;
     int            schemaVersion()                             const override { return 1; }
     const char*    typeName()                                  const override { return "FilterSS2"; }

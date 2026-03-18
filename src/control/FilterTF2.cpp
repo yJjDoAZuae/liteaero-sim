@@ -141,7 +141,7 @@ void FilterTF2::setDerivIIR(float dt, float tau)
     _order = 1;
 }
 
-void FilterTF2::resetInput(float in)
+void FilterTF2::resetToInput(float in)
 {
     const float tol = 1e-6;
 
@@ -160,7 +160,7 @@ void FilterTF2::resetInput(float in)
     _out = yBuff(0);
 }
 
-void FilterTF2::resetOutput(float out)
+void FilterTF2::resetToOutput(float out)
 {
     const float tol = 1e-6;
 

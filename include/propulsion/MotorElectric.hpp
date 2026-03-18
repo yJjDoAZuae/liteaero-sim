@@ -1,6 +1,6 @@
 #pragma once
 
-#include "propulsion/V_Motor.hpp"
+#include "propulsion/Motor.hpp"
 
 namespace liteaerosim::propulsion {
 
@@ -25,12 +25,12 @@ struct MotorElectricEscParams {
 // Maximum torque:        Q_max = I_max / KV
 // Battery current:       I_bat = V_phase · min(I_motor, I_max) / (V_supply · η_ESC)
 //   where  V_phase = δ_T · V_supply  and  I_motor = (V_phase − Ω/KV) / R
-class MotorElectric : public V_Motor {
+class MotorElectric : public Motor {
 public:
     MotorElectric(const MotorElectricMotorParams& motor,
                   const MotorElectricEscParams&   esc);
 
-    // V_Motor interface
+    // Motor interface
     [[nodiscard]] float noLoadOmega_rps(float throttle_nd, float rho_kgm3) const override;
     [[nodiscard]] float maxOmega_rps()  const override;
     [[nodiscard]] float inertia_kg_m2() const override;

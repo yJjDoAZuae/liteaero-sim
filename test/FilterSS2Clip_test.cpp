@@ -54,7 +54,7 @@ TEST(FilterSS2ClipTest, FirstOrderLP00) {
     EXPECT_NEAR(G.step(1.0f), 0.024678099564305757f, 1e-3);
     EXPECT_NEAR(G.step(1.0f), 0.03438279509102915f, 1e-3);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 
@@ -146,7 +146,7 @@ TEST(FilterSS2ClipTest, SecondOrderLP00) {
     EXPECT_NEAR(G.step(1.0f), 0.09924343173467982, 1e-6);
     EXPECT_NEAR(G.step(1.0f), 0.1744469218931253, 1e-6);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 
@@ -212,7 +212,7 @@ TEST(FilterSS2ClipTest, FirstOrderLP01) {
     EXPECT_NEAR(G.step(1.0f), 0.024678099564305757f, 1e-3);
     EXPECT_NEAR(G.step(1.0f), 0.03438279509102915f, 1e-3);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 
@@ -302,7 +302,7 @@ TEST(FilterSS2ClipTest, SecondOrderLP01) {
     EXPECT_NEAR(G.step(1.0f), 0.09924343173467982, 1e-6);
     EXPECT_NEAR(G.step(1.0f), 0.1744469218931253, 1e-6);
 
-    G.resetInput(0.0f);
+    G.resetToInput(0.0f);
 
     EXPECT_EQ(G.errorCode(), 0);
 

@@ -28,9 +28,9 @@ public:
 
     ~FilterSS2Clip() override {}
 
-    float in() const override { return _in; }
-    float out() const override { return _out; }
-    operator float() const override { return out(); }
+    float in()       const override { return _in; }
+    float out()      const override { return _out; }
+    operator float() const override { return _out; }
 
     Limit valLimit;
     Limit rateLimit;
@@ -58,12 +58,12 @@ public:
     Mat21 x() const {return _x;}
 
     // reset the fiter based on inputs
-    void resetInput(float in);
+    void resetToInput(float in_val);
 
     // Reset the filter based on outputs
     // If dc gain is zero, then the filter is
     // reset to zero regardless of argument value
-    void resetOutput(float out);
+    void resetToOutput(float out_val);
 
     // Directly restore the filter internal state vector.
     // Exact warm-start: restores x without the steady-state backsolve assumption.

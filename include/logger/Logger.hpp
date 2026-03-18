@@ -16,7 +16,7 @@ enum class LogFormat { Mcap, Csv };
 ///   open(path) → addSource() × N → [log() per source per timestep] → close()
 ///
 /// All writes are synchronous and mutex-protected. The Logger is not a
-/// DynamicBlock; it lives in the Infrastructure layer and has no physics logic.
+/// DynamicElement; it lives in the Infrastructure layer and has no physics logic.
 class Logger {
 public:
     Logger();
