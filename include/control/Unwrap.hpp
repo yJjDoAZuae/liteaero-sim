@@ -1,36 +1,28 @@
-
-
 #pragma once
 
-#include "SISOBlock.hpp"
+#include "SisoElement.hpp"
 
 namespace liteaerosim::control {
 
-class Unwrap : public liteaerosim::SISOBlock {
+class Unwrap : public liteaerosim::SisoElement {
+public:
+    /// Warm-start: set both input and output to u.
+    void resetTo(float u) { in_ = u; out_ = u; }
 
-    public:
+    using SisoElement::step;
 
-        Unwrap() : _in(0), _out(0) {}
+    /// Unwrap u relative to an externally provided reference value.
+    /// Updates in_ and out_ directly (bypasses NVI step).
+    float step(float u, float ref);
 
-        ~Unwrap() override {}
-
-        float in() const override { return _in; }
-        float out() const override { return _out; }
-        operator float() const override { return out(); }
-
-        // unwrap relative to previous output value
-        float step(float u) override;
-
-        // unwrap relative to an externally provided reference
-        float step(float u, float ref);
-
-        void reset(float u) { _in = u; _out = u; };
-
-    private:
-
-        float _in;
-        float _out;
-
+protected:
+    float onStep(float u) override;
+    void  onReset() override {}
+    void  onInitialize(const nlohmann::json&) override {}
+    nlohmann::json onSerializeJson() const override;
+    void  onDeserializeJson(const nlohmann::json& state) override;
+    int   schemaVersion() const override { return 1; }
+    const char* typeName() const override { return "Unwrap"; }
 };
 
-}
+} // namespace liteaerosim::control

@@ -41,9 +41,9 @@ public:
     void copy(FilterSS &filt);
     void copy(liteaerosim::control::FilterSS2 &filt);
 
-    float in() const override { return _in; }
-    float out() const override { return _out; }
-    operator float() const override { return out(); }
+    float in() const { return _in; }
+    float out() const { return _out; }
+    operator float() const { return out(); }
 
     // IIR filter design
     void setButterworthIIR(uint8_t order, float dt, float wn_rps);    // Butterworth low pass IIR filter design

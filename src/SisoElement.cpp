@@ -3,8 +3,8 @@
 namespace liteaerosim {
 
 float SisoElement::step(float u) {
+    out_ = onStep(u);  // in_ still holds previous value during onStep
     in_  = u;
-    out_ = onStep(u);
     if (logger_) {
         onLog(*logger_);
     }

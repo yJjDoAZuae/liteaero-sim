@@ -13,5 +13,5 @@ float ControlLoadFactor::step(float loadFactorCmdIn, const KinematicState & stat
 void ControlLoadFactor::reset(float loadFactorCmdIn, const KinematicState & state)
 {
     pid.reset(loadFactorCmdIn, -state.acceleration_Wind_mps()(2)/g, 0.0f);
-    pid.I.reset(0.0f);
+    pid.I.resetTo(0.0f);
 }

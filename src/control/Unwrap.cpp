@@ -3,15 +3,28 @@
 
 using namespace liteaerosim::control;
 
-float Unwrap::step(float u) 
+float Unwrap::onStep(float u)
 {
-    return step(u, _out);
+    return out_ + MathUtil::wrapToPi(u - out_);
 }
 
-float Unwrap::step(float u, float ref) 
+float Unwrap::step(float u, float ref)
 {
-    _in = u;
-    _out = ref + MathUtil::wrapToPi(_in - ref);;
+    in_  = u;
+    out_ = ref + MathUtil::wrapToPi(u - ref);
+    return out_;
+}
 
-    return _out;
+nlohmann::json Unwrap::onSerializeJson() const
+{
+    return {
+        {"in",  in_},
+        {"out", out_}
+    };
+}
+
+void Unwrap::onDeserializeJson(const nlohmann::json& state)
+{
+    in_  = state.at("in").get<float>();
+    out_ = state.at("out").get<float>();
 }

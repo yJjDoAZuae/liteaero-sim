@@ -25,5 +25,5 @@ void ControlHeadingRate::reset(float headingRateCmdIn, const KinematicState & st
     float ayMeas = state.headingRate_rps() * velWind_horiz(state);
 
     pid.reset(ayCmd, ayMeas, 0.0f);
-    pid.I.reset(0.0f);
+    pid.I.resetTo(0.0f);
 }

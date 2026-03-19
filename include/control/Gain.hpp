@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SISOBlock.hpp"
 #include "control/RectilinearTable.hpp"
 
 #include <vector>

@@ -1,60 +1,45 @@
 #pragma once
 
 #include "control/control.hpp"
-#include "SISOBlock.hpp"
+#include "SisoElement.hpp"
 #include "control/Limit.hpp"
 #include "control/Antiwindup.hpp"
 #include <vector>
 
 namespace liteaerosim::control {
 
-class Derivative : public liteaerosim::SISOBlock {
+class Derivative : public liteaerosim::SisoElement {
+public:
+    Derivative() :
+        _dt(1.0f),
+        _Tau(0.0f),
+        _method(DiscretizationMethod::FwdEuler)
+    {}
 
-    public:
+    Limit limit;
 
-        Derivative() : 
-                _in(0),
-                _out(0),
-                _dt(1.0f), 
-                _Tau(0.0f), 
-                _method(DiscretizationMethod::FwdEuler) 
-            {}
+    /// Warm-start: set input to u, output to uDot.
+    void resetTo(float u, float uDot = 0.0f);
 
-        ~Derivative() override {}
+    void setDt(float dt)    { _dt = (dt > 1e-6f) ? dt : 1.0f; }
+    void setTau(float tau)  { _Tau = tau; }
+    void setMethod(DiscretizationMethod method) { _method = method; }
+    float dt()  const { return _dt; }
+    float Tau() const { return _Tau; }
 
-        float in() const override { return _in; }
-        float out() const override { return _out; }
-        operator float() const override { return out(); }
+protected:
+    float onStep(float u) override;
+    void  onReset() override {}
+    void  onInitialize(const nlohmann::json& config) override;
+    nlohmann::json onSerializeJson() const override;
+    void  onDeserializeJson(const nlohmann::json& state) override;
+    int   schemaVersion() const override { return 1; }
+    const char* typeName() const override { return "Derivative"; }
 
-        Limit limit;
-
-        void reset(float u) 
-        {
-            reset(u, 0.0f);
-        }
-        
-        void reset(float u, float uDot=0) 
-        {
-            _out = limit.step(uDot);
-            _in = u;
-        }
-
-        float step(float u) override;
-        void setDt(float dt) { _dt = (dt>1e-6) ? dt : 1.0f; };
-        void setTau(float Tau) { _Tau = Tau; };
-        float dt() const {return _dt;}
-        float Tau() const {return _Tau;}
-        void setMethod(DiscretizationMethod method) {_method = method;}
-
-    protected:
-
-        float _dt;
-        float _Tau;
-        DiscretizationMethod _method;
-
-        float _in;
-        float _out;
-
+private:
+    float _dt;
+    float _Tau;
+    DiscretizationMethod _method;
 };
 
-}
+} // namespace liteaerosim::control

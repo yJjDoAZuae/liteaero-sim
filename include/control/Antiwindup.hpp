@@ -1,49 +1,51 @@
 #pragma once
 
-#include "SISOBlock.hpp"
-
-#include <string>
-#include <sstream>
-#include <vector>
+#include <nlohmann/json.hpp>
 
 namespace liteaerosim::control {
 
-typedef enum {
-    AW_Negative = -1,
-    AW_Null = 0,
-    AW_Positive = 1
-} AW_Direction;
+struct AntiwindupConfig {
+    enum class Direction { Null = 0, Negative = -1, Positive = 1 };
 
-class Antiwindup {
-
-    public:
-
-        Antiwindup() : 
-            name(""), 
-            direction(AW_Direction::AW_Null), 
-            limit(0), 
-            latch_on_direction(false),
-            _in(0), 
-            _active(false) {}
-
-        std::string name;
-        AW_Direction direction;
-        float limit;
-        bool latch_on_direction;  // TBD naming for this.  True == use direction of diff to determine if the mode is active
-
-        void operator=(float in);
-
-        bool isActive() const { return isActiveLower() || isActiveUpper(); }
-        bool isActiveLower() const {return _activeLower; }
-        bool isActiveUpper() const {return _activeUpper; }
-
-    protected:
-
-        float _in;
-        bool _active;
-        bool _activeLower;
-        bool _activeUpper;
-
+    Direction direction         = Direction::Null;
+    float     limit             = 0.0f;
+    bool      latch_on_direction = false;
 };
 
-}
+class Antiwindup {
+public:
+    Antiwindup() = default;
+    explicit Antiwindup(const AntiwindupConfig& config);
+
+    // Set or replace config after default construction.
+    void configure(const AntiwindupConfig& config);
+
+    // Update detector with the current value of the monitored signal.
+    // Returns isActive().
+    bool update(float signal);
+
+    // Query saturation status (valid after the most recent update() call).
+    bool isActive()      const { return is_active_lower_ || is_active_upper_; }
+    bool isActiveLower() const { return is_active_lower_; }
+    bool isActiveUpper() const { return is_active_upper_; }
+
+    // Clear saturation flags and reset previous signal. Does not change config.
+    void reset();
+
+    // Config accessors.
+    AntiwindupConfig::Direction direction()        const { return config_.direction; }
+    float                       limit()            const { return config_.limit; }
+    bool                        latchOnDirection() const { return config_.latch_on_direction; }
+
+    // Serialization — embedded by owner (Integrator), not standalone.
+    nlohmann::json serializeJson()                        const;
+    void           deserializeJson(const nlohmann::json& state);
+
+private:
+    AntiwindupConfig config_;
+    float prev_signal_     = 0.0f;
+    bool  is_active_lower_ = false;
+    bool  is_active_upper_ = false;
+};
+
+} // namespace liteaerosim::control

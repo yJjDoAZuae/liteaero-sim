@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SISOBlock.hpp"
 #include "control/control.hpp"
 #include "control/Gain.hpp"
 #include "control/FilterSS2Clip.hpp"

@@ -1,48 +1,42 @@
 #pragma once
 
 #include "control/control.hpp"
-#include "SISOBlock.hpp"
+#include "SisoElement.hpp"
 #include "control/Limit.hpp"
 #include "control/Antiwindup.hpp"
 #include <vector>
 
 namespace liteaerosim::control {
 
-    class Integrator : public liteaerosim::SISOBlock {
+class Integrator : public liteaerosim::SisoElement {
+public:
+    Integrator() :
+        _dt(1.0f),
+        _method(DiscretizationMethod::FwdEuler)
+    {}
 
-    public:
+    Limit limit;
+    std::vector<Antiwindup> aw;
 
-        Integrator() : 
-                _in(0), 
-                _out(0), 
-                _dt(1.0f), 
-                _method(DiscretizationMethod::FwdEuler) 
-            {}
+    /// Warm-start: set output (and input) to u.
+    void resetTo(float u);
 
-        ~Integrator() override {}
+    void setDt(float dt)     { _dt = (dt > 1e-6f) ? dt : 1.0f; }
+    void setMethod(DiscretizationMethod method) { _method = method; }
+    float dt() const { return _dt; }
 
-        float in() const override { return _in; }
-        float out() const override { return _out; }
-        operator float() const override { return out(); }
+protected:
+    float onStep(float u) override;
+    void  onReset() override;
+    void  onInitialize(const nlohmann::json& config) override;
+    nlohmann::json onSerializeJson() const override;
+    void  onDeserializeJson(const nlohmann::json& state) override;
+    int   schemaVersion() const override { return 1; }
+    const char* typeName() const override { return "Integrator"; }
 
-        Limit limit;
-        std::vector<Antiwindup> aw;
-
-        void reset(float u);
-
-        float step(float u) override;
-        void setDt(float dt) { _dt = (dt>1e-6) ? dt : 1.0f; };
-        float dt() const {return _dt;}
-        void setMethod(DiscretizationMethod method) {_method = method;}
-
-    protected:
-
-        float _dt;
-        DiscretizationMethod _method;
-
-        float _in;
-        float _out;
-
+private:
+    float _dt;
+    DiscretizationMethod _method;
 };
 
-}
+} // namespace liteaerosim::control

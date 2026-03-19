@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include "SISOBlock.hpp"
 #include "control/Filter.hpp"
 #include "control/control.hpp"
 #include <Eigen/Dense>
@@ -33,9 +32,9 @@ public:
 
     ~FilterTF2() override {}
 
-    float in() const override { return _in; }
-    float out() const override { return _out; }
-    operator float() const override { return out(); }
+    float in() const { return _in; }
+    float out() const { return _out; }
+    operator float() const { return out(); }
 
     void copy(const FilterTF2 &filt);
 

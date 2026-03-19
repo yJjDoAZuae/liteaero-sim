@@ -57,10 +57,19 @@ Clear, unambiguous naming is mandatory. Names must communicate intent without re
 ### General Rules
 
 - Names must be descriptive and self-documenting.
-- Abbreviations are forbidden unless universally understood in the domain (e.g., `pid`, `imu`, `gps`).
+- Abbreviations are forbidden. The only permitted abbreviations are those that are standard
+  technical terms in aerospace / control engineering where the abbreviated form is the
+  canonical name: `pid` (proportional-integral-derivative controller), `imu` (inertial
+  measurement unit), `gnss` (global navigation satellite system), `ias`/`cas`/`eas`/`tas`
+  (airspeed types), `ned` (north-east-down frame), `enu` (east-north-up frame), `agl`
+  (above ground level), `msl` (mean sea level). All other abbreviations are forbidden,
+  including single-letter identifiers (`K`, `I`, `D`), common informal shorthand
+  (`cmd`, `meas`, `err`, `ffwd`), and mathematical symbol names (`Kp`, `Ki`, `Kd`).
 - Boolean names must read as a predicate: `is_converged`, `has_waypoint`, `can_engage`.
 - Names must not encode type information (no Hungarian notation): prefer `altitude` over `dAltitude`.
-- Acronyms are treated as words: `ImuSensor`, not `IMUSensor`; `pid_controller`, not `PID_controller`.
+- Acronyms are treated as words in `PascalCase` identifiers: `ImuSensor`, not `IMUSensor`;
+  `NedFrame`, not `NEDFrame`. Exception: established all-caps class names that are
+  themselves acronyms (`SISOPIDFF`) are kept as-is for readability.
 
 ### Naming by Category
 

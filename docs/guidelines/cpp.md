@@ -17,15 +17,37 @@ Refer to [general.md](general.md) for project-wide standards on TDD, naming, SI 
 | Category | Convention | Example |
 |---|---|---|
 | Classes / Structs | `PascalCase` | `KinematicState`, `RollController` |
-| Interfaces (pure abstract) | `PascalCase` + `I` prefix | `ISerializable`, `IComponent` |
+| Abstract base classes | `PascalCase`, no prefix | `DynamicElement`, `SisoElement` |
 | Methods | `camelCase` | `computeLoadFactor()`, `step()` |
-| Member variables | `snake_case_` (trailing underscore) | `roll_rate_rad_s_`, `mass_kg_` |
+| Private / protected members | `snake_case_` (trailing underscore) | `roll_rate_rad_s_`, `mass_kg_` |
+| Public struct fields | `snake_case` (no trailing underscore) | `altitude_m`, `roll_rad` |
+| Method parameters | `snake_case` (no trailing underscore) | `dt_s`, `load_factor` |
 | Local variables | `snake_case` | `dt_s`, `lift_n` |
 | Constants / `constexpr` | `SCREAMING_SNAKE_CASE` | `GRAVITY_MPS2`, `MAX_BANK_RAD` |
-| Enums | `PascalCase` type, `PascalCase` values | `AutopilotMode::LateralNav` |
+| Enums | `enum class`, `PascalCase` type, `PascalCase` values | `AutopilotMode::LateralNav` |
 | Namespaces | `snake_case`, lowercase | `namespace control`, `namespace guidance` |
 | Template parameters | `PascalCase` | `template <typename StateType>` |
 | Macros | `SCREAMING_SNAKE_CASE` with project prefix | `LAS_ASSERT(...)` |
+
+The trailing underscore on private/protected members is the primary visual signal that a
+name is instance state, not a local or parameter. It must be applied consistently: every
+`private` and `protected` data member gets it; public struct fields and all function
+parameters do not.
+
+```cpp
+struct WindConfig {
+    float speed_mps     = 0.0f;   // public field — no trailing underscore
+    float altitude_m    = 0.0f;
+};
+
+class Integrator : public SisoElement {
+public:
+    void resetTo(float value);    // parameter — no trailing underscore
+private:
+    float dt_s_   = 0.0f;        // private member — trailing underscore
+    float output_ = 0.0f;
+};
+```
 
 ### Unit Encoding in Names
 

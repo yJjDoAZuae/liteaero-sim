@@ -1,28 +1,66 @@
-
-
 #include "control/Antiwindup.hpp"
 
 using namespace liteaerosim::control;
 
-void Antiwindup::operator=(float in)
+Antiwindup::Antiwindup(const AntiwindupConfig& config) : config_(config) {}
+
+void Antiwindup::configure(const AntiwindupConfig& config)
 {
-    float diff = in - _in;
-    _in = in;
+    config_ = config;
+}
 
-    _activeLower = false;
-    _activeUpper = false;
-    switch (direction) {
-        case AW_Direction::AW_Null:
-            break;
+bool Antiwindup::update(float signal)
+{
+    is_active_lower_ = false;
+    is_active_upper_ = false;
 
-        case AW_Direction::AW_Negative:
-            _activeLower = (_in < limit) && (!latch_on_direction || diff < 0);
-            _activeUpper = false;
-            break;
+    float diff = signal - prev_signal_;
+    prev_signal_ = signal;
 
-        case AW_Direction::AW_Positive:
-            _activeUpper = (_in > limit) && (!latch_on_direction || diff > 0);
-            _activeLower = false;
-            break;
+    switch (config_.direction) {
+    case AntiwindupConfig::Direction::Null:
+        break;
+
+    case AntiwindupConfig::Direction::Negative:
+        is_active_lower_ = (signal < config_.limit)
+                           && (!config_.latch_on_direction || diff < 0.0f);
+        break;
+
+    case AntiwindupConfig::Direction::Positive:
+        is_active_upper_ = (signal > config_.limit)
+                           && (!config_.latch_on_direction || diff > 0.0f);
+        break;
     }
+
+    return isActive();
+}
+
+void Antiwindup::reset()
+{
+    prev_signal_     = 0.0f;
+    is_active_lower_ = false;
+    is_active_upper_ = false;
+}
+
+nlohmann::json Antiwindup::serializeJson() const
+{
+    return {
+        {"direction",          static_cast<int>(config_.direction)},
+        {"limit",              config_.limit},
+        {"latch_on_direction", config_.latch_on_direction},
+        {"prev_signal",        prev_signal_},
+        {"active_lower",       is_active_lower_},
+        {"active_upper",       is_active_upper_}
+    };
+}
+
+void Antiwindup::deserializeJson(const nlohmann::json& state)
+{
+    config_.direction         = static_cast<AntiwindupConfig::Direction>(
+                                    state.at("direction").get<int>());
+    config_.limit             = state.at("limit").get<float>();
+    config_.latch_on_direction = state.at("latch_on_direction").get<bool>();
+    prev_signal_               = state.at("prev_signal").get<float>();
+    is_active_lower_           = state.at("active_lower").get<bool>();
+    is_active_upper_           = state.at("active_upper").get<bool>();
 }

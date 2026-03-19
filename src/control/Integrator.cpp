@@ -2,46 +2,80 @@
 
 using namespace liteaerosim::control;
 
-float Integrator::step(float in)
+float Integrator::onStep(float u)
 {
-
     bool awActive = false;
-
-    for (int k = 0; k < aw.size(); k++) {
+    for (size_t k = 0; k < aw.size(); k++) {
         awActive |= aw.at(k).isActive();
     }
 
+    float next;
     if (!awActive) {
-
         switch (_method) {
-
         case DiscretizationMethod::BackEuler:
-            // Backward Euler
-            _out = limit.step(_out + in * _dt);
+            next = limit.step(out_ + u * _dt);
             break;
-
         case DiscretizationMethod::FwdEuler:
-            // Forward Euler
-            _out = limit.step(_out + _in * _dt);
+            next = limit.step(out_ + in_ * _dt);
             break;
-
         case DiscretizationMethod::Bilinear:
-            // Bilinear (Tustin)
-            _out = limit.step(_out + 0.5*(in + _in) * _dt);
+            next = limit.step(out_ + 0.5f * (u + in_) * _dt);
+            break;
+        default:
+            next = out_;
             break;
         }
     } else {
-        _out = limit.step(_out);
+        next = limit.step(out_);
     }
 
-    _in = in;
-    return _out;
+    return next;
 }
 
-void Integrator::reset(float in)
+void Integrator::resetTo(float u)
 {
+    out_ = limit.step(u);
+    in_  = u;
+}
 
-    _out = limit.step(in);
-    _in = in;
+void Integrator::onReset()
+{
+    // in_ and out_ already zeroed by SisoElement::reset()
+}
 
+void Integrator::onInitialize(const nlohmann::json& config)
+{
+    _dt     = config.at("dt_s").get<float>();
+    _method = static_cast<DiscretizationMethod>(config.at("method").get<int>());
+}
+
+nlohmann::json Integrator::onSerializeJson() const
+{
+    nlohmann::json aw_array = nlohmann::json::array();
+    for (const auto& detector : aw) {
+        aw_array.push_back(detector.serializeJson());
+    }
+    return {
+        {"in",         in_},
+        {"out",        out_},
+        {"dt_s",       _dt},
+        {"method",     static_cast<int>(_method)},
+        {"antiwindup", aw_array}
+    };
+}
+
+void Integrator::onDeserializeJson(const nlohmann::json& state)
+{
+    in_     = state.at("in").get<float>();
+    out_    = state.at("out").get<float>();
+    _dt     = state.at("dt_s").get<float>();
+    _method = static_cast<DiscretizationMethod>(state.at("method").get<int>());
+
+    if (state.contains("antiwindup")) {
+        const auto& aw_array = state.at("antiwindup");
+        aw.resize(aw_array.size());
+        for (size_t k = 0; k < aw_array.size(); ++k) {
+            aw[k].deserializeJson(aw_array[k]);
+        }
+    }
 }

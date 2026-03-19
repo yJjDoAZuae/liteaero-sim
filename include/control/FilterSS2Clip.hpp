@@ -28,9 +28,9 @@ public:
 
     ~FilterSS2Clip() override {}
 
-    float in()       const override { return _in; }
-    float out()      const override { return _out; }
-    operator float() const override { return _out; }
+    float in()       const { return _in; }
+    float out()      const { return _out; }
+    operator float() const { return _out; }
 
     Limit valLimit;
     Limit rateLimit;

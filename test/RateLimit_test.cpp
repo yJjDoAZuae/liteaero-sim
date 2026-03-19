@@ -1,6 +1,8 @@
 #define _USE_MATH_DEFINES
 #include "control/RateLimit.hpp"
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
 
 using namespace liteaerosim::control;
 
@@ -242,3 +244,29 @@ TEST(RateLimitTest, Step03) {
 
 }
 
+TEST(RateLimitTest, JsonRoundTrip) {
+    RateLimit L;
+    L.initialize({{"schema_version", 1}, {"dt_s", 0.1f}, {"lower_limit", -5.0f},
+                  {"upper_limit", 5.0f}, {"lower_enabled", true}, {"upper_enabled", true}});
+    L.step(1.0f);
+    L.step(1.0f);
+
+    nlohmann::json snap = L.serializeJson();
+    RateLimit L2;
+    L2.initialize({{"schema_version", 1}, {"dt_s", 0.1f}, {"lower_limit", -5.0f},
+                   {"upper_limit", 5.0f}, {"lower_enabled", true}, {"upper_enabled", true}});
+    L2.deserializeJson(snap);
+
+    EXPECT_FLOAT_EQ(L2.step(1.0f), L.step(1.0f));
+    EXPECT_FLOAT_EQ(L2.dt(), L.dt());
+    EXPECT_FLOAT_EQ(L2.lowerLimit(), L.lowerLimit());
+    EXPECT_FLOAT_EQ(L2.upperLimit(), L.upperLimit());
+}
+
+TEST(RateLimitTest, SchemaVersionMismatch) {
+    RateLimit L;
+    L.initialize({{"schema_version", 1}});
+    nlohmann::json snap = L.serializeJson();
+    snap["schema_version"] = 99;
+    EXPECT_THROW(L.deserializeJson(snap), std::runtime_error);
+}

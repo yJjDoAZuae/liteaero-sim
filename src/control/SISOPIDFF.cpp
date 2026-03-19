@@ -18,8 +18,8 @@ float SISOPIDFF::step(float cmdIn, float measIn, float measDotIn)
         measUnwrap.step(measIn);
         cmdUnwrap.step(cmdIn);
     } else {
-        measUnwrap.reset(measIn);
-        cmdUnwrap.reset(cmdIn);
+        measUnwrap.resetTo(measIn);
+        cmdUnwrap.resetTo(cmdIn);
     }
 
     cmdSignal.step(cmdUnwrap.out());
@@ -129,7 +129,7 @@ float SISOPIDFF::step(float cmdIn, float measIn, float measDotIn)
     // the unfiltered version of a signal for use in backsolving
     // calculations.
 
-    I.reset(out() - ffPrev - propPrev - derivPrev);
+    I.resetTo(out() - ffPrev - propPrev - derivPrev);
 
     I.step(Ki*errSignal.out());
 
@@ -152,8 +152,8 @@ void SISOPIDFF::reset(float cmdIn, float measIn, float measDotIn, float outIn)
         measUnwrap.step(measIn);
         cmdUnwrap.step(cmdIn, measUnwrap.out());
     } else {
-        measUnwrap.reset(measIn);
-        cmdUnwrap.reset(cmdIn);
+        measUnwrap.resetTo(measIn);
+        cmdUnwrap.resetTo(cmdIn);
     }
 
     cmdSignal.resetToInput(cmdUnwrap.out());
@@ -161,13 +161,13 @@ void SISOPIDFF::reset(float cmdIn, float measIn, float measDotIn, float outIn)
     errSignal.resetToInput(cmdSignal.out() - measSignal.out());
     ffwdSignal.resetToInput(cmdUnwrap.out());
 
-    D.reset(measIn, measDotIn);
+    D.resetTo(measIn, measDotIn);
 
     measDotSignal.resetToInput(D.out());
 
     outSignal.resetToOutput( outIn );
 
-    I.reset(outIn - (feedfwd() + prop() + deriv()));
+    I.resetTo(outIn - (feedfwd() + prop() + deriv()));
 
 }
 

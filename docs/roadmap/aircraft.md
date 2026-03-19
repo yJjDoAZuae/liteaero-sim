@@ -86,38 +86,132 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 13 | `AeroCoeffEstimator` — geometry-to-coefficient derivation (Parts 1–8: AR, MAC, $C_{L_\alpha}$, $C_{L_\text{max}}$, Oswald $e$, $C_{D_0}$ buildup, $C_{L_q}$, $C_{Y_\beta}$, $C_{Y_r}$); `AeroPerformanceConfig` struct; four new `AeroPerformance` fields (`cl_q_nd`, `mac_m`, `cy_r_nd`, `fin_arm_m`); `AircraftGeometry`/`SurfaceGeometry` structs; `AeroPerformance` schema bumped to v2 | `AeroCoeffEstimator_test.cpp` — 11 tests |
 | 14 | `Terrain` subsystem — `V_Terrain`, `FlatTerrain`, `TerrainMesh` (7 LODs, LOS, glTF export), `LodSelector`, `MeshQualityVerifier`, `SimulationFrame`/`TrajectoryFile`; Python ingestion pipeline (download, mosaic, geoid correction, triangulate, colorize, simplify, verify, export) | C++: 53 tests across 6 test files; Python: 28 tests pass + 1 skip — see [`terrain-implementation-plan.md`](terrain-implementation-plan.md) |
 | 15 | `DynamicElement` refactoring — unified root base for all stateful components; `SisoElement` NVI SISO wrapper; `Filter` → `SisoElement`; `Propulsion` / `Motor` bases; deleted `DynamicBlock`, `DynamicFilterBlock`, `DynamicLimitBlock`, `V_Sensor`, `V_Propulsion`, `V_Motor` | No new tests — all 378 pre-existing tests pass |
+| 16 | `SISOBlock` removal — deleted `SISOBlock.hpp`; `SisoElement` derives from `DynamicElement` only; `LimitBase`/`Limit`/`RateLimit`/`Integrator`/`Derivative`/`Unwrap` migrated to `SisoElement` with full `DynamicElement` lifecycle; `SisoElement::step()` NVI call order fixed (previous `in_` available during `onStep()`); `resetTo()` replaces `reset(float)` overloads | `Limit_test.cpp`, `RateLimit_test.cpp`, `Integrator_test.cpp`, `Derivative_test.cpp`, `Unwrap_test.cpp` — 10 new tests; all 394 tests pass |
+| 17 | `Antiwindup` redesign — `AntiwindupConfig` struct with `enum class Direction`; `update(float)` replaces `operator=(float)`; `configure()`, `reset()`, `serializeJson()`/`deserializeJson()` added; `name` field removed; uninitialized-boolean bug fixed; `Integrator` serialization extended to embed `"antiwindup"` array | `Antiwindup_test.cpp` — 12 tests; `Integrator_test.cpp` — 2 new tests; all 408 tests pass |
 
 ---
 
-## 1. `SISOBlock` Removal — Complete `SisoElement` Migration
+## 1. Control Subsystem Refactoring
 
-`SISOBlock` (`include/SISOBlock.hpp`) is an obsolete intermediate base that predates the
-`DynamicElement` refactoring. Per the design authority
-[dynamic_element.md](../architecture/dynamic_element.md), `SisoElement` derives from
-`DynamicElement` only and is the single SISO base for all elements. `SISOBlock` is
-removed and the control sub-elements that still reference it are migrated to `SisoElement`.
+Design authority: [`docs/architecture/control_interface_review.md`](../architecture/control_interface_review.md).
 
-### Scope
+Nine interface design issues are identified and ordered by dependency. Implement in the
+sequence below; each step is independently buildable and testable.
 
-- Delete `include/SISOBlock.hpp`
-- Change `SisoElement` to derive from `DynamicElement` only (remove `SISOBlock` parent)
-- Migrate `LimitBase`, `Limit`, `Integrator`, `Derivative`, `Unwrap` to derive from
-  `SisoElement` and implement the full `DynamicElement` lifecycle
-- `SISOPIDFF` continues as a plain aggregate struct; no base class change required
+### Step A — `enum class` Promotion (Issue 8)
 
-### Tests
+Convert `FilterError` and `DiscretizationMethod` in `control.hpp` from C-style unscoped
+enums to `enum class`. Rename enumerators to drop abbreviations and `SCREAMING_CASE`:
+`FwdEuler` → `ForwardEuler`, `BackEuler` → `BackwardEuler`, `PZMatch` → `PoleZeroMatch`,
+`NONE` → `None`, `INVALID_DIMENSION` → `InvalidDimension`, etc.
 
-Each migrated class requires:
+Update all call sites that reference the old enumerator names (serialization casts,
+switch cases, test comparisons).
 
-- JSON round-trip test: `serializeJson()` / `deserializeJson()` recovers identical state;
-  next `step()` output matches between original and restored instances
-- Schema version rejection test: mismatched `schema_version` throws `std::runtime_error`
-- All pre-existing tests continue to pass
+**Tests:** existing tests updated to use new names; no new tests required.
 
-### CMake
+### Step B — `Limit` / `RateLimit` Hierarchy Fix (Issues 5, 9)
 
-No changes required. `src/CMakeLists.txt` uses `GLOB_RECURSE`; new source files are
-auto-discovered.
+With `RateLimit` removed from `LimitBase`, `LimitBase` would have exactly one concrete
+subclass (`Limit`). A single-subclass abstract intermediate class is unnecessary indirection
+and there is no current caller that holds a `LimitBase*`. Delete `LimitBase.hpp`; derive
+`Limit` directly from `SisoElement`.
+
+- Delete `include/control/LimitBase.hpp`.
+- `Limit` derives from `SisoElement` directly; its `setLower`/`setUpper`/`enable`/`disable`
+  interface is unchanged.
+- `RateLimit` derives from `SisoElement` directly.
+- Apply `snake_case_` member renames from Issue 9 to both classes during this pass:
+  `_lowerLimit` → `lower_limit_`, `_dt` → `dt_s_`, `_enableLowerLimit` → `lower_enabled_`, etc.
+
+**Tests:** existing `Limit_test.cpp` and `RateLimit_test.cpp` tests pass unchanged.
+
+### Step C — `Gain` API Cleanup (Issue 4 partial)
+
+Gain scheduling is a planned feature; the template structure is retained. This step
+removes only the misleading unimplemented stubs and fixes API inconsistencies:
+
+- Remove stub methods (`schedule()`, `readJSON()`, `readFile()`) and the unpopulated
+  `RectilinearTable` member.
+- `operator=(T K)` → `set(T value)`
+- `operator double()` → `operator float()`
+- `K()` → `value()`
+- `_K` → `value_` (private)
+
+Template parameters `T` and `NumAxes` are retained unchanged. The full scheduling
+redesign is a separate roadmap item (see item 3 — Gain Scheduling Design).
+
+Update `SISOPIDFF` and all call sites to use `set()` and `value()`.
+
+**Tests:** existing tests pass unchanged; no new tests required.
+
+### Step D — `FilterSS2Clip` NVI Migration (Issues 1, 2, 9)
+
+Highest-priority concrete filter migration. This is the critical-path prerequisite for
+Steps G and I.
+
+- Remove `_in`/`_out` shadow members; use `in_`/`out_` from `SisoElement`.
+- Remove shadow `in()`, `out()`, `operator float()` methods.
+- Rename `step()` → `onStep()`; implement `onInitialize()`, `onSerializeJson()`,
+  `onDeserializeJson()`, `schemaVersion()`, `typeName()`.
+- Apply `snake_case_` member renames (Issue 9a): `_Phi` → `phi_`, `_dt` → `dt_s_`, etc.
+- Fix `backsolve` → `backSolve` (Issue 9d); remove dead `delU` variable (Issue 9f);
+  promote `dcTol` → `constexpr DC_TOLERANCE` (Issue 9f); fix `copy()` parameter to
+  `const FilterSS2Clip&` (Issue 9f).
+
+**Tests:** new `FilterSS2Clip_test.cpp` — `step()` through base pointer returns correct
+value; `serializeJson()` through base pointer returns non-empty object; JSON round-trip
+preserves filter state; `schemaVersion()` and `typeName()` return correct values.
+
+### Step E — `FilterTF2` NVI Migration (Issues 1, 2, 9)
+
+Same migration pattern as Step D applied to `FilterTF2`.
+
+**Tests:** same categories as Step D for `FilterTF2`.
+
+### Step F — `FilterTF`, `FilterFIR`, `FilterSS` — Evaluate and Migrate (Issues 1, 2, 9)
+
+Assess whether `FilterTF` and `FilterTF2` can be unified with `FilterSS2` (they represent
+the same mathematical object — a rational transfer function — with different internal
+representations). Migrate or consolidate each. `FilterSS` is likely superseded by
+`FilterSS2`; evaluate for removal.
+
+**Tests:** as per Step D pattern for each surviving class.
+
+### Step G — Remove `Filter` No-Op Defaults (Issue 2)
+
+After Steps D–F, remove the no-op `onInitialize`, `onSerializeJson`, `onDeserializeJson`,
+`schemaVersion`, `typeName`, and `onStep` defaults from `Filter`. Any filter that did not
+complete migration will produce a compile error, making incomplete migration visible.
+
+**Tests:** build succeeds with no filters falling back to base defaults.
+
+### Step H — `Unwrap` Reference Field (Issue 6)
+
+Replace `step(float u, float ref)` two-arg overload with a stored `ref_` field set via
+`setReference(float)`. Route all steps through the NVI chain. Include `ref_` in
+serialization.
+
+**Tests:** new tests — `setReference()` affects output; `onLog()` is called on every step
+(verified via a mock or logged output count); JSON round-trip preserves `ref_`.
+
+### Step I — `SISOPIDFF` → `DynamicElement` Lifecycle (Issues 3, 7, 9e)
+
+Make `SISOPIDFF` derive from `DynamicElement`. Implement `onInitialize()`,
+`onReset()`, `onSerializeJson()`, `onDeserializeJson()`, `schemaVersion()`, `typeName()`.
+
+Apply naming fixes from Issue 9e: `Kp` → `proportional_gain_`, `I` → `integrator_`,
+`unwrapInputs` → `unwrap_inputs_`, etc.
+
+Apply `Integrator`/`Derivative` member renames from Issue 9a: `_dt` → `dt_s_`,
+`_Tau` → `tau_s_`, JSON key `"tau"` → `"tau_s"`, etc.
+
+Fold limit visibility fix (Issue 7): make `valLimit`/`rateLimit` on `FilterSS2Clip` and
+`limit` on `Integrator`/`Derivative` private; expose configuration methods.
+
+**Tests:** `SISOPIDFF_test.cpp` — `initialize()` + `step()` + `serializeJson()` +
+`deserializeJson()` lifecycle; JSON round-trip preserves filter state and next-step output
+matches; schema version check throws on mismatch.
 
 ---
 
@@ -159,7 +253,37 @@ Add `test/SensorAirData_test.cpp` to the test executable.
 
 ---
 
-## 3. Autopilot Gain Design — Python Tooling
+## 3. Gain Scheduling — Design and Implementation
+
+`Gain<T, NumAxes>` currently holds template parameters for value type and scheduling
+axis count, but the scheduling logic is unimplemented (stubs removed in roadmap item 1,
+Step C). This item defines and implements the full gain scheduling architecture.
+
+### Scope to Define
+
+The design must address at minimum:
+
+- **Lookup methods** — what interpolation strategies are supported (e.g. rectilinear
+  table bilinear, nearest-neighbor, polynomial fit) and how they are selected.
+- **Axis dimensions** — how `NumAxes` maps to physical scheduling variables
+  (e.g. airspeed, altitude, angle of attack); how axes are labeled and units enforced.
+- **Runtime update** — how a scheduled gain is evaluated at each step given the current
+  scheduling variable values; whether evaluation is synchronous with `SISOPIDFF::step()`
+  or driven externally.
+- **Serialization** — how the gain table is stored and restored (JSON + proto).
+- **Initialization** — whether the gain table is loaded from a file, embedded in config
+  JSON, or populated programmatically.
+
+### Deliverables
+
+Design authority document at `docs/architecture/gain_scheduling.md` to be written
+before implementation begins.
+
+Implementation follows TDD: failing tests before production code.
+
+---
+
+## 4. Autopilot Gain Design — Python Tooling
 
 Python workflow that derives autopilot control gains from the aircraft model. This is a
 prerequisite for item 4 (`Autopilot`) — the C++ implementation is parameterized by gains

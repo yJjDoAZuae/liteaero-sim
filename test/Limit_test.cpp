@@ -1,6 +1,8 @@
 #define _USE_MATH_DEFINES
 #include "control/Limit.hpp"
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
 
 using namespace liteaerosim::control;
 
@@ -230,3 +232,29 @@ TEST(LimitTest, Step03) {
 
 }
 
+TEST(LimitTest, JsonRoundTrip) {
+    Limit L;
+    L.initialize({{"schema_version", 1}, {"lower_limit", -2.0f}, {"upper_limit", 3.0f},
+                  {"lower_enabled", true}, {"upper_enabled", true}});
+    L.step(1.5f);
+
+    nlohmann::json snap = L.serializeJson();
+    Limit L2;
+    L2.initialize({{"schema_version", 1}, {"lower_limit", -2.0f}, {"upper_limit", 3.0f},
+                   {"lower_enabled", true}, {"upper_enabled", true}});
+    L2.deserializeJson(snap);
+
+    EXPECT_FLOAT_EQ(L2.step(2.5f), L.step(2.5f));
+    EXPECT_EQ(L2.isLowerEnabled(), L.isLowerEnabled());
+    EXPECT_EQ(L2.isUpperEnabled(), L.isUpperEnabled());
+    EXPECT_FLOAT_EQ(L2.lowerLimit(), L.lowerLimit());
+    EXPECT_FLOAT_EQ(L2.upperLimit(), L.upperLimit());
+}
+
+TEST(LimitTest, SchemaVersionMismatch) {
+    Limit L;
+    L.initialize({{"schema_version", 1}});
+    nlohmann::json snap = L.serializeJson();
+    snap["schema_version"] = 99;
+    EXPECT_THROW(L.deserializeJson(snap), std::runtime_error);
+}

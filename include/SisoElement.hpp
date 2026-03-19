@@ -1,15 +1,12 @@
 #pragma once
 
 #include "DynamicElement.hpp"
-#include "SISOBlock.hpp"
 
 namespace liteaerosim {
 
-/// Fully-capable SISO dynamic element.
+/// Abstract base for all single-input, single-output dynamic elements.
 ///
-/// Merges the lifecycle contract of DynamicElement with the SISO step
-/// interface of SISOBlock. Use for standalone control elements that need
-/// their own lifecycle (initialize / reset / serialize / deserialize).
+/// Derives from DynamicElement and adds the SISO step interface.
 ///
 /// The public step(float u) is the NVI entry point:
 ///   - records in_ and out_
@@ -18,31 +15,22 @@ namespace liteaerosim {
 ///
 /// Subclasses implement onStep() and the lifecycle hooks from DynamicElement.
 /// reset() zeros in_ and out_ before forwarding to onReset().
-class SisoElement : public DynamicElement, public SISOBlock {
+class SisoElement : public DynamicElement {
 public:
-    // -----------------------------------------------------------------------
-    // SISOBlock interface — implemented here; satisfy the pure-virtual contract
-    // -----------------------------------------------------------------------
-    [[nodiscard]] float in()  const override { return in_; }
-    [[nodiscard]] float out() const override { return out_; }
-    operator float()          const override { return out_; }
+    [[nodiscard]] float in()  const { return in_; }
+    [[nodiscard]] float out() const { return out_; }
+    operator float()          const { return out_; }
 
     /// Advance internal state by one timestep. Records in_ and out_,
     /// calls onStep(), then calls onLog() if a logger is attached.
-    float step(float u) override;
+    virtual float step(float u);
 
-    // -----------------------------------------------------------------------
     // DynamicElement override — zeros in_/out_ before calling onReset()
-    // -----------------------------------------------------------------------
     void reset() override;
 
 protected:
     float in_  = 0.0f;
     float out_ = 0.0f;
-
-    // -----------------------------------------------------------------------
-    // Customization hooks
-    // -----------------------------------------------------------------------
 
     /// Compute and return the scalar output for input u.
     /// Called from step(). Update any internal state here.
