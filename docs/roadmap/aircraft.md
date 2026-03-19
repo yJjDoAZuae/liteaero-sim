@@ -42,7 +42,7 @@ writing production code.
 | `AeroCoeffEstimator` | `include/aerodynamics/AeroCoeffEstimator.hpp` | ✅ Implemented |
 | `DynamicElement` | `include/DynamicElement.hpp` | ✅ Implemented — see [dynamic_element.md](../architecture/dynamic_element.md) |
 | `SisoElement` | `include/SisoElement.hpp` | ✅ Implemented — NVI SISO wrapper over `DynamicElement` |
-| `SensorAirData` | `include/sensor/SensorAirData.hpp` | 🔲 Stub only |
+| `SensorAirData` | `include/sensor/SensorAirData.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `SensorGnss` | `include/sensor/SensorGnss.hpp` | 🔲 Stub only |
 | `SensorLaserAlt` | `include/sensor/SensorLaserAlt.hpp` | 🔲 Stub only |
 | `SensorMag` | `include/sensor/SensorMag.hpp` | 🔲 Stub only |
@@ -89,48 +89,11 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 16 | `SISOBlock` removal — deleted `SISOBlock.hpp`; `SisoElement` derives from `DynamicElement` only; `LimitBase`/`Limit`/`RateLimit`/`Integrator`/`Derivative`/`Unwrap` migrated to `SisoElement` with full `DynamicElement` lifecycle; `SisoElement::step()` NVI call order fixed (previous `in_` available during `onStep()`); `resetTo()` replaces `reset(float)` overloads | `Limit_test.cpp`, `RateLimit_test.cpp`, `Integrator_test.cpp`, `Derivative_test.cpp`, `Unwrap_test.cpp` — 10 new tests; all 394 tests pass |
 | 17 | `Antiwindup` redesign — `AntiwindupConfig` struct with `enum class Direction`; `update(float)` replaces `operator=(float)`; `configure()`, `reset()`, `serializeJson()`/`deserializeJson()` added; `name` field removed; uninitialized-boolean bug fixed; `Integrator` serialization extended to embed `"antiwindup"` array | `Antiwindup_test.cpp` — 12 tests; `Integrator_test.cpp` — 2 new tests; all 408 tests pass |
 | 18 | Control subsystem refactoring (Steps A–J, all nine issues in [`control_interface_review.md`](../architecture/control_interface_review.md)) — `FilterError`/`DiscretizationMethod` promoted to `enum class`; `LimitBase` deleted, `Limit`/`RateLimit` rebased to `SisoElement`; `Gain` API cleaned up (`set()`, `value()`, stubs removed); `FilterSS2Clip`, `FilterTF2`, `FilterTF`, `FilterFIR`, `FilterSS` migrated to NVI (`onStep()`/`onSerializeJson()`/`onDeserializeJson()`); shadow `_in`/`_out` members and no-op `Filter` defaults removed; `Unwrap` `ref_` field added (`setReference()`, NVI routing, serialization); `SISOPIDFF` derives from `DynamicElement` with full lifecycle, `snake_case_` member renames (`Kp`→`proportional_gain_`, `I`→`integrator_`, etc.), private limits, `ControlLoop` accessor renames (`out()`→`output()`, `pid`→`controller_`); `Integrator`/`Derivative` private member renames (`_dt`→`dt_s_`, `_Tau`→`tau_s_`, `limit`→`limit_`) | `FilterSS2Clip_test.cpp`, `FilterTF2_test.cpp`, `FilterFIR_test.cpp` (new), `FilterSS_test.cpp`, `Unwrap_test.cpp`, `SISOPIDFF_test.cpp` (new) — 29 new tests; 435 pass, 2 pre-existing `FilterTFTest` failures unchanged |
+| 19 | `SensorAirData` — pitot-static air data computer; differential pressure ($q_c$) and static pressure ($P_s$) transducers with Gaussian noise, first-order Tustin lag, and fuselage crossflow pressure error (two-port symmetric crosslinked model); derives IAS, CAS, EAS, TAS, Mach, barometric altitude (Kollsman-referenced, troposphere + tropopause), OAT; RNG pimpl with seed + advance serialization; JSON + proto round-trips | `SensorAirData_test.cpp` — 19 tests; 454 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 
 ---
 
-## 1. `SensorAirData` — Air Data System
-
-Stub header exists at `include/sensor/SensorAirData.hpp`. `liteaerosim::DynamicElement` is the
-abstract base (see [dynamic_element.md](../architecture/dynamic_element.md)).
-
-`SensorAirData` models the pitot-static system at the physical transducer level: a
-differential pressure sensor (dynamic pressure $q_c$) and an absolute pressure sensor
-(static pressure $P_s$). All derived quantities — IAS, CAS, EAS, TAS, barometric altitude,
-OAT — are computed from these two raw measurements and the `AtmosphericState`.
-
-```cpp
-// include/sensor/SensorAirData.hpp
-struct AirDataMeasurement {
-    float ias_mps;         // indicated airspeed (m/s)
-    float cas_mps;         // calibrated airspeed (m/s)
-    float eas_mps;         // equivalent airspeed (m/s)
-    float tas_mps;         // true airspeed (m/s)
-    float baro_altitude_m; // barometric altitude (m)
-    float oat_k;           // outside air temperature (K)
-};
-```
-
-### Tests — `SensorAirData`
-
-- At sea level ISA and `tas = 20 m/s`, IAS ≈ CAS ≈ EAS ≈ TAS to within 0.1 m/s.
-- At altitude (3000 m) and same TAS, IAS < TAS.
-- `baro_altitude_m` matches geometric altitude to within 10 m at ISA conditions.
-- With additive differential-pressure noise σ, IAS noise propagates correctly to output.
-- With additive static-pressure noise σ, barometric altitude noise propagates correctly.
-- JSON and proto round-trips preserve sensor state (noise seeds, lag filter state).
-
-### CMake
-
-Add `src/sensor/SensorAirData.cpp` to `liteaerosim`.
-Add `test/SensorAirData_test.cpp` to the test executable.
-
----
-
-## 2. Gain Scheduling — Design and Implementation
+## 1. Gain Scheduling — Design and Implementation
 
 `Gain<T, NumAxes>` currently holds template parameters for value type and scheduling
 axis count, but the scheduling logic is unimplemented (stubs removed in delivered item 18,
@@ -160,7 +123,7 @@ Implementation follows TDD: failing tests before production code.
 
 ---
 
-## 3. Autopilot Gain Design — Python Tooling
+## 2. Autopilot Gain Design — Python Tooling
 
 Python workflow that derives autopilot control gains from the aircraft model. This is a
 prerequisite for item 4 (`Autopilot`) — the C++ implementation is parameterized by gains
@@ -172,7 +135,7 @@ from `Aircraft` trim and `AeroCoeffEstimator` outputs.
 
 ---
 
-## 4. Autopilot — Inner Loop Knobs-Mode Tracking
+## 3. Autopilot — Inner Loop Knobs-Mode Tracking
 
 
 Stub header exists at `include/control/Autopilot.hpp`.
@@ -206,7 +169,7 @@ Add `test/Autopilot_test.cpp` to the test executable.
 
 ---
 
-## 5. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
+## 4. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
 
 Stub headers exist in `include/path/` for all three classes.
 
@@ -263,7 +226,7 @@ Add `test/Path_test.cpp` to the test executable.
 
 ---
 
-## 6. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
+## 5. Guidance — `PathGuidance`, `VerticalGuidance`, `ParkTracking`
 
 Stub headers exist in `include/guidance/` for all three classes.
 
@@ -313,7 +276,7 @@ Add `test/Guidance_test.cpp` to the test executable.
 
 ---
 
-## 7. Plot Visualization — Python Post-Processing Tools
+## 6. Plot Visualization — Python Post-Processing Tools
 
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
@@ -347,7 +310,7 @@ dev = [
 
 ---
 
-## 8. Manual Input — Joystick and Keyboard
+## 7. Manual Input — Joystick and Keyboard
 
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
@@ -388,7 +351,7 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 9. Execution Modes — Real-Time, Scaled, and Batch Runners
+## 8. Execution Modes — Real-Time, Scaled, and Batch Runners
 
 The simulation runner controls the wall-clock relationship to simulation time. Three modes
 are required:
@@ -440,7 +403,7 @@ Add `test/SimRunner_test.cpp` to the test executable.
 
 ---
 
-## 10. Remaining Sensor Models
+## 9. Remaining Sensor Models
 
 Not blocking any higher-priority item. Stub headers exist in `include/sensor/`.
 Implement when needed; order within this group follows dependency.
@@ -459,7 +422,7 @@ Implement when needed; order within this group follows dependency.
 
 ---
 
-## 11. Estimation Subsystem
+## 10. Estimation Subsystem
 
 Flight code estimation algorithms. Stub headers exist in `include/estimation/` (to be
 created). Each derives from `DynamicElement` directly. Design authorities listed below.
