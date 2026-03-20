@@ -195,7 +195,7 @@ A system use cases definition.
 
 A system element registry.  System elements have port definitions that define the interfacing of data flows.
 
-A data flow type and data flow registry.  A data flow type defines the contents and character of a data flow.  The data flow registry defines the instances of data flows and thier routing within the system.
+A data flow type and data flow registry.  A data flow type defines the contents and character of a data flow.  The data flow registry defines the instances of data flows and their routing within the system.
 
 Data flow diagrams.
 
@@ -215,9 +215,17 @@ The autopilot will not include estimation functions within its architectural bou
 
 The autopilot should support use cases of integration with Ardupilot or PX4 software.
 
-### Navigation architecture
+Consider Mavlink support and other relevant data protocols.
+The architecture should not be limited by Mavlink constraints if that is an issue.  If Mavlink does not provide the necessary interface functionality, then we should define the interfaces required and develop them.
 
-The navigation system is a separable flight code component that provides estimation products from sensor measurements.  It is not simulation specific, but may be used within the context of a simulation, or may be used as a flight software compenent on a real aircraft, for example with Ardupilot or PX4 software.
+### Navigation and Perception architecture
+
+The navigation system is a separable flight code component that provides estimation products from sensor measurements.  It is not simulation specific, but may be used within the context of a simulation, or may be used as a flight software component on a real aircraft, for example with Ardupilot or PX4 software.
+
+Consider Mavlink support and other relevant data protocols.
+The architecture should not be limited by Mavlink constraints if that is an issue.  If Mavlink does not provide the necessary interface functionality, then we should define the interfaces required and develop them.
+
+We may also wish to develop perception functions that are a higher level of abstraction than traditional Navigation solution of absolute or relative kinematic state estimates, and the architecture should consider how they will be integrated.  Perception functions may include image based navigation, or other inference based functionality.
 
 ### External components
 
