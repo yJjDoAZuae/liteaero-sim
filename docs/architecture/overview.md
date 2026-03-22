@@ -62,6 +62,7 @@ flowchart TB
 ```
 
 **Rules:**
+
 - All values crossing layer boundaries are in SI units (m, rad, s, kg, N).
 - Unit conversion happens exclusively in the Interface Layer.
 - The Domain Layer has no I/O, no file access, no display logic.
@@ -90,7 +91,7 @@ stateDiagram-v2
 ```
 
 | Method | Responsibility |
-|---|---|
+| --- | --- |
 | `initialize(config)` | Parse parameters, allocate resources, configure internal structure |
 | `reset()` | Return to initial post-initialize conditions; called between simulation runs |
 | `step(u)` | Advance one timestep (fixed at initialize time); return scalar output |
@@ -159,7 +160,7 @@ flowchart LR
 ## Coordinate Frames and Sign Conventions
 
 | Frame | Description | Usage |
-|---|---|---|
+| --- | --- | --- |
 | NED | North–East–Down, Earth-fixed | Navigation, waypoints, wind |
 | Body | $x$ forward, $y$ right, $z$ down | Aerodynamic forces, angular rates |
 | Wind | $x$ along velocity vector | Aerodynamic angles ($\alpha$, $\beta$) |
@@ -221,7 +222,7 @@ sequenceDiagram
 ## Key Architectural Decisions
 
 | Decision | Choice | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Lifecycle interface | Non-Virtual Interface (NVI) | Base enforces cross-cutting concerns (logging, schema validation) once |
 | State snapshot format | JSON (nlohmann/json) | Human-readable, schema-versioned, language-agnostic |
 | SI unit enforcement | All internal values in SI | Eliminates unit-conversion bugs in computation code |

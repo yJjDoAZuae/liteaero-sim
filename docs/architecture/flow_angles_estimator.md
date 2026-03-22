@@ -353,8 +353,8 @@ have not yet converged.
 Inconsistency is declared when:
 
 $$
-|r_{\alpha,cross}| > k_{cross}\,\sigma_{\alpha,cross}, \quad
-|r_{\beta,cross}|  > k_{cross}\,\sigma_{\beta,cross}
+| r_{\alpha,cross} | > k_{cross}\,\sigma_{\alpha,cross}, \quad
+| r_{\beta,cross} | > k_{cross}\,\sigma_{\beta,cross}
 $$
 
 with $k_{cross}$ = `integrity_cross_check_sigma_nd` (default 4.0).

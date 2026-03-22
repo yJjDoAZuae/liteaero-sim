@@ -39,17 +39,18 @@ The majority of tests are **unit tests**. Integration and end-to-end tests are a
 ### File Naming
 
 | Source file | Test file |
-|---|---|
+| --- | --- |
 | `src/control/FilterSS2.cpp` | `test/FilterSS2_test.cpp` |
 | `src/navigation/WGS84.cpp` | `test/navigation/WGS84_test.cpp` |
 
 ### Test Naming Convention
 
-```
+```text
 TEST(ClassNameTest, MethodName_Condition_ExpectedOutcome)
 ```
 
 Examples:
+
 - `TEST(FilterSS2Test, StepOutput_ZeroInput_ReturnsZero)`
 - `TEST(FilterSS2Test, Serialize_Deserialize_RoundTrip)`
 - `TEST(FilterSS2Test, Deserialize_UnknownSchemaVersion_Throws)`
@@ -156,13 +157,14 @@ EXPECT_EQ(filter_.out(), expected);
 ```
 
 Choose the tolerance based on the physics:
+
 - Exact algebraic results: `1e-9f`
 - Discretization / iteration convergence: `1e-4f` to `1e-6f`
 - Long-horizon integration: `1e-3f` or wider with justification
 
 ## Python Test Structure
 
-### Framework
+### Framework — Python
 
 - **pytest** for test discovery and assertion
 - **pytest-cov** for coverage
@@ -174,7 +176,7 @@ Choose the tolerance based on the physics:
 pytest --cov=las --cov-report=term-missing
 ```
 
-### Required Tests per Class
+### Required Tests per Class — Python
 
 Same categories as C++: initialization, steady-state, reset, serialization round-trip, schema version rejection.
 
@@ -203,7 +205,7 @@ def test_deserialize_rejects_unknown_schema_version(controller: RollController) 
 The following tests are **pre-existing failures** unrelated to current development. They are tracked here until addressed.
 
 | Test | Root Cause | Fix Required In |
-|---|---|---|
+| --- | --- | --- |
 | `TableAxisTest.Read00` | `readJSON` calls `json::parse` without exception handling; throws on empty stream | `include/control/TableAxis.hpp` |
 | `RectilinearTableTest.Read00` | `readFile("foo.json")` on non-existent file throws uncaught `json::parse_error` | `RectilinearTable` implementation |
 | `GainTest.Read00` | Same `json::parse` exception pattern | `Gain` implementation |
@@ -213,7 +215,7 @@ The following tests are **pre-existing failures** unrelated to current developme
 ## Coverage Requirements
 
 | Layer | Minimum Coverage |
-|---|---|
+| --- | --- |
 | Domain Layer (physics, control, guidance) | 90% line coverage |
 | Infrastructure (math, serialization) | 95% line coverage |
 | Interface Layer (config parsing, display) | 70% line coverage |

@@ -51,7 +51,7 @@ flowchart TD
 ### Use Case Tracing
 
 | ID | Use Case | Driving Simulation Need | Mechanism |
-|----|----------|------------------------|-----------|
+| ---- | ---------- | ------------------------ | ----------- |
 | UC-L1 | Open log session, register sources | Scenario must declare what is logged before sim starts | `Logger::open()`, `Logger::addSource()` |
 | UC-L2 | Append telemetry record | Sim loop captures full aircraft state after each `Aircraft::step()` | `LogSource::log()` → ring buffer |
 | UC-L3 | Flush buffer to disk | Prevent data loss during long runs | `Logger::flush()`, background writer thread |
@@ -69,7 +69,7 @@ flowchart TD
 ### Functional
 
 | ID | Requirement |
-|----|-------------|
+| ---- | ------------- |
 | LR-1 | Multiple named sources may register independent channel sets before logging begins. |
 | LR-2 | Each source logs at its own rate; records are time-stamped with a `double time_s` (seconds). |
 | LR-3 | All channel values are 32-bit IEEE 754 floats in SI units. |
@@ -84,7 +84,7 @@ flowchart TD
 ### Non-Functional
 
 | ID | Requirement |
-|----|-------------|
+| ---- | ------------- |
 | LR-N1 | `LogSource::log()` completes in ≤ 5 µs on the simulation thread (ring-buffer write, no system calls). |
 | LR-N2 | Binary format achieves ≥ 5× better size than equivalent CSV at 1 kHz, 32 channels. |
 | LR-N3 | `LogReader` loads a 10-minute, 32-channel, 1 kHz binary log in ≤ 500 ms. |
@@ -96,7 +96,7 @@ flowchart TD
 ### Survey of Open Formats Used in Related Projects
 
 | Format | Used by | Binary | Self-describing | Crash-resilient | Real-time vis. | Protobuf | Notes |
-|--------|---------|--------|-----------------|-----------------|----------------|----------|-------|
+| -------- | --------- | -------- | ----------------- | ----------------- | ---------------- | ---------- | ------- |
 | **MCAP** | ROS 2, PX4 | ✅ | ✅ | ✅ (chunk CRC) | ✅ PlotJuggler plugin | ✅ native | MIT; C++ + Python libs |
 | **ULog** | PX4 ArduPilot | ✅ | ✅ | ✅ | ✅ FlightPlot, QGC | ❌ | Flight-specific; `pyulog` |
 | **ROS bag (.bag)** | ROS 1 | ✅ | ✅ | partial | ✅ rviz | via msg | Superseded by MCAP in ROS 2 |
@@ -283,7 +283,7 @@ sequenceDiagram
 MCAP files are organized in independently-checksummed chunks. The structure allows readers
 to recover all intact chunks after a crash, without the file-end summary section.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  MCAP Header (magic + Header record)                    │
 ├─────────────────────────────────────────────────────────┤
@@ -330,7 +330,7 @@ data in the same file and readable by the same tooling.
 Each MCAP channel carries a metadata map with the following keys:
 
 | Key | Example | Purpose |
-|-----|---------|---------|
+| ----- | --------- | --------- |
 | `"source"` | `"aircraft"` | Human name of the source |
 | `"channel_names"` | `"vel_north_mps,vel_east_mps,alpha_rad"` | Comma-separated channel list (for `FloatArray` channels) |
 | `"channel_units"` | `"m/s,m/s,rad"` | Corresponding SI unit strings |
@@ -345,7 +345,7 @@ proto message's own `time_sec` field for unambiguous reconstruction.
 
 ### CSV Export Format
 
-```
+```text
 time_s,source,channel_0,channel_1,...
 0.000000,aircraft,55.0000,0.0000,0.0523
 0.100000,aircraft,54.9800,0.0001,0.0521
@@ -403,7 +403,7 @@ df = reader.aligned_view(dt_s=0.01)
 
 ### Write Path
 
-```
+```text
 LogSource::log()          [sim thread; ≤ 5 µs]
     │
     ▼
@@ -424,7 +424,7 @@ OS page cache             [fsync on flush() or periodic interval]
 ### Flush Policy
 
 | Event | Action |
-|-------|--------|
+| ------- | -------- |
 | `Logger::flush()` | `WriterThread::flush_sync()` — drain buffer, close current chunk, `fsync()` |
 | `Logger::close()` | Full flush, write MCAP statistics + footer, close file |
 | Chunk size threshold (configurable, default 4 MB) | Background chunk rotation |
@@ -444,7 +444,7 @@ are written. This requires no changes to `Logger`.
 ### MCAP Guarantees
 
 | Scenario | Outcome |
-|----------|---------|
+| ---------- | --------- |
 | Normal `close()` | Summary + footer written; `mcap` tools and PlotJuggler open normally |
 | `flush()` then crash | All flushed chunks are valid; unflushed ring-buffer records are lost |
 | Crash during chunk write | Partial chunk has bad or missing CRC; preceding complete chunks are intact |
@@ -561,7 +561,7 @@ public:
 ## Dependency
 
 | Library | Version | License | Integration |
-|---------|---------|---------|-------------|
+| --------- | --------- | --------- | ------------- |
 | `mcap` (C++) | latest | MIT | FetchContent |
 | `mcap` (Python) | latest | MIT | `uv` / `pyproject.toml` |
 
@@ -574,7 +574,7 @@ as the existing `nlohmann_json` dependency.
 ## File Map
 
 | File | Contents |
-|------|----------|
+| ------ | ---------- |
 | `include/logger/Logger.hpp` | `Logger` class declaration |
 | `include/logger/LogSource.hpp` | `LogSource` handle (returned by `Logger::addSource()`) |
 | `include/logger/LogReader.hpp` | `LogReader` class declaration |

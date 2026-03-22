@@ -20,7 +20,7 @@ flowchart LR
 ### Frame Definitions
 
 | Frame | Symbol | Origin / Orientation |
-|---|---|---|
+| --- | --- | --- |
 | NED | $N$ | North-East-Down, fixed to Earth surface at datum point |
 | Body | $B$ | Origin at aircraft CG; $x$ forward, $y$ right, $z$ down |
 | Wind | $W$ | $x$ along airmass-relative velocity, $z$ in body symmetry plane pointing down |
@@ -65,7 +65,7 @@ C_{VN} = C_y(-\gamma)\,C_z(\chi)
 $$
 
 | Axis | Direction |
-|---|---|
+| --- | --- |
 | $\hat{x}_V$ | Unit ground-relative velocity vector |
 | $\hat{y}_V$ | Horizontal, perpendicular to velocity, positive to the right of the velocity heading |
 | $\hat{z}_V$ | In the vertical plane containing $\hat{x}_V$; perpendicular to $\hat{x}_V$; positive downward |
@@ -364,7 +364,7 @@ $$
 ### Wind Frame Angular Velocity Components
 
 | Component | Description | Source |
-|---|---|---|
+| --- | --- | --- |
 | $p_W$ | Roll rate about the velocity vector | Input to `KinematicState::step()` |
 | $q_W$ | Pitch rate of the velocity vector (rate of change of flight path angle $\gamma_a$) | Derived from the Plane of Motion frame — see below |
 | $r_W$ | Yaw rate of the velocity vector (horizontal curvature of the airmass-relative path) | Derived from the Plane of Motion frame — see below |
@@ -399,22 +399,26 @@ The Plane of Motion (POM) frame $P$ is the Frenet frame of the airmass-relative 
 
 ### Frame Definition
 
-1. **Tangent** (first axis, along velocity):
+**1. Tangent** (first axis, along velocity):
+
 $$
 \hat{x}_P = \frac{\mathbf{v}}{V}
 $$
 
-2. **Centripetal acceleration** (component of $\mathbf{a}$ perpendicular to velocity):
+**2. Centripetal acceleration** (component of $\mathbf{a}$ perpendicular to velocity):
+
 $$
 \mathbf{a}_\perp = \mathbf{a} - (\mathbf{a} \cdot \hat{x}_P)\,\hat{x}_P
 $$
 
-3. **Normal** (second axis, toward center of curvature):
+**3. Normal** (second axis, toward center of curvature):
+
 $$
 \hat{y}_P = \frac{\mathbf{a}_\perp}{|\mathbf{a}_\perp|}
 $$
 
-4. **Binormal** (third axis, in direction of $\mathbf{v} \times \mathbf{a}$):
+**4. Binormal** (third axis, in direction of $\mathbf{v} \times \mathbf{a}$):
+
 $$
 \hat{z}_P = \hat{x}_P \times \hat{y}_P
 $$
@@ -511,7 +515,7 @@ a coordinated pull-up with no sideslip ($\beta = 0$, $p_W = 0$).
 **Aircraft parameters:**
 
 | Parameter | Value |
-|---|---|
+| --- | --- |
 | $C_{L\alpha}$ | 5.73 rad⁻¹ |
 | $m$ | 1 200 kg |
 | $S$ | 16 m² |
@@ -535,7 +539,7 @@ Body pitch rate (from the body-rate decomposition at $\beta=0$):
 $$q(t) = \dot\alpha + q_W(t)$$
 
 | $t$ (s) | $n$ | $\alpha$ (°) | $\dot\alpha$ (°/s) | $q_W$ (°/s) | $q$ (°/s) | $\gamma$ (°) | $h$ (m) |
-|---:|---:|---:|---:|---:|---:|---:|---:|
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1.00 | 1.20 | 0.24 | 0.00 | 0.24 | 0.00 | 0.00 |
 | 1 | 1.20 | 1.44 | 0.24 | 1.12 | 1.36 | 0.56 | 0.33 |
 | 2 | 1.40 | 1.68 | 0.24 | 2.25 | 2.49 | 2.25 | 2.62 |
@@ -557,7 +561,7 @@ $t \approx 0.2$ s.
 Lift $L$, drag $D$, and side force $Y$ are defined as the projections of the total aerodynamic force onto the Wind frame axes:
 
 | Force | Wind frame vector | Sign convention |
-|---|---|---|
+| --- | --- | --- |
 | Drag | $\mathbf{D}^W = [-D,\ 0,\ 0]^T$ | $D \geq 0$; opposes the velocity vector |
 | Side force | $\mathbf{Y}^W = [0,\ Y,\ 0]^T$ | Positive in $+\hat{y}_W$ (to the right of the velocity vector) |
 | Lift | $\mathbf{L}^W = [0,\ 0,\ -L]^T$ | $L \geq 0$; in $-\hat{z}_W$ (upward within the body symmetry plane) |
@@ -606,7 +610,7 @@ The linear model $C_L(\alpha) = C_{L_\alpha}\,\alpha$ is valid only within the p
 ### Input Parameters
 
 | Parameter | Symbol | Description |
-|-----------|--------|-------------|
+| ----------- | -------- | ------------- |
 | `cl_alpha` | $C_{L_\alpha}$ | Pre-stall lift-curve slope (rad$^{-1}$) |
 | `cl_max` | $C_{L,max}$ | Peak lift coefficient (positive stall vertex) |
 | `cl_min` | $C_{L,min}$ | Minimum lift coefficient (negative stall vertex, $< 0$) |
@@ -709,7 +713,7 @@ $$
 The three Wind frame components have distinct kinematic roles:
 
 | Component | Expression | Effect |
-|---|---|---|
+| --- | --- | --- |
 | Tangential ($x_W$) | $T\cos\alpha\cos\beta$ | Accelerates/decelerates along the velocity vector |
 | Lateral ($y_W$) | $-T\cos\alpha\sin\beta$ | Sideward force; must be balanced by $Y$ for coordinated flight |
 | Normal ($-z_W$, upward) | $T\sin\alpha$ | Acts in the lift direction; contributes to load factor |
@@ -760,7 +764,7 @@ Newton's method is then run from $\alpha_0$ rather than from a fixed starting po
 **Branch identification.** The sign of $f'(\alpha_{prev})$ identifies which branch is active:
 
 | $f'(\alpha_{prev})$ | Branch | Interpretation |
-|---|---|---|
+| --- | --- | --- |
 | $> 0$ | Pre-stall | $\alpha$ on the ascending or linear limb of $f$ |
 | $< 0$ | Post-stall | $\alpha$ on the descending limb in the transition region |
 | $= 0$ | Fold point | Aircraft is at the stall limit; predictor is ill-conditioned |
@@ -846,7 +850,7 @@ No iteration is required. A solution in this region exists only when $T > 0$ and
 ## Derived Quantities
 
 | Quantity | Expression | Unit |
-|---|---|---|
+| --- | --- | --- |
 | Airspeed | $V = \|\mathbf{v}_W\|$ | m/s |
 | Ground speed | $V_G = \|\mathbf{v}_N\|$ | m/s |
 | Flight path angle | $\gamma = -\arcsin(v_D / V_G)$ | rad |

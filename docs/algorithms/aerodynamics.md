@@ -12,7 +12,7 @@ Flight* (3rd ed.).
 ## Trim Aero Model — Required Coefficients
 
 | Symbol | C++ field | Class | Description |
-|--------|-----------|-------|-------------|
+| -------- | ----------- | ------- | ------------- |
 | $S$ | `S_ref_m2` | `AeroPerformance`, `LoadFactorAllocator` | Reference wing area (m²) |
 | $A\!\!R$ | `ar` | `AeroPerformance` | Wing aspect ratio |
 | $e$ | `e` | `AeroPerformance` | Oswald efficiency factor |
@@ -40,7 +40,7 @@ Flight* (3rd ed.).
 ### Wing
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $b$ | Tip-to-tip span | m |
 | $S$ | Reference area | m² |
 | $\Lambda_0$ | Leading-edge sweep | rad |
@@ -50,7 +50,7 @@ Flight* (3rd ed.).
 ### Horizontal Tail
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $b_{HT}$ | Span (tip-to-tip) | m |
 | $S_{HT}$ | Reference area | m² |
 | $\Lambda_{0_{HT}}$ | Leading-edge sweep | rad |
@@ -60,7 +60,7 @@ Flight* (3rd ed.).
 ### Vertical Tail
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $b_{VT}$ | Height (root to tip) | m |
 | $S_{VT}$ | Reference area | m² |
 | $\Lambda_{0_{VT}}$ | Leading-edge sweep | rad |
@@ -70,14 +70,14 @@ Flight* (3rd ed.).
 ### Fuselage
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $l_f$ | Total length | m |
 | $d_f$ | Maximum diameter (or equivalent diameter) | m |
 
 ### Airfoil Section Properties
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $(t/c)$ | Thickness-to-chord ratio of the wing section | — |
 | $C_{l_{\alpha_{2D}}}$ | 2D section lift slope (≈ $2\pi$ rad⁻¹ for thin airfoils) | rad⁻¹ |
 | $C_{l_{\max_{2D}}}$ | 2D section maximum lift coefficient | — |
@@ -85,7 +85,7 @@ Flight* (3rd ed.).
 ### Mass and CG
 
 | Symbol | Description | Unit |
-|--------|-------------|------|
+| -------- | ------------- | ------ |
 | $m$ | Aircraft mass | kg |
 | $x_\text{CG}$ | Body $x$ of center of gravity | m |
 
@@ -288,7 +288,7 @@ $$FF_f = 1 + \frac{60}{\lambda_f^3} + \frac{\lambda_f}{400}, \quad \lambda_f = \
 **Interference factor:**
 
 | Component | $Q_i$ |
-|-----------|--------|
+| ----------- | -------- |
 | Wing (mid-fuselage) | 1.0 |
 | Tail surfaces | 1.04 to 1.05 |
 | Fuselage | 1.0 |
@@ -296,7 +296,7 @@ $$FF_f = 1 + \frac{60}{\lambda_f^3} + \frac{\lambda_f}{400}, \quad \lambda_f = \
 **Wetted areas:**
 
 | Component | $S_\text{wet}$ |
-|-----------|----------------|
+| ----------- | ---------------- |
 | Wing (both sides, exposed) | $2.003\,S$ for $(t/c) \approx 0.12$ (Raymer Eq. 12.6) |
 | Horizontal tail | $2.003\,S_{HT}$ |
 | Vertical tail | $2.003\,S_{VT}$ |
@@ -317,7 +317,7 @@ $$C_{Y_\beta} = -\eta_{VT}\,\frac{S_{VT}}{S}\,C_{L_{\alpha_{VT}}}\left(1 + \frac
 where:
 
 | Symbol | Description | Typical value |
-|--------|-------------|---------------|
+| -------- | ------------- | --------------- |
 | $\eta_{VT}$ | Tail efficiency (dynamic pressure ratio) | 0.85 to 0.95 |
 | $C_{L_{\alpha_{VT}}}$ | Vertical tail 3D lift slope (rad⁻¹) — from §2.1 applied to vertical tail | — |
 | $d\sigma/d\beta$ | Sidewash gradient at the vertical tail | ≈ 0 for conventional rear-fuselage location |
@@ -383,7 +383,7 @@ The following table maps each trim-aero-model coefficient to the input parameter
 requires.
 
 | Coefficient | Inputs required |
-|-------------|-----------------|
+| ------------- | ----------------- |
 | $S$ | $S$ (direct) |
 | $A\!\!R$ | $b$, $S$ |
 | $\bar{c}$ | $b$, $S$, $\lambda$ |
@@ -402,7 +402,7 @@ requires.
 ### Parameters That Cannot Be Derived from Geometry Alone
 
 | Parameter | Reason | Typical approach |
-|-----------|--------|------------------|
+| ----------- | -------- | ------------------ |
 | $C_{D_0}$ | Depends on surface finish, gaps, protuberances | Component buildup (§5.1) + empirical correction |
 | $e$ | Depends on detailed wake and tip shape | Hoerner estimate (§4.2); refine from flight test or CFD |
 | $C_{l_{\max_{2D}}}$ | Depends on airfoil profile selection | Look up from airfoil database (NACA, UIUC) |

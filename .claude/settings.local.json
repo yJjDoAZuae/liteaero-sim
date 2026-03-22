@@ -162,7 +162,8 @@
       "Bash(gh api:*)",
       "Bash(gh issue:*)",
       "Bash(gh release:*)",
-      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=RateLimitTest.*:IntegratorTest.*:DerivativeTest.Step00 2>&1\")"
+      "Bash(cmd.exe /c \"set PATH=C:\\\\msys64\\\\ucrt64\\\\bin;%PATH% && C:\\\\Users\\\\Alex\\\\avraero\\\\LiteAeroSim\\\\build\\\\test\\\\liteaerosim_test.exe --gtest_filter=RateLimitTest.*:IntegratorTest.*:DerivativeTest.Step00 2>&1\")",
+      "Bash(cmd.exe /c \"set PATH=C:\\\\Program Files\\\\nodejs;%PATH% && npx markdownlint-cli2 \"\"docs/**/*.md\"\" \"\"*.md\"\" 2>&1\")"
     ]
   }
 }

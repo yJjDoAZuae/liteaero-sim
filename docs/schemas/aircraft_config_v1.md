@@ -20,7 +20,7 @@ to initialize the simulation model.  The schema is validated by
 ```
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `schema_version` | integer | Must equal `1`.  Increment when backward-incompatible changes are made. |
 | `aircraft` | object | Aerodynamic geometry and drag polar parameters. |
 | `airframe` | object | Structural and operational performance limits (envelope). |
@@ -35,7 +35,7 @@ to initialize the simulation model.  The schema is validated by
 Maps to `LoadFactorAllocator` and `AeroPerformance` constructor parameters.
 
 | Field | Type | Unit | Constraint | Description |
-|-------|------|------|------------|-------------|
+| ------- | ------ | ------ | ------------ | ------------- |
 | `S_ref_m2` | float | m² | > 0 | Reference wing area. |
 | `cl_y_beta` | float | rad⁻¹ | < 0 | Lateral force coefficient slope C_Yβ. |
 | `ar` | float | — | > 0 | Wing aspect ratio b²/S. |
@@ -54,7 +54,7 @@ Maps to `AirframePerformance`. Used by `Aircraft::step()` to clamp commanded loa
 before passing them to `LoadFactorAllocator`.
 
 | Field | Type | Unit | Constraint | Description |
-|-------|------|------|------------|-------------|
+| ------- | ------ | ------ | ------------ | ------------- |
 | `g_max_nd` | float | g | > 0 | Maximum positive load factor. |
 | `g_min_nd` | float | g | < 0 | Maximum negative load factor (structural limit). |
 | `tas_max_mps` | float | m/s | > 0 | Never-exceed true airspeed. |
@@ -69,7 +69,7 @@ Moment-of-inertia fields are stored and reserved for the 6-DOF moment equations 
 active in the point-mass model).
 
 | Field | Type | Unit | Constraint | Description |
-|-------|------|------|------------|-------------|
+| ------- | ------ | ------ | ------------ | ------------- |
 | `mass_kg` | float | kg | > 0 | Total aircraft mass. |
 | `Ixx_kgm2` | float | kg·m² | > 0 | Roll moment of inertia. |
 | `Iyy_kgm2` | float | kg·m² | > 0 | Pitch moment of inertia. |
@@ -82,7 +82,7 @@ active in the point-mass model).
 Maps directly to `LiftCurveParams` used by `LiftCurveModel`.
 
 | Field | Type | Unit | Constraint | Description |
-|-------|------|------|------------|-------------|
+| ------- | ------ | ------ | ------------ | ------------- |
 | `cl_alpha` | float | rad⁻¹ | — | Pre-stall lift-curve slope. |
 | `cl_max` | float | — | — | Peak lift coefficient (positive stall vertex). |
 | `cl_min` | float | — | < 0 | Minimum lift coefficient (negative stall vertex). |
@@ -94,7 +94,7 @@ Maps directly to `LiftCurveParams` used by `LiftCurveModel`.
 ### Cross-Field Invariants
 
 | Invariant | Rationale |
-|-----------|-----------|
+| ----------- | ----------- |
 | `cl_sep ≤ cl_max` | The post-stall plateau cannot exceed the stall peak. |
 | `cl_sep_neg ≥ cl_min` | The negative plateau cannot exceed (in magnitude) the negative stall trough. |
 | `cl_min < 0` | The negative stall vertex must be below zero. |
@@ -107,7 +107,7 @@ Passed to the `KinematicState` constructor.  All velocities are ground-reference
 (Earth-fixed NED frame).
 
 | Field | Type | Unit | Description |
-|-------|------|------|-------------|
+| ------- | ------ | ------ | ------------- |
 | `latitude_rad` | float | rad | Geodetic latitude (WGS84). |
 | `longitude_rad` | float | rad | Longitude (WGS84). |
 | `altitude_m` | float | m | WGS84 ellipsoidal altitude (positive upward). |
@@ -131,7 +131,7 @@ stores them as `float` (single precision) for all fields except `latitude_rad` a
 
 ## Validation Script
 
-```
+```bash
 python python/tools/validate_aircraft_config.py <file.json>
 ```
 
@@ -146,7 +146,7 @@ Tests for the validator live in `python/test/test_validate_aircraft_config.py`.
 Three canonical fixture files are provided under `test/data/aircraft/`:
 
 | File | Category | Representative type |
-|------|----------|---------------------|
+| ------ | ---------- | --------------------- |
 | [`general_aviation.json`](../../test/data/aircraft/general_aviation.json) | General aviation | Single-engine piston (Cessna 172 analog) |
 | [`jet_trainer.json`](../../test/data/aircraft/jet_trainer.json) | Jet trainer | Subsonic two-seat trainer (T-38 analog) |
 | [`small_uas.json`](../../test/data/aircraft/small_uas.json) | Small UAS (< 25 kg) | Fixed-wing electric UAV |

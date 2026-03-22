@@ -18,7 +18,7 @@ Refer to [general.md](general.md) for project-wide standards on TDD, naming, SI 
 ## Naming Conventions (Python)
 
 | Category | Convention | Example |
-|---|---|---|
+| --- | --- | --- |
 | Classes | `PascalCase` | `KinematicState`, `RollController` |
 | Functions / Methods | `snake_case` | `compute_load_factor()`, `step()` |
 | Variables | `snake_case` | `roll_rate_rad_s`, `altitude_m` |
@@ -43,7 +43,7 @@ GRAVITY_MPS2: float = 9.80665
 
 ## Package and Module Structure
 
-```
+```text
 src/
   las/                      # top-level package
     __init__.py
@@ -264,7 +264,7 @@ class TestRollController:
             controller.deserialize(bad_state)
 ```
 
-### Rules
+### Rules — Testing
 
 - Test names: `test_<method>_<condition>_<expected>` or descriptive intent names.
 - Use `pytest.approx` for all floating-point comparisons; set an appropriate tolerance.

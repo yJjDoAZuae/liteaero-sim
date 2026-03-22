@@ -650,7 +650,7 @@ The sign is negative: a warm day ($\Delta T > 0$) means $T_s^{ADC} < T_s^{true}$
 
 Representative values (first-order approximation $\Delta T \ll T_{ISA}$):
 
-| Condition | $\Delta T$ (K) | $T_{ISA}$ at SL (K) | $|\delta V_{TAS}/V_{TAS}|$ |
+| Condition | $\Delta T$ (K) | $T_{ISA}$ at SL (K) | $ | \delta V_{TAS}/V_{TAS} | $ |
 | --- | --- | --- | --- |
 | ISA+20 K, sea level | +20 | 288.15 | 3.5 % |
 | ISA−20 K, sea level | −20 | 288.15 | 3.6 % (overread) |

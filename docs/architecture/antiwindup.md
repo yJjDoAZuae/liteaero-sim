@@ -23,7 +23,7 @@ and holds its state (does not integrate) whenever any instance is active.
 ## Design Decisions
 
 | Decision | Rationale |
-|----------|-----------|
+| ---------- | ----------- |
 | Not a `DynamicElement` | `Antiwindup` is a stateless comparator; its only runtime state is two booleans that reset to `false`. The `DynamicElement` lifecycle (`initialize`, `schemaVersion`, `typeName`) is disproportionate overhead for this role. The owning `Integrator` handles the lifecycle and embeds AW state in its own serialization. |
 | Not a `SisoElement` | Its output is boolean, not float. `SisoElement::out()` and `operator float()` would be meaningless or misleading. |
 | Config struct, not public fields | `AntiwindupConfig` is set once at initialization and does not change during stepping. Making config mutable at any time creates correctness hazards. |
@@ -42,18 +42,18 @@ and holds its state (does not integrate) whenever any instance is active.
 **Saturation condition** — the signal has crossed the threshold in the configured direction:
 
 | `Direction` | Saturated lower | Saturated upper |
-|-------------|-----------------|-----------------|
-| `Negative`  | `signal < limit` | — |
-| `Positive`  | — | `signal > limit` |
-| `Null`      | — | — |
+| ------------- | ----------------- | ----------------- |
+| `Negative` | `signal < limit` | — |
+| `Positive` | — | `signal > limit` |
+| `Null` | — | — |
 
 **Windup condition** (only checked when `latch_on_direction = true`) — the signal is moving
 further into saturation on this step (rate has the saturating sign):
 
 | `Direction` | Windup condition |
-|-------------|-----------------|
-| `Negative`  | `signal < signal_prev` |
-| `Positive`  | `signal > signal_prev` |
+| ------------- | ----------------- |
+| `Negative` | `signal < signal_prev` |
+| `Positive` | `signal > signal_prev` |
 
 `isActive()` returns `true` when both conditions are met (saturation confirmed; if
 `latch_on_direction` is `false`, the windup condition is skipped and saturation alone is
@@ -213,7 +213,7 @@ The following are known gaps relative to the described design:
 ## Files
 
 | File | Contents |
-|------|----------|
+| ------ | ---------- |
 | `include/control/Antiwindup.hpp` | `AntiwindupConfig` struct; `Antiwindup` class |
 | `src/control/Antiwindup.cpp` | `update()`, `reset()`, `configure()`, `serializeJson()`, `deserializeJson()` |
 | `test/Antiwindup_test.cpp` | Unit tests — see Test Requirements below |
@@ -223,7 +223,7 @@ The following are known gaps relative to the described design:
 ## Test Requirements
 
 | Test | Description |
-|------|-------------|
+| ------ | ------------- |
 | `NullDirection_NeverActive` | `Direction::Null`: `update()` always returns `false` regardless of signal value |
 | `PositiveDirection_BelowLimit_NotActive` | `Direction::Positive`, signal < limit: not active |
 | `PositiveDirection_AboveLimit_Active` | `Direction::Positive`, signal > limit, `latch_on_direction=false`: active |

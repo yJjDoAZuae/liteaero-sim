@@ -35,19 +35,19 @@ sequenceDiagram
 
 ## Second-Order Low-Pass Filter
 
-### Configuration
+### Configuration — Second-Order Low-Pass Filter
 
 The filter is configured with a natural frequency $\omega_n$ in rad/s and damping ratio $\zeta$.
 
 | Parameter | SI Unit | Typical Value |
-|---|---|---|
+| --- | --- | --- |
 | `design` | — | `"low_pass_second"`, `"low_pass_first"`, … |
 | `dt_s` | s | 0.01 (100 Hz) |
 | `wn_rad_s` | rad/s | $2\pi \cdot f_c$ |
 | `zeta` | — (dimensionless) | 0.7071 (Butterworth) |
 | `tau_zero_s` | s | 0.0 (no zero) |
 
-### Code
+### Code — Second-Order Low-Pass Filter
 
 ```cpp
 #include "control/FilterSS2.hpp"
@@ -99,16 +99,16 @@ DC gain: $H(0) = 1.0$ (unity). Magnitude at $\omega_n$: $-3\,\text{dB}$.
 
 The integrator accumulates its input over time. An optional `Limit` member can clamp the integrated value.
 
-### Configuration
+### Configuration — Integrator
 
 | Parameter | SI Unit | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `dt_s` | s | Fixed timestep; used to scale accumulated value |
 | `method` | — | `"bilinear"`, `"forward_euler"`, `"backward_euler"` |
 | `lower_limit` | (same as output) | Optional; omit to disable |
 | `upper_limit` | (same as output) | Optional; omit to disable |
 
-### Code
+### Code — Integrator
 
 ```cpp
 #include "control/Integrator.hpp"
@@ -152,7 +152,7 @@ flowchart LR
     SUM --> OUT["p_cmd<br/>(rad/s)"]
 ```
 
-### Configuration
+### Configuration — PID Control Loop
 
 ```json
 {
@@ -167,7 +167,7 @@ flowchart LR
 }
 ```
 
-### Code
+### Code — PID Control Loop
 
 ```cpp
 #include "control/ControlRoll.hpp"

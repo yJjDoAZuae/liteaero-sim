@@ -5,7 +5,7 @@
 Prefer permissive open-source licenses. See [guidelines/general.md](../guidelines/general.md#external-dependencies-and-licensing) for the full policy.
 
 | License | Acceptability |
-|---|---|
+| --- | --- |
 | MIT, BSD-2/3-Clause, Clear BSD, Apache 2.0, Boost, ISC | ✅ Preferred |
 | LGPL (any) | ⚠️ Acceptable with dynamic linking only |
 | GPL (any) | ❌ Avoid |
@@ -16,7 +16,7 @@ Prefer permissive open-source licenses. See [guidelines/general.md](../guideline
 ### C++ Runtime Dependencies
 
 | Library | Version / SHA | License | Integration | Purpose |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | [Eigen3](https://eigen.tuxfamily.org) | 3.4+ | MPL-2 | System `find_package` | Linear algebra — matrices, vectors, state-space |
 | [nlohmann/json](https://github.com/nlohmann/json) | v3.12.0 | MIT | FetchContent (tarball) | JSON serialization / deserialization |
 | [protobuf](https://github.com/protocolbuffers/protobuf) | v3.21.12 | BSD-3-Clause | `find_package` + FetchContent fallback (pattern 1a) | Binary serialization (proto3 wire format) |
@@ -25,7 +25,7 @@ Prefer permissive open-source licenses. See [guidelines/general.md](../guideline
 ### C++ Test Dependencies
 
 | Library | Version | License | Integration | Purpose |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | [googletest](https://github.com/google/googletest) | v1.17.0 | BSD-3-Clause | FetchContent (zip) | Unit testing (gtest + gmock) |
 
 ### Python Dependencies
@@ -33,7 +33,7 @@ Prefer permissive open-source licenses. See [guidelines/general.md](../guideline
 Declared in `python/pyproject.toml`. Python version pinned in `python/.python-version`.
 
 | Package | License | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | numpy | BSD-3-Clause | Numerical arrays |
 | matplotlib | PSF | Plotting |
 | rasterio | BSD-3-Clause | GeoTIFF I/O |
@@ -231,5 +231,5 @@ flowchart TD
     B -->|No| D["FetchContent 1b<br/>manual target<br/>or git submodule"]
 ```
 
-3. Add to `CMakeLists.txt` dependency registry comment block.
-4. Record in this document.
+1. Add to `CMakeLists.txt` dependency registry comment block.
+2. Record in this document.

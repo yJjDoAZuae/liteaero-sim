@@ -15,7 +15,7 @@ Refer to [general.md](general.md) for project-wide standards on TDD, naming, SI 
 ## Naming Conventions (C++)
 
 | Category | Convention | Example |
-|---|---|---|
+| --- | --- | --- |
 | Classes / Structs | `PascalCase` | `KinematicState`, `RollController` |
 | Abstract base classes | `PascalCase`, no prefix | `DynamicElement`, `SisoElement` |
 | Methods | `camelCase` | `computeLoadFactor()`, `step()` |
@@ -65,7 +65,7 @@ constexpr double GRAVITY_MPS2 = 9.80665;
 
 ## File and Directory Structure
 
-```
+```text
 include/
   <subsystem>/
     ClassName.hpp          // public interface
@@ -262,7 +262,7 @@ TEST_F(RollControllerTest, SerializeDeserializeRoundTrip) {
 } // namespace control
 ```
 
-### Rules
+### Rules — Testing
 
 - Test names follow `MethodName_ConditionUnderTest_ExpectedBehavior` or `GivenX_WhenY_ThenZ`.
 - Tests are independent; no shared mutable state between test cases.
@@ -295,7 +295,7 @@ target_compile_options(my_target PRIVATE
 **Prefer permissive open-source licenses.** Acceptable licenses, in order of preference:
 
 | License | Notes |
-|---|---|
+| --- | --- |
 | MIT | Preferred. Maximum compatibility. |
 | BSD-2-Clause / BSD-3-Clause / Clear BSD | Preferred. Minimal restrictions. |
 | Apache 2.0 | Preferred. Includes patent grant. |
@@ -309,7 +309,7 @@ Always record the license of every dependency in the table below and in the depe
 
 ### Decision Tree for Adding a New Dependency
 
-```
+```text
 Is the library available with source code?
 ├── YES → Does it have CMake support?
 │         ├── YES → Use CMake FetchContent             (preferred)
@@ -366,6 +366,7 @@ endif()
 ```
 
 Rules:
+
 - Always pin to a specific **tag or commit SHA** — never `main` or `master`.
 - Use `GIT_SHALLOW TRUE` when pinning to a tag; omit it when pinning to a bare SHA.
 - Record the library name, version/SHA, and license in a comment next to the `FetchContent_Declare` call.
@@ -374,6 +375,7 @@ Rules:
 ### Tier 2 — Git Submodules
 
 Use git submodules when:
+
 - The library does not support CMake natively and requires a wrapper.
 - You need the source to be present in the repository (e.g., for offline builds).
 - The library is internal or not publicly hosted.
@@ -390,6 +392,7 @@ Place submodules under `extern/` (not `libs/`). Add a `CMakeLists.txt` wrapper t
 Reserve `libs/` **exclusively for binary-only libraries** where source is genuinely unavailable and there is no open-source alternative. This is a last resort.
 
 Rules for vendored binaries:
+
 - Include the library's `LICENSE` file alongside the binary.
 - Create a CMake `IMPORTED` target so consumers link cleanly:
 
@@ -413,7 +416,7 @@ set_target_properties(example_lib PROPERTIES
 
 Maintain this table in `cmake/Dependencies.cmake` as a comment header:
 
-```
+```text
 # Dependency         | Version/Commit                           | License      | Method
 # ------------------|------------------------------------------|--------------|------------------
 # googletest         | v1.14.0                                  | BSD-3-Clause | FetchContent (1a)

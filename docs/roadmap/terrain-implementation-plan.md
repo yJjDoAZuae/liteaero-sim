@@ -18,7 +18,7 @@ separate future steps.
 ## Key Design Decisions
 
 | Decision | Rationale |
-|----------|-----------|
+| ---------- | ----------- |
 | No CMakeLists changes | `src/CMakeLists.txt` uses `GLOB_RECURSE`; `test/CMakeLists.txt` uses `GLOB` — new files auto-discovered |
 | `TerrainVertex` as float32 ENU offsets | Per design authority §Local Grid Vertex Encoding — float32 at 50 km gives ~3 mm precision |
 | `GeodeticPoint` as double lat/lon | Centroid stores double to avoid geodetic precision loss |
@@ -37,7 +37,7 @@ separate future steps.
 ## Files to Create / Modify
 
 | File | Action |
-|------|--------|
+| ------ | -------- |
 | `include/environment/GeodeticPoint.hpp` | ✅ Done (Step 1) |
 | `include/environment/TerrainVertex.hpp` | ✅ Done (Step 1) |
 | `include/environment/TerrainFacet.hpp` | ✅ Done (Step 1) |
@@ -261,7 +261,7 @@ private:
 - `finestAvailableLod() const` / `coarsestAvailableLod() const`
 - `bounds() const` → `GeodeticAABB`
 
-### Implementation Notes
+### Implementation Notes — Step 3
 
 - `facetNormal`: compute ENU cross-product of two edge vectors, convert to ECEF using the tile centroid rotation matrix; use double arithmetic internally to avoid float32 precision loss on small facets.
 - `TerrainCell` storage: `std::array<std::optional<TerrainTile>, 7>` indexed by `static_cast<int>(lod)`.
@@ -300,18 +300,18 @@ Concrete `V_Terrain`. Key interface (full interface in design authority):
 
 ## Step 5 — Coordinate Transforms: `toECEF()`, `toNED()` (4 tests) ✅
 
-### Failing Tests (add to `test/TerrainMesh_test.cpp`)
+### Failing Tests (add to `test/TerrainMesh_test.cpp`) — Step 5
 
 - **T1** `ToECEF_AtEquatorPrimeMeridian` — vertex at ENU (0,0,0) with centroid at (0°N, 0°E, 0m): ECEF x ≈ 6,378,137 m ± 0.1 m
 - **T2** `ToECEF_AtEquator90E` — vertex at ENU (0,0,0) with centroid at (0°N, 90°E, 0m): ECEF y ≈ 6,378,137 m ± 0.1 m
 - **T3** `ToNED_AtCentroidPosition` — `toNED()` vertex at centroid position → NED (0, 0, 0) ± 0.01 m
 - **T4** `ToNED_100mEast` — `toNED()` vertex 100 m east of reference → NED (0, 100, 0) ± 0.1 m
 
-### Implementation Notes
+### Implementation Notes — Step 5
 
 ENU-to-ECEF rotation matrix (λ = longitude, φ = latitude):
 
-```
+```text
 R_enu = [[-sinλ,       cosλ,      0    ],
          [-sinφ·cosλ, -sinφ·sinλ,  cosφ ],
          [ cosφ·cosλ,  cosφ·sinλ,  sinφ ]]ᵀ
@@ -325,7 +325,7 @@ NED from ECEF: apply `R_ned` at the reference point; `P_NED = R_ned * (P_ecef - 
 
 ## Step 6 — Subset Queries: `queryLocalAABB()`, `queryGeodeticAABB()`, `querySphere()` (6 tests) ✅
 
-### Failing Tests (add to `test/TerrainMesh_test.cpp`)
+### Failing Tests (add to `test/TerrainMesh_test.cpp`) — Step 6
 
 - **T1** `QueryLocalAABB_CenteredOnTile_ReturnsCell` — 500 m half-extents centered on a tile centroid → returns that tile
 - **T2** `QueryLocalAABB_FarFromAllTiles_ReturnsEmpty` — offset 10 km away from all tile centroids → returns empty
@@ -397,7 +397,7 @@ private:
 
 ## Step 8 — Line-of-Sight Query (3 tests) ✅
 
-### Failing Tests (add to `test/TerrainMesh_test.cpp`)
+### Failing Tests (add to `test/TerrainMesh_test.cpp`) — Step 8
 
 - **T1** `LineOfSight_AboveFlatTerrain_ReturnsTrue` — both points well above flat zero-elevation terrain → `lineOfSight()` returns true
 - **T2** `LineOfSight_BelowTerrain_ReturnsFalse` — one point at h = -1 m (below terrain elevation 0 m) → returns false
@@ -462,7 +462,7 @@ public:
 - **T4** `TerrainMesh_JsonSchemaVersionMismatch_Throws` — JSON schema version mismatch → `std::runtime_error`
 - **T5** `TerrainMesh_EmptySerializeDeserialize` — empty `TerrainMesh` round-trips without error; `cellAt()` returns `nullptr`
 
-### Proto Messages — append to `proto/liteaerosim.proto`
+### Proto Messages — append to `proto/liteaerosim.proto` — Step 10
 
 ```proto
 message TerrainTileProto {
@@ -500,7 +500,7 @@ Full specification in design authority §`.las_terrain` File Format.
 
 ## Step 11 — `TerrainMesh::exportGltf()` (4 tests) ✅
 
-### Failing Tests (add to `test/TerrainMesh_test.cpp`)
+### Failing Tests (add to `test/TerrainMesh_test.cpp`) — Step 11
 
 - **T1** `ExportGltf_GlbMagicBytes` — first 4 bytes are `0x46546C67` ("glTF" magic)
 - **T2** `ExportGltf_LiteaerosimExtrasPresent` — GLB JSON chunk contains `"liteaerosim_terrain": true` in root node `extras`
@@ -513,7 +513,7 @@ Add a FetchContent block pinned to the v2.x stable tag (MIT license, header-only
 Disable `stb_image` with `TINYGLTF_NO_STB_IMAGE` compile definition; `nlohmann_json` is
 already provided by the existing dependency.
 
-### Implementation Notes
+### Implementation Notes — Step 11
 
 Vertex buffer layout: `[east_m, north_m, up_m, r, g, b, a]` per vertex (4-byte aligned).
 Use `tinygltf::Model` to build the scene graph: one `Mesh` per tile, one `Node` with
@@ -549,7 +549,7 @@ struct SimulationFrame {
 } // namespace liteaerosim
 ```
 
-### Proto Messages — append to `proto/liteaerosim.proto`
+### Proto Messages — append to `proto/liteaerosim.proto` — Step 12
 
 ```proto
 message TrajectoryFrame {
@@ -618,6 +618,7 @@ pytest-cov>=5
 ### `python/tools/terrain/las_terrain.py`
 
 Public API:
+
 ```python
 def write_las_terrain(path: Path, tiles: list[TerrainTileData]) -> None: ...
 def read_las_terrain(path: Path) -> list[TerrainTileData]: ...

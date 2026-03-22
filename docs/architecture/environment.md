@@ -9,7 +9,7 @@ flies through. They live in the Domain Layer and have no I/O.
 ## Scope
 
 | Class | Responsibility |
-|-------|----------------|
+| ------- | ---------------- |
 | `Atmosphere` | ISA pressure, temperature, density, speed of sound, humidity, and density altitude given geometric altitude and non-standard day conditions |
 | `Wind` | Steady ambient wind vector in NED frame; supports constant and altitude-varying profiles |
 | `Turbulence` | Continuous random velocity and angular rate disturbances (Dryden model) |
@@ -48,7 +48,7 @@ flowchart TD
 ```
 
 | ID | Use Case | Mechanism |
-|----|----------|-----------|
+| ---- | ---------- | ----------- |
 | UC-E1 | Query atmospheric state at altitude | `Atmosphere::state(h_m)` |
 | UC-E2 | Query ambient wind vector | `Wind::wind_NED_mps(pos, time)` |
 | UC-E3 | Advance continuous turbulence | `Turbulence::step(altitude_m, airspeed_mps)` |
@@ -143,7 +143,7 @@ independent: a warm, high-pressure day has both $\Delta T > 0$ and $P_{sfc} > P_
 `Atmosphere` separates two categories of work:
 
 | Category | When computed | What |
-|----------|--------------|------|
+| ---------- | -------------- | ------ |
 | **Configuration constants** | Once, at construction | ISA layer boundary pressures, humidity coefficient $\varepsilon$, relative humidity $\phi$ from config |
 | **Altitude-dependent** | Every `state()` call | Geometric → geopotential conversion, layer selection, $T_\text{ISA}$, $P$, $T_v$, $\rho$, $c$, $h_d$ |
 
@@ -173,7 +173,7 @@ h_\text{gp} = \frac{R_E \cdot h_\text{geom}}{R_E + h_\text{geom}}
 $$
 
 | Layer | $h_\text{gp}$ range (m) | $T_b$ (K) | Lapse rate $L$ (K/m) |
-|-------|------------------------|-----------|----------------------|
+| ------- | ------------------------ | ----------- | ---------------------- |
 | Troposphere | 0 – 11 000 | 288.15 | −0.006 5 |
 | Tropopause | 11 000 – 20 000 | 216.65 | 0 (isothermal) |
 | Lower stratosphere | 20 000 – 32 000 | 216.65 | +0.001 0 |
@@ -322,7 +322,7 @@ where $L = 0.006\,5\,\text{K/m}$, $g_0/(R_d L) - 1 \approx 4.256$.
 Above the tropopause ($h > 11\,000\,\text{m}$), density altitude is found by numerical
 bisection on the isothermal-layer density formula.
 
-### C++ Interface
+### C++ Interface — Atmosphere
 
 ```cpp
 // include/environment/Atmosphere.hpp
@@ -396,7 +396,7 @@ private:
 ### Model Variants
 
 | Variant | Description | Intended use |
-|---------|-------------|--------------|
+| --------- | ------------- | -------------- |
 | `ConstantWind` | Uniform wind vector at all altitudes and positions | Simple scenario scripting |
 | `PowerLawWind` | Wind magnitude follows $V(h) = V_\text{ref}\,(h/h_\text{ref})^\alpha$ | Atmospheric boundary layer (low altitude) |
 | `LogarithmicWind` | $V(h) = V_\text{ref}\,\ln(h/z_0)/\ln(h_\text{ref}/z_0)$ | Neutral stability ABL with roughness length |
@@ -408,7 +408,7 @@ altitude (wind shear turning) is a future extension.
 The Hellmann exponent $\alpha$ is a configuration parameter. Typical values:
 
 | Terrain | $\alpha$ |
-|---------|---------|
+| --------- | --------- |
 | Open water | 0.11 |
 | Open flat terrain (grassland) | 0.14 |
 | Low crops, scattered obstacles | 0.16 |
@@ -417,7 +417,7 @@ The Hellmann exponent $\alpha$ is a configuration parameter. Typical values:
 The logarithmic profile roughness length $z_0$ has analogous terrain-dependent values
 (0.0002 m for sea, 0.03 m for open land, 0.5 m for forest).
 
-### C++ Interface
+### C++ Interface — Wind
 
 ```cpp
 // include/environment/Wind.hpp
@@ -463,7 +463,7 @@ private:
 
 ## `Turbulence`
 
-### Model
+### Model — Turbulence
 
 Continuous turbulence uses the **Dryden power spectral density model** per
 MIL-HDBK-1797, Appendix C (supersedes MIL-SPEC-8785C §3.7). The Dryden model produces
@@ -476,7 +476,7 @@ $(u_{wg}, v_{wg}, w_{wg})$ and three angular rate components $(p_{wg}, q_{wg}, r
 #### Intensity Levels
 
 | Level | Approximate $W_{20}$ (m/s) | Typical scenario |
-|-------|--------------------------|-----------------|
+| ------- | -------------------------- | ----------------- |
 | `Light` | 3.1 | Normal cruise, low convective activity |
 | `Moderate` | 6.2 | Active weather, mountainous terrain |
 | `Severe` | 12.4 | Thunderstorm proximity, severe convection |
@@ -557,7 +557,7 @@ White noise samples are drawn from a zero-mean unit-variance Gaussian using
 seed. The discrete-time white noise variance is scaled by $1/\sqrt{dt}$ to preserve
 power spectral density.
 
-### C++ Interface
+### C++ Interface — Turbulence
 
 ```cpp
 // include/environment/Turbulence.hpp
@@ -634,7 +634,7 @@ private:
 
 ## `Gust`
 
-### Model
+### Model — Gust
 
 The discrete gust follows the **1-cosine profile** from MIL-SPEC-8785C §3.9.1 and
 FAR/CS 25.341. The gust velocity rises from zero to a peak and returns to zero over a
@@ -649,6 +649,7 @@ v_{gust}(t) =
 $$
 
 Where:
+
 - $V_g$: signed gust velocity amplitude (m/s)
 - $H$: gust gradient distance (m); total gust length is $2H$
 - $V_a$: aircraft true airspeed at trigger time (m/s)
@@ -660,7 +661,7 @@ $z$-axis), consistent with a positive downward load factor increase.
 Independent vertical ($w$), lateral ($v$), and longitudinal ($u$) gusts can be
 triggered simultaneously or in sequence.
 
-### C++ Interface
+### C++ Interface — Gust
 
 ```cpp
 // include/environment/Gust.hpp
@@ -721,6 +722,7 @@ The scenario loop is responsible for calling `Atmosphere::state()`, `Wind::wind_
 `EnvironmentState`, then passing it to `Aircraft::step()`.
 
 Separation of concerns:
+
 - `Aircraft` does not hold references to `Atmosphere`, `Wind`, `Turbulence`, or `Gust`.
 - Environment evaluation frequency matches the simulation timestep.
 - All environment outputs are in SI units before `Aircraft::step()` receives them.
@@ -792,7 +794,7 @@ in point 1 still advances the yaw attitude.
 #### Summary
 
 | Component | Coupling point | Model requirement | Default when absent |
-|-----------|---------------|-------------------|---------------------|
+| ----------- | --------------- | ------------------- | --------------------- |
 | $p_{wg}$ | `KinematicState` angular rate | None | Applied unconditionally |
 | $q_{wg}$ | `KinematicState` angular rate | None | Applied unconditionally |
 | $q_{wg}$ | $\Delta\alpha_q$ → $\Delta n_z$ via $C_{L_q}$ | `AeroPerformance`: `cl_q_nd`, `mac_m` | Omitted |
@@ -817,7 +819,7 @@ not implement serialization — it is re-configured by the scenario on restore.
 ## Numerical Accuracy and Validation
 
 | Check | Tolerance | Reference |
-|-------|-----------|-----------|
+| ------- | ----------- | ----------- |
 | Sea-level ISA: $T_0 = 288.15\,\text{K}$ | ±0.01% | ICAO Doc 7488 |
 | Sea-level ISA: $P_0 = 101\,325\,\text{Pa}$ | ±0.01% | ICAO Doc 7488 |
 | Sea-level ISA: $\rho_0 = 1.225\,\text{kg/m}^3$ | ±0.01% | ICAO Doc 7488 |
@@ -883,7 +885,7 @@ not implement serialization — it is re-configured by the scenario on restore.
 ## Files
 
 | File | Action |
-|------|--------|
+| ------ | -------- |
 | `include/environment/AtmosphericState.hpp` | Create |
 | `include/environment/AtmosphereConfig.hpp` | Create |
 | `include/environment/Atmosphere.hpp` | Create |

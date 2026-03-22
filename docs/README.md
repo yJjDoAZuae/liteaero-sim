@@ -3,7 +3,7 @@
 ## Contents
 
 | Section | Description |
-|---|---|
+| --- | --- |
 | [Architecture](architecture/overview.md) | System design, layer model, subsystem breakdown |
 | [Dynamic Element Design](architecture/dynamic_element.md) | `DynamicElement` and `SisoElement` — the unified lifecycle base for all stateful components |
 | [Aircraft Design](architecture/aircraft.md) | Aircraft class — use cases, physics integration loop, serialization, JSON initialization |

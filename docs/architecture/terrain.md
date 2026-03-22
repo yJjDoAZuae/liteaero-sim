@@ -10,7 +10,7 @@ They live in the Domain Layer and have no I/O.
 ## Scope
 
 | Class | Responsibility |
-|-------|----------------|
+| ------- | ---------------- |
 | `V_Terrain` | Abstract base defining the elevation query interface |
 | `FlatTerrain` | Trivial constant-elevation implementation for unit tests and flat-earth scenarios |
 | `TerrainVertex` | Geodetic vertex (lat, lon, height above WGS84 ellipsoid) |
@@ -64,7 +64,7 @@ flowchart TD
 ```
 
 | ID | Use Case | Mechanism |
-|----|----------|-----------|
+| ---- | ---------- | ----------- |
 | UC-T1 | Query ground elevation at geodetic position | `V_Terrain::elevation_m(lat, lon)` |
 | UC-T2 | Query height above ground | `V_Terrain::heightAboveGround_m(alt, lat, lon)` |
 | UC-T3 | Select LOD tiles within spherical neighborhood | `TerrainMesh::querySphere(center, radius, max_lod)` |
@@ -140,7 +140,7 @@ scalars.  Callers need no knowledge of the internal local-grid encoding.
 Seven discrete LOD levels span the required resolution range of 10 m to 10 km:
 
 | Level | Name | Target vertex spacing | Slant range band | Typical use |
-|-------|------|-----------------------|-------------------|-------------|
+| ------- | ------ | ----------------------- | ------------------- | ------------- |
 | L0 | `FinestDetail` | 10 m | < 300 m | Ground collision, close-range sensor |
 | L1 | `VeryHighDetail` | 30 m | 300 m – 1 km | Short-range radar altimeter, terrain following |
 | L2 | `HighDetail` | 100 m | 1 km – 3 km | Medium-range sensor, terrain avoidance |
@@ -480,7 +480,7 @@ where $d_\text{max}$ is a caller-supplied maximum vertical deviation (m).  Recom
 values per target LOD transition:
 
 | Transition | $d_\text{max}$ |
-|------------|----------------|
+| ------------ | ---------------- |
 | L0 → L1 | 3 m |
 | L1 → L2 | 10 m |
 | L2 → L3 | 30 m |
@@ -625,7 +625,7 @@ imagery raster.  The pixel value at the centroid, or a bilinear average of the 3
 sample points, is used as the facet color.  For multispectral sources the RGB mapping is:
 
 | Source | R band | G band | B band |
-|--------|--------|--------|--------|
+| -------- | -------- | -------- | -------- |
 | Sentinel-2 L2A | B04 (665 nm) | B03 (560 nm) | B02 (490 nm) |
 | Landsat-8/9 | Band 4 (655 nm) | Band 3 (562 nm) | Band 2 (482 nm) |
 | MODIS Terra | Band 1 (645 nm) | Band 4 (555 nm) | Band 3 (469 nm) |
@@ -925,7 +925,7 @@ pre-processed data; it does not directly access any external data source.
 ### Elevation Data Sources
 
 | Source | Resolution | Height type | License | Access |
-|--------|-----------|-------------|---------|--------|
+| -------- | ----------- | ------------- | --------- | -------- |
 | **Copernicus DEM GLO-10** | 10 m (1/3600°) | Ellipsoidal (WGS84) | CC-BY 4.0 | Copernicus Data Space Ecosystem |
 | **Copernicus DEM GLO-30** | 30 m (1/1200°) | Ellipsoidal (WGS84) | CC-BY 4.0 | Copernicus Data Space Ecosystem |
 | **NASADEM** | 30 m | Orthometric (EGM96) | Public domain | NASA EarthData |
@@ -941,7 +941,7 @@ $h_\text{WGS84} = H_\text{MSL} + N_\text{EGM2008}$.
 ### Imagery Data Sources (for Facet Colors)
 
 | Source | Resolution | Bands used | License | Access |
-|--------|-----------|------------|---------|--------|
+| -------- | ----------- | ------------ | --------- | -------- |
 | **Sentinel-2 L2A** | 10 m | B04/B03/B02 | Free / Copernicus | Copernicus Data Space |
 | **Landsat-8/9 C2L2** | 30 m | 4/3/2 | Public domain | USGS EarthExplorer |
 | **MODIS Terra MCD43A4** | 500 m | Band 1/4/3 | Public domain | NASA EarthData |
@@ -1209,13 +1209,13 @@ def lod_grid_spacing_deg(lod: int) -> float:
 
 | LOD | Approx. vertex spacing | Grid interval |
 | --- | ---------------------- | ------------- |
-| 0   | 10 m                   | ~0.000090°    |
-| 1   | 30 m                   | ~0.000270°    |
-| 2   | 100 m                  | ~0.000900°    |
-| 3   | 300 m                  | ~0.002700°    |
-| 4   | 1,000 m                | ~0.009000°    |
-| 5   | 3,000 m                | ~0.027000°    |
-| 6   | 10,000 m               | ~0.090000°    |
+| 0 | 10 m | ~0.000090° |
+| 1 | 30 m | ~0.000270° |
+| 2 | 100 m | ~0.000900° |
+| 3 | 300 m | ~0.002700° |
+| 4 | 1,000 m | ~0.009000° |
+| 5 | 3,000 m | ~0.027000° |
+| 6 | 10,000 m | ~0.090000° |
 
 **ENU conversion:**  Each point $(lon_i, lat_i, h_i)$ is converted to an ECEF position,
 then projected into the tile centroid's local ENU frame using the standard rotation matrix.
@@ -1601,7 +1601,7 @@ vehicle actor transform each render frame.
 (vertices + facets):
 
 | Mode | Method | Use case |
-|------|--------|----------|
+| ------ | -------- | ---------- |
 | JSON | `serializeJson()` / `deserializeJson()` | Human-readable diagnostics and small test scenarios |
 | Protobuf | `serializeProto()` / `deserializeProto()` | High-performance warm-start; compact binary |
 | `.las_terrain` binary | `serializeLasTerrain()` / `deserializeLasTerrain()` | Primary simulation storage format (see §`.las_terrain` File Format) |

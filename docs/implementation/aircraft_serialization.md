@@ -12,7 +12,7 @@ see [`docs/architecture/aircraft.md — Serialization`](../architecture/aircraft
 are incomplete:
 
 | Gap | Location |
-|-----|----------|
+| ----- | ---------- |
 | `deserializeJson()` does not check `schema_version` or `"type"` | `src/Aircraft.cpp:170` |
 | `deserializeJson()` does not restore `_initial_state` | `src/Aircraft.cpp:182` |
 | `serializeProto()` and `deserializeProto()` are not declared or implemented | — |
@@ -24,7 +24,7 @@ are incomplete:
 ## Files to Create / Modify
 
 | File | Action |
-|------|--------|
+| ------ | -------- |
 | `src/Aircraft.cpp` | Fix `deserializeJson()` gaps; add `serializeProto()` / `deserializeProto()` |
 | `include/Aircraft.hpp` | Add `serializeProto()` / `deserializeProto()` declarations |
 | `proto/liteaerosim.proto` | Add `AircraftState` message |
@@ -95,7 +95,7 @@ if (_propulsion && j.contains("propulsion")) {
 
 ### `serializeProto()`
 
-```
+```text
 1. Construct las_proto::AircraftState proto.
 2. proto.set_schema_version(1).
 3. *proto.mutable_kinematic_state()    = parse(_state.serializeProto())
@@ -121,7 +121,7 @@ bytes, deserialize those bytes into the appropriate sub-message type and assign 
 
 Mirror of `deserializeJson()`:
 
-```
+```text
 1. ParseFromArray → las_proto::AircraftState proto.
 2. Check schema_version == 1; throw on mismatch.
 3. Restore _airframe, _inertia from proto fields.
@@ -168,7 +168,8 @@ Write failing tests first, then implement.
 ### Failing tests to add to `test/Aircraft_test.cpp`
 
 **JSON round-trip:**
-```
+
+```text
 1. Initialize Aircraft, step 10 times.
 2. snapshot = serializeJson()
 3. Create new Aircraft with same StubPropulsion type.
@@ -177,18 +178,21 @@ Write failing tests first, then implement.
 ```
 
 **Proto round-trip:**
-```
+
+```text
 Same pattern using serializeProto() / deserializeProto().
 ```
 
 **Schema-version mismatch — JSON:**
-```
+
+```text
 snapshot = serializeJson(); snapshot["schema_version"] = 99;
 EXPECT_THROW(deserializeJson(snapshot), std::runtime_error) with match "schema_version".
 ```
 
 **Schema-version mismatch — Proto:**
-```
+
+```text
 bytes = serializeProto(); corrupt byte at offset 0x08 (schema_version tag) to set value 99.
 EXPECT_THROW(deserializeProto(bytes), std::runtime_error) with match "schema_version".
 ```

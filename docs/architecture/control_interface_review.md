@@ -13,7 +13,7 @@ Issues are ordered by severity.
 ## Summary Table
 
 | # | Issue | Severity | Files |
-|---|-------|----------|-------|
+| --- | ------- | ---------- | ------- |
 | 1 | Tier-1 filters bypass NVI and shadow base members | Critical | `FilterSS2Clip`, `FilterTF`, `FilterTF2`, `FilterFIR`, `FilterSS` |
 | 2 | `Filter` provides no-op lifecycle defaults | Critical (enables #1) | `Filter.hpp` |
 | 3 | `SISOPIDFF` has no `DynamicElement` lifecycle | Significant | `SISOPIDFF.hpp/cpp` |
@@ -28,7 +28,7 @@ Issues are ordered by severity.
 
 ## Issue 1 — Tier-1 Filters Bypass NVI and Shadow Base Members
 
-**Severity: Critical**
+### Severity: Critical
 
 ### Problem
 
@@ -92,9 +92,9 @@ migration. `FilterSS2Clip` is the highest priority because it is used extensivel
 
 ## Issue 2 — `Filter` Provides No-Op Lifecycle Defaults
 
-**Severity: Critical (enables Issue 1)**
+### Severity: Critical (enables Issue 1)
 
-### Problem
+### Problem — Issue 2
 
 `Filter` provides default implementations for every `DynamicElement` lifecycle hook:
 
@@ -122,7 +122,7 @@ implementing the lifecycle. The consequences:
 The no-op defaults normalize and hide a broken design. They are not a temporary
 transition aid — they are the permanent mechanism that makes Issue 1 compile.
 
-### Recommended Fix
+### Recommended Fix — Issue 2
 
 Once the Tier-1 filters are migrated (Issue 1), remove the no-op defaults from
 `Filter`. The correct posture is:
@@ -147,9 +147,9 @@ concrete class, not in the abstract base. The base should never provide a pass-t
 
 ## Issue 3 — `SISOPIDFF` Has No `DynamicElement` Lifecycle
 
-**Severity: Significant**
+### Severity: Significant
 
-### Problem
+### Problem — Issue 3
 
 `SISOPIDFF` is the primary control law. It is a plain aggregate struct: no base class,
 no `initialize()`, no serialization. Its six `FilterSS2Clip` members, `Integrator`,
@@ -165,7 +165,7 @@ Consequences:
 - `SISOPIDFF` has a `reset(...)` method, but its signature is hand-rolled and does not
   conform to `DynamicElement::reset()`.
 
-### Recommended Fix
+### Recommended Fix — Issue 3
 
 Make `SISOPIDFF` derive from `DynamicElement` and implement the lifecycle:
 
@@ -204,9 +204,9 @@ serialization, the composite snapshot is meaningless.
 
 ## Issue 4 — `Gain` Template Is Prematurely Generic and Inconsistent
 
-**Severity: Moderate**
+### Severity: Moderate
 
-### Problem
+### Problem — Issue 4
 
 `Gain<T, NumAxes>` is parameterized on value type `T` and scheduling axis count
 `NumAxes`. In all current uses it is instantiated as `Gain<float, 3>`.
@@ -218,6 +218,7 @@ NumAxes>` member is never populated or used. The code implies scheduling exists 
 it does not, which is more confusing than having no scheduling code at all.
 
 **b) API is inconsistent with the rest of the codebase.** `Gain` uses:
+
 - `operator=(T K)` to set the gain value — reads as assignment, not configuration
 - `operator double()` to read the gain — inconsistent with `operator float()` everywhere else
 - `K()` accessor — ambiguous name; not self-documenting
@@ -246,9 +247,9 @@ The template parameters `T` and `NumAxes` are retained as-is.
 
 ## Issue 5 — `RateLimit` Derives from `LimitBase` Despite Semantic Mismatch
 
-**Severity: Moderate**
+### Severity: Moderate — Issue 5
 
-### Problem
+### Problem — Issue 5
 
 `LimitBase` defines an interface for **value saturation**: `setLower(float lim)` sets a
 value bound, and `isLimitedLower()` reports whether the signal is currently clamped to
@@ -264,13 +265,13 @@ The shared base API has the right shape (lower/upper/enable/disable) but the wro
 units. A caller reading `lowerLimit()` on a `LimitBase&` cannot tell whether it is
 reading a value bound or a rate bound.
 
-### Recommended Fix
+### Recommended Fix — Issue 5
 
 Remove `RateLimit` from the `LimitBase` hierarchy. With `RateLimit` gone, `LimitBase`
 has exactly one concrete subclass (`Limit`) and no caller holds a `LimitBase*`. Delete
 `LimitBase` entirely; derive both `Limit` and `RateLimit` from `SisoElement` directly:
 
-```
+```text
 SisoElement
 ├── Limit       (value saturation)
 ├── RateLimit   (rate saturation)
@@ -287,9 +288,9 @@ unchanged. `LimitBase.hpp` is deleted.
 
 ## Issue 6 — `Unwrap::step(float, float)` Bypasses NVI
 
-**Severity: Moderate**
+### Severity: Moderate — Issue 6
 
-### Problem
+### Problem — Issue 6
 
 `Unwrap` exposes two public `step` overloads:
 
@@ -311,7 +312,7 @@ The two-arg overload exists because `Unwrap` needs an external reference signal 
 cannot be passed through the single-arg NVI interface. This is a legitimate need, but
 the current mechanism leaks implementation.
 
-### Recommended Fix
+### Recommended Fix — Issue 6
 
 The cleanest fix is to keep the NVI chain but pass the reference differently. Options:
 
@@ -344,9 +345,9 @@ than an invisible side-channel argument.
 
 ## Issue 7 — Public Embedded `Limit` Members
 
-**Severity: Minor**
+### Severity: Minor
 
-### Problem
+### Problem — Issue 7
 
 `FilterSS2Clip::valLimit`, `FilterSS2Clip::rateLimit`, `Integrator::limit`, and
 `Derivative::limit` are all `public`. This allows callers to mutate limit state between
@@ -356,7 +357,7 @@ change. No invariants can be maintained by the owning class.
 Additionally, public member subobjects are serialized by the owner but configured by
 the caller, creating a split-ownership situation.
 
-### Recommended Fix
+### Recommended Fix — Issue 7
 
 The appropriate visibility depends on the intended usage:
 
@@ -373,9 +374,9 @@ methods for the operations actually used by callers.
 
 ## Issue 8 — C-Style Enums in the Control Namespace
 
-**Severity: Minor**
+### Severity: Minor — Issue 8
 
-### Problem
+### Problem — Issue 8
 
 `control.hpp` declares:
 
@@ -388,7 +389,7 @@ Both are C-style unscoped enums. Their enumerators are injected into
 `liteaerosim::control`, so `liteaerosim::control::NONE` conflicts with any other
 `NONE` in the namespace. `FwdEuler`, `BackEuler`, etc. are similarly unscoped.
 
-### Recommended Fix
+### Recommended Fix — Issue 8
 
 ```cpp
 enum class FilterError : uint16_t {
@@ -409,7 +410,7 @@ self-documenting (`ForwardEuler` not `FwdEuler`).
 
 ## Issue 9 — Naming Convention Violations (Comprehensive Inventory)
 
-**Severity: Minor**
+### Severity: Minor — Issue 9
 
 The CLAUDE.md convention is: `snake_case_` members (trailing underscore), `camelCase`
 methods, `PascalCase` classes, unit suffixes in names when not obvious (`altitude_m`,
@@ -424,7 +425,7 @@ CLAUDE.md mandates `snake_case_` (trailing underscore). These classes use the op
 convention (`_camelCase` with a leading underscore):
 
 | Class | Wrong name | Correct name |
-|-------|-----------|--------------|
+| ------- | ----------- | -------------- |
 | `FilterSS2Clip` | `_in` | `in_` |
 | `FilterSS2Clip` | `_out` | `out_` |
 | `FilterSS2Clip` | `_Phi` | `phi_` |
@@ -498,7 +499,7 @@ as the reference.
 Names that involve physical quantities with non-obvious units must carry a suffix.
 
 | Location | Wrong name | Correct name | Reason |
-|----------|-----------|--------------|--------|
+| ---------- | ----------- | -------------- | -------- |
 | `Derivative` member / accessor | `_Tau` / `Tau()` | `tau_s_` / `tau_s()` | time constant in seconds |
 | `Derivative` JSON key | `"tau"` | `"tau_s"` | serialized field must match name convention |
 | `RateLimit` member / accessor | `_dt` / `dt()` | `dt_s_` / `dt_s()` | timestep in seconds |
@@ -515,7 +516,7 @@ Names that involve physical quantities with non-obvious units must carry a suffi
 CLAUDE.md forbids abbreviations. Abbreviated names found in the control subsystem:
 
 | Location | Abbreviated name | Full name |
-|----------|-----------------|-----------|
+| ---------- | ----------------- | ----------- |
 | `DiscretizationMethod` enumerator | `FwdEuler` | `ForwardEuler` |
 | `DiscretizationMethod` enumerator | `BackEuler` | `BackwardEuler` |
 | `DiscretizationMethod` enumerator | `PZMatch` | `PoleZeroMatch` |
@@ -561,7 +562,7 @@ Private methods must be `camelCase`. `FilterSS2Clip` uses all-lowercase for its 
 helper methods:
 
 | Wrong name | Correct name |
-|-----------|--------------|
+| ----------- | -------------- |
 | `backsolve()` | `backSolve()` |
 | `backsolve1()` | `backSolve1()` |
 | `backsolve2()` | `backSolve2()` |
@@ -576,7 +577,7 @@ every applicable convention. Setting aside the broader visibility issue (Issue 7
 **Members — `SISOPIDFF`:**
 
 | Wrong name | Type | Correct name | Violations |
-|-----------|------|--------------|------------|
+| ----------- | ------ | -------------- | ------------ |
 | `Kp` | `Gain<float,3>` | `proportional_gain_` | abbreviation, missing trailing underscore |
 | `Ki` | `Gain<float,3>` | `integral_gain_` | abbreviation, missing trailing underscore |
 | `Kd` | `Gain<float,3>` | `derivative_gain_` | abbreviation, missing trailing underscore |
@@ -596,7 +597,7 @@ every applicable convention. Setting aside the broader visibility issue (Issue 7
 **Members — `ControlLoop`:**
 
 | Wrong name | Type | Correct name | Violations |
-|-----------|------|--------------|------------|
+| ----------- | ------ | -------------- | ------------ |
 | `pid` | `SISOPIDFF` | `controller_` (when private) | abbreviation |
 
 **Accessor methods — `SISOPIDFF` and `ControlLoop`:**
@@ -604,7 +605,7 @@ every applicable convention. Setting aside the broader visibility issue (Issue 7
 All accessor methods use abbreviations. Public method names must be self-documenting:
 
 | Wrong name | Correct name |
-|-----------|--------------|
+| ----------- | -------------- |
 | `cmd()` | `command()` |
 | `meas()` | `measurement()` |
 | `measDot()` | `measurementDerivative()` |
@@ -619,7 +620,7 @@ All accessor methods use abbreviations. Public method names must be self-documen
 ### 9f — Dead Code, Non-Const Parameters, and Missing `const` Qualifiers
 
 | File | Location | Issue |
-|------|----------|-------|
+| ------ | ---------- | ------- |
 | `FilterSS2Clip.cpp` | `float delU = in - inPrev;` in `step()` | computed but never used; dead code |
 | `FilterSS2Clip.cpp` | `static float dcTol = 1e-6;` | mutable static — should be `static constexpr float DC_TOLERANCE = 1.0e-6f;` |
 | `FilterSS2Clip.cpp` | `copy(FilterSS2Clip &filt)` parameter | should be `const FilterSS2Clip&` |
@@ -642,7 +643,7 @@ Method parameters must be `snake_case` (no trailing underscore). The following m
 use camelCase parameter names:
 
 | Class | Method | Wrong params | Correct params |
-|-------|--------|-------------|----------------|
+| ------- | -------- | ------------- | ---------------- |
 | `SISOPIDFF` | `step(float, float)` | `cmdIn`, `measIn` | `command`, `measurement` |
 | `SISOPIDFF` | `step(float, float, float)` | `cmdIn`, `measIn`, `measDotIn` | `command`, `measurement`, `measurement_derivative` |
 | `SISOPIDFF` | `reset(float, float, float)` | `cmdIn`, `measIn`, `outIn` | `command`, `measurement`, `output` |
@@ -655,12 +656,12 @@ use camelCase parameter names:
 
 ---
 
-### Recommended Fix
+### Recommended Fix — Issue 9g
 
 Fold renames into the migration pass that already touches each class:
 
 | Sub-issue | When to apply |
-|-----------|--------------|
+| ----------- | -------------- |
 | 9a — `FilterSS2Clip` members | Item D (NVI migration) |
 | 9a — `FilterTF2` members | Item E (NVI migration) |
 | 9a — `FilterTF`, `FilterFIR`, `FilterSS` members | Item F (NVI migration / consolidation) |
@@ -684,7 +685,7 @@ Fold renames into the migration pass that already touches each class:
 
 Dependencies between issues constrain the order:
 
-```
+```text
 Issue 2 (Filter no-ops)  ←blocks— Issue 1 (NVI migration)  ←blocks— Issue 3 (SISOPIDFF lifecycle)
 Issue 8 (enum class)     — independent, low risk
 Issue 5 (RateLimit base) — independent, moderate scope
@@ -697,7 +698,7 @@ Issue 9 (naming)         — fold into Issue 1 migration
 Suggested roadmap items, in order:
 
 | Item | Scope | Status |
-|------|-------|--------|
+| ------ | ------- | -------- |
 | A | `DiscretizationMethod` and `FilterError` → `enum class` (Issue 8) | ✅ Done |
 | B | `Limit` / `RateLimit` hierarchy: delete `LimitBase`; both derive from `SisoElement` directly (Issue 5) | ✅ Done |
 | C | `Gain` API cleanup: remove stubs, fix `operator=` → `set()`, `operator double()` → `operator float()`, `K()` → `value()`, `_K` → `value_`; template parameters retained (Issue 4 partial) | ✅ Done |

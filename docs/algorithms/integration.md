@@ -20,7 +20,7 @@ The table below covers algorithms suited to a real-time fixed-step simulation lo
 Speed is the primary constraint; embedded error estimation is a secondary nice-to-have.
 
 | Algorithm | Order | Evals / step | Error estimate | Notes |
-|-----------|-------|:------------:|:--------------:|-------|
+| ----------- | ------- | :------------: | :--------------: | ------- |
 | Forward Euler | 1st | 1 | No | Current; sufficient only at very high rates |
 | Midpoint (RK2) | 2nd | 2 | No | Halves global error vs. Euler |
 | Heun (RK2 + Euler) | 2nd | 2 | Yes (1st-order embedded) | Low-cost error estimate; rarely worth the complexity |
@@ -54,7 +54,7 @@ concerns.
 All integrable scalars are packed into a flat `KinematicStateVector` (Eigen vector).
 Suggested layout:
 
-```
+```text
 [ lat_rad, lon_rad, alt_m, vN_mps, vE_mps, vD_mps, qw, qx, qy, qz ]
 ```
 
@@ -131,7 +131,7 @@ preserved (see project convention: no backward-compatibility shims).
 ## 4. Vehicle Model Comparison
 
 | Model | Inputs | Integrated states | Angular dynamics |
-|-------|--------|-------------------|-----------------|
+| ------- | -------- | ------------------- | ----------------- |
 | **Trim aero (current)** | n, n_y, α, β, ṙ_wind | position, velocity, q_nw | Algebraic (load-factor constraint; no moment equations) |
 | **Trim aero + RK4** | same | same | Same — only integration accuracy improves |
 | **Full 6DOF** | forces & moments | position, velocity, q_nb, ω_body | Euler's rigid-body equations; integrates angular rates |

@@ -42,7 +42,7 @@ flowchart TD
 ```
 
 | ID | Use Case | Primary Actor | Mechanism |
-|----|----------|---------------|-----------|
+| ---- | ---------- | --------------- | ----------- |
 | UC-1 | Compute thrust for one timestep | `Aircraft::step()` | `V_Propulsion::step()` |
 | UC-2 | Query current thrust after step | `Aircraft::step()` | `V_Propulsion::thrust_n()` |
 | UC-3 | Reset warm-start state | `Aircraft::reset()` | `V_Propulsion::reset()` |
@@ -235,7 +235,7 @@ public:
 ### Interface Contracts
 
 | Precondition | Method | Postcondition |
-|---|---|---|
+| --- | --- | --- |
 | `throttle_nd` ∈ [0, 1] | `step()` | `thrust_n() ≥ 0` |
 | — | `reset()` | `thrust_n() == 0` |
 | — | `serializeJson()` | snapshot has `"schema_version"` and `"type"` |
@@ -254,7 +254,7 @@ public:
 
 **File:** `include/propulsion/PropulsionJet.hpp`, `src/propulsion/PropulsionJet.cpp`
 
-### Physical Model
+### Physical Model — PropulsionJet
 
 A first-principles net thrust model covering the subsonic flight envelope:
 
@@ -273,7 +273,7 @@ n = \frac{1}{\sqrt{1 + \text{BPR}}}
 $$
 
 | Engine type | Typical BPR | $n$ |
-|---|---|---|
+| --- | --- | --- |
 | Turbojet | 0 | 1.00 |
 | Low-bypass turbofan | 0.5–1 | 0.71–0.82 |
 | High-bypass turbofan | 5–10 | 0.38–0.41 |
@@ -297,7 +297,7 @@ $$
 T_{idle}(\rho) = f_{idle} \cdot T_{SL} \left(\frac{\rho}{\rho_{SL}}\right)^{n}
 $$
 
-#### Spool Dynamics — `FilterSS2Clip`
+#### Spool Dynamics — `FilterSS2Clip` (PropulsionJet)
 
 The engine's thermal-mechanical lag between commanded and actual thrust is modeled by a
 first-order discrete IIR filter. `FilterSS2Clip` provides both the dynamics and
@@ -360,7 +360,7 @@ _thrust_n = _spool_filter.step(T_demand) + T_ab;
 AB filter to drain naturally at its own time constant — representing light-off / blow-out
 dynamics.
 
-### Parameters
+### Parameters — PropulsionJet
 
 ```cpp
 struct PropulsionJetParams {
@@ -375,7 +375,7 @@ struct PropulsionJetParams {
 ```
 
 | Parameter | Typical range | Physical significance |
-|---|---|---|
+| --- | --- | --- |
 | `thrust_sl_n` | 5 kN – 200 kN | Installed sea-level static thrust |
 | `bypass_ratio` | 0 – 12 | Engine cycle type |
 | `inlet_area_m2` | 0.05 – 0.8 m² | Inlet frontal area |
@@ -384,16 +384,16 @@ struct PropulsionJetParams {
 | `ab_thrust_sl_n` | 0 (dry), 20–100% of T_sl | AB augmentation |
 | `ab_spool_tau_s` | 0.5 – 2 s | AB light-off |
 
-### Warm-Start State
+### Warm-Start State — PropulsionJet
 
 | Member | Serialized as | Description |
-|--------|---------------|-------------|
+| -------- | --------------- | ------------- |
 | `_spool_filter.x()` | `spool_state[0..1]` | Dry-spool filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
 | `_ab_filter.x()` | `ab_state[0..1]` | AB filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
 | `_ab_active` | `ab_active` | Current afterburner engagement |
 | `_thrust_n` | `thrust_n` | Last step total thrust (N); restored directly |
 
-### JSON State Schema
+### JSON State Schema — PropulsionJet
 
 ```json
 {
@@ -430,7 +430,7 @@ pattern from `MotorElectric`.
 
 ---
 
-### Physical Model
+### Physical Model — PropulsionEDF
 
 #### Thrust Envelope
 
@@ -457,7 +457,7 @@ $$
 T_{idle}(\rho) = f_{idle} \cdot T_{SL} \cdot \frac{\rho}{\rho_{SL}}
 $$
 
-#### Spool Dynamics — `FilterSS2Clip`
+#### Spool Dynamics — `FilterSS2Clip` (PropulsionEDF)
 
 The electric rotor responds faster than a gas turbine but is still limited by fan+motor
 inertia. The dynamics are modeled by a first-order IIR filter, using `FilterSS2Clip` for
@@ -507,7 +507,7 @@ and endurance analysis.
 
 ---
 
-### Parameters
+### Parameters — PropulsionEDF
 
 ```cpp
 struct PropulsionEdfParams {
@@ -523,7 +523,7 @@ struct PropulsionEdfParams {
 ```
 
 | Parameter | Typical range | Physical significance |
-|---|---|---|
+| --- | --- | --- |
 | `thrust_sl_n` | 5 N – 5 kN | Installed static thrust; read from spec sheet or bench test |
 | `fan_diameter_m` | 0.04 – 0.25 m | Fan disk diameter; sets actuator disk area |
 | `inlet_area_m2` | 0.001 – 0.05 m² | Duct inlet capture area; determines ram drag at speed |
@@ -536,7 +536,7 @@ struct PropulsionEdfParams {
 **Comparison with `PropulsionJet`:**
 
 | Property | `PropulsionJet` | `PropulsionEDF` |
-|---|---|---|
+| --- | --- | --- |
 | Density exponent | $1/\sqrt{1+\text{BPR}}$ | 1.0 (fixed — electric) |
 | Spool / rotor τ | 1–6 s (thermal) | 0.05–0.5 s (electric) |
 | Afterburner | Yes | No |
@@ -545,7 +545,7 @@ struct PropulsionEdfParams {
 
 ---
 
-### Class Declaration
+### Class Declaration — PropulsionEDF
 
 ```cpp
 namespace liteaerosim::propulsion {
@@ -580,14 +580,14 @@ private:
 
 ---
 
-### Warm-Start State
+### Warm-Start State — PropulsionEDF
 
 | Member | Serialized as | Description |
-|--------|---------------|-------------|
+| -------- | --------------- | ------------- |
 | `_spool_filter.x()` | `spool_state[0..1]` | Spool filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
 | `_thrust_n` | `thrust_n` | Last step thrust (N); restored directly |
 
-### JSON State Schema
+### JSON State Schema — PropulsionEDF
 
 ```json
 {
@@ -607,10 +607,10 @@ private:
 `PropellerAero` is a plain value type (no virtual methods, no state) that encapsulates
 propeller geometry and computes non-dimensional thrust and torque coefficients.
 
-### Parameters
+### Parameters — PropellerAero
 
 | Parameter | Symbol | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `diameter_m` | $D$ | m | Propeller diameter |
 | `pitch_m` | $p$ | m | Geometric pitch (advance per revolution at zero slip) |
 | `blade_count` | $N_b$ | — | Number of blades |
@@ -619,7 +619,7 @@ propeller geometry and computes non-dimensional thrust and torque coefficients.
 ### Derived Quantities (computed at construction, stored)
 
 | Derived | Expression | Description |
-|---|---|---|
+| --- | --- | --- |
 | Disk area | $A = \pi (D/2)^2$ | Actuator disk area (m²) |
 | Zero-thrust advance ratio | $J_0 = p/D$ | $J$ at which $C_T \to 0$ |
 | 75% radius pitch angle | $\theta_{75} = \arctan(p\,/\,(0.75\,\pi\,D))$ | Blade angle at 75% radius |
@@ -773,7 +773,7 @@ $$
 #### Motor Parameters
 
 | Parameter | Symbol | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `kv_rps_per_v` | $K_V$ | rad/s/V | Back-EMF / velocity constant |
 | `r_terminal_ohm` | $R$ | Ω | Phase winding resistance (1–100 mΩ typical); used only in `batteryCurrent_a()` |
 | `inertia_motor_kg_m2` | $J$ | kg·m² | Rotor inertia (not including propeller) |
@@ -819,7 +819,7 @@ The ESC introduces two constraints:
 #### ESC / Controller Parameters
 
 | Parameter | Symbol | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `supply_voltage_v` | $V_{supply}$ | V | DC battery bus voltage |
 | `i_max_a` | $I_{max}$ | A | ESC peak current rating (MOSFET / thermal limit) |
 | `esc_efficiency_nd` | $\eta_{ESC}$ | — | DC-to-3-phase power conversion efficiency (0.90–0.98) |
@@ -862,7 +862,7 @@ computation path.
 
 ---
 
-### Class Declaration
+### Class Declaration — MotorElectric
 
 ```cpp
 namespace liteaerosim::propulsion {
@@ -914,7 +914,7 @@ private:
 
 **File:** `include/propulsion/MotorPiston.hpp`
 
-### Physical Model
+### Physical Model — MotorPiston
 
 A piston engine delivers shaft power that lapses with air density (supercharger effects
 are not modelled). Available power:
@@ -943,10 +943,10 @@ $$
 This is the target speed passed to the `FilterSS2Clip`. The filter's lag, together with
 `rateLimit`, prevents the rotor from accelerating faster than the inertia allows.
 
-### Parameters
+### Parameters — MotorPiston
 
 | Parameter | Symbol | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `power_max_w` | $P_{max}$ | W | Maximum shaft power at sea level |
 | `peak_omega_rps` | $\Omega_{peak}$ | rad/s | Speed at maximum power |
 | `altitude_exponent` | $n_{alt}$ | — | Density exponent for power lapse (≈1.0 normally aspirated) |
@@ -964,6 +964,7 @@ This is the target speed passed to the `FilterSS2Clip`. The filter's lag, togeth
 pointer). The rotor speed dynamics are modelled entirely by a `FilterSS2Clip`.
 
 The rotor speed `Omega` is the coupling variable between motor and propeller:
+
 - Motor produces torque $Q_{motor}(\Omega, \delta_T, \rho)$
 - Propeller requires torque $Q_{prop}(\Omega, V, \rho)$
 - Rotor dynamics: $J\,\dot\Omega = Q_{motor} - Q_{prop}$
@@ -971,7 +972,7 @@ The rotor speed `Omega` is the coupling variable between motor and propeller:
 This is approximated as a first-order lag around the equilibrium speed, implemented by
 the `FilterSS2Clip`:
 
-```
+```text
 Omega_target = motor.noLoadOmega_rps(throttle_nd, rho_kgm3)
 
 _rotor_filter.valLimit.setUpper(motor.maxOmega_rps())
@@ -1006,25 +1007,25 @@ _rotor_filter.valLimit.setLower(0.f);
 _rotor_filter.valLimit.setUpper(motor.maxOmega_rps());
 ```
 
-### Parameters
+### Parameters — PropulsionProp
 
 | Source | Parameter | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `PropellerAero` | `diameter_m`, `pitch_m`, `blade_count`, `blade_solidity` | — | Propeller geometry |
 | `V_Motor` | (varies by subclass) | — | Motor model parameters |
 | `PropulsionProp` | `dt_s` | s | Fixed simulation timestep |
 | `PropulsionProp` | `rotor_tau_s` | s | Rotor speed first-order lag (0.2–3 s); see Rotor Time Constant above |
 
-### Warm-Start State
+### Warm-Start State — PropulsionProp
 
 | Member | Serialized as | Description |
-|--------|---------------|-------------|
+| -------- | --------------- | ------------- |
 | `_rotor_filter.x()` | `rotor_state[0..1]` | Rotor filter internal state vector `[x[0], x[1]]`; restored via `resetState()` |
 | `_thrust_n` | `thrust_n` | Last computed thrust (N); restored directly |
 
 `V_Motor` is stateless — no motor state is serialized.
 
-### JSON State Schema
+### JSON State Schema — PropulsionProp
 
 ```json
 {
@@ -1056,7 +1057,7 @@ flowchart LR
 ```
 
 | Model | Filter | Input | `valLimit` lower | `valLimit` upper | `tau` source |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | `PropulsionJet` (dry) | `_spool_filter` | `throttle * T_avail` | `T_idle(rho)` | `T_avail(rho, V)` | `spool_tau_s` (config) |
 | `PropulsionJet` (AB) | `_ab_filter` | `T_ab_avail` or `0` | `0` | `T_ab_avail(rho)` or `0` | `ab_spool_tau_s` (config) |
 | `PropulsionEDF` | `_spool_filter` | `throttle * T_avail` | `T_idle(rho)` | `T_avail(rho, V)` | `rotor_tau_s` (config) |
@@ -1184,7 +1185,7 @@ objects are constructed directly in application or test code.
 ## File Map
 
 | File | Contents |
-|------|----------|
+| ------ | ---------- |
 | `include/propulsion/V_Propulsion.hpp` | Abstract base class |
 | `include/propulsion/PropulsionJet.hpp` | Jet model declaration; `PropulsionJetParams` struct |
 | `include/propulsion/PropulsionEDF.hpp` | EDF model declaration; `PropulsionEdfParams` struct |

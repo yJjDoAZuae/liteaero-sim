@@ -7,7 +7,7 @@ This file provides Claude Code with the project's development standards. Read th
 ## Coding Guidelines
 
 | Document | Scope |
-|---|---|
+| --- | --- |
 | [docs/guidelines/general.md](docs/guidelines/general.md) | TDD, naming standards, SI units, serialization, architecture |
 | [docs/guidelines/cpp.md](docs/guidelines/cpp.md) | C++ conventions, tooling, testing with gtest, CMake |
 | [docs/guidelines/python.md](docs/guidelines/python.md) | Python conventions, type hints, testing with pytest, tooling |
@@ -22,17 +22,17 @@ This file provides Claude Code with the project's development standards. Read th
 
 1. **No unsolicited implementation** — Do not write, edit, or generate source code, test code, or build-system files unless the user has explicitly instructed you to implement or code something in the current message. Reading files, updating documentation, and updating implementation-plan documents are always permitted. When in doubt, ask rather than implement.
 2. **TDD** — Write a failing test before writing production code.
-2. **SI units** — All stored values are meters, radians, seconds, kilograms, newtons. No exceptions inside the domain layer.
-3. **Unit conversion** — Only at the outermost interface (display, config file parsing). Never inside computation code.
-4. **Serialization** — Every stateful class implements both `serializeJson()`/`deserializeJson()` (nlohmann/json) and `serializeProto()`/`deserializeProto()` (protobuf v3). Round-trip tests are required for both formats.
-5. **Naming** — Names are self-documenting. Abbreviations and Hungarian notation are forbidden. Encode units in names when not obvious from context.
-6. **Initial development phase — no backward compatibility, no schema version iteration** — The project is in initial development. There are no deployed APIs or serialized files to protect. Do not add forwarding shims, deprecated aliases, or compatibility wrappers. When an API changes, update all call sites directly and delete the old form. When code is removed, remove it completely. `schema_version` is always `1`; never increment it. When the project transitions to a maintenance phase this policy will change, but the versioning infrastructure is already in place for that transition.
-7. **American English** — Use American spellings in all comments, documentation, identifiers, and string literals (e.g. "color" not "colour", "serialize" not "serialise").
-8. **Documentation reflects the present** — Keep all documentation accurate to the current state of the code. Remove or update any section that describes a previous design or a state that no longer exists. Do not leave historical notes inline; version control preserves history. Proposed extensions to the architecture (new subsystems, planned classes, future algorithms) may be documented, but must be clearly labeled as proposed or not yet implemented — never described as if they already exist.
+3. **SI units** — All stored values are meters, radians, seconds, kilograms, newtons. No exceptions inside the domain layer.
+4. **Unit conversion** — Only at the outermost interface (display, config file parsing). Never inside computation code.
+5. **Serialization** — Every stateful class implements both `serializeJson()`/`deserializeJson()` (nlohmann/json) and `serializeProto()`/`deserializeProto()` (protobuf v3). Round-trip tests are required for both formats.
+6. **Naming** — Names are self-documenting. Abbreviations and Hungarian notation are forbidden. Encode units in names when not obvious from context.
+7. **Initial development phase — no backward compatibility, no schema version iteration** — The project is in initial development. There are no deployed APIs or serialized files to protect. Do not add forwarding shims, deprecated aliases, or compatibility wrappers. When an API changes, update all call sites directly and delete the old form. When code is removed, remove it completely. `schema_version` is always `1`; never increment it. When the project transitions to a maintenance phase this policy will change, but the versioning infrastructure is already in place for that transition.
+8. **American English** — Use American spellings in all comments, documentation, identifiers, and string literals (e.g. "color" not "colour", "serialize" not "serialise").
+9. **Documentation reflects the present** — Keep all documentation accurate to the current state of the code. Remove or update any section that describes a previous design or a state that no longer exists. Do not leave historical notes inline; version control preserves history. Proposed extensions to the architecture (new subsystems, planned classes, future algorithms) may be documented, but must be clearly labeled as proposed or not yet implemented — never described as if they already exist.
 
 ### Architecture at a Glance
 
-```
+```text
 Interface Layer      ← unit conversions, config parsing, display
 Application Layer    ← scenario setup, session management
 Domain Layer         ← physics, guidance, control, propulsion (pure SI, no I/O)
@@ -55,7 +55,7 @@ Every dynamic element implements: `initialize(config)` → `reset()` → `step(u
 Full project documentation lives in [docs/](docs/README.md).
 
 | Document | Contents |
-|---|---|
+| --- | --- |
 | [docs/architecture/overview.md](docs/architecture/overview.md) | Layer model, subsystem map, coordinate frames, data flow |
 | [docs/architecture/dynamic_block.md](docs/architecture/dynamic_block.md) | **Design authority** for all SISO dynamic elements — `DynamicBlock` NVI pattern, serialization contract, logging interface, migration strategy |
 | [docs/algorithms/filters.md](docs/algorithms/filters.md) | Filter discretization, Tustin bilinear prewarping, control algorithms |
@@ -71,7 +71,7 @@ Full project documentation lives in [docs/](docs/README.md).
 
 ## Project Structure
 
-```
+```text
 include/             C++ public headers (mirrored by subsystem)
 src/                 C++ implementation files
 test/                C++ unit tests (Google Test)
@@ -97,7 +97,7 @@ cmake/               CMake helpers
 **C++ integration method (in priority order):**
 
 | Situation | Method |
-|---|---|
+| --- | --- |
 | Source available, CMake supported | `FetchContent` in `cmake/Dependencies.cmake` — pin to a tag/SHA |
 | Source available, no CMake | Git submodule under `extern/`, write a CMake wrapper |
 | Binary-only (no source available) | Vendor under `libs/` with a CMake `IMPORTED` target — last resort |
@@ -107,7 +107,7 @@ cmake/               CMake helpers
 **Current dependencies:**
 
 | Library | Version | License | Method |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | googletest | v1.17.0 | BSD-3-Clause | FetchContent |
 | nlohmann_json | v3.12.0 | MIT | FetchContent |
 | protobuf | v3.21.12 | BSD-3-Clause | `find_package` + FetchContent fallback |
@@ -118,7 +118,7 @@ cmake/               CMake helpers
 ## Key Conventions at a Glance
 
 | Topic | Rule |
-|---|---|
+| --- | --- |
 | C++ naming | `PascalCase` classes, `camelCase` methods, `snake_case_` members, `SCREAMING` constants |
 | Python naming | `PascalCase` classes, `snake_case` functions/variables, `SCREAMING` constants |
 | Booleans | Named as predicates: `is_converged`, `has_waypoint` |

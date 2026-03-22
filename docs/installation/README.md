@@ -3,7 +3,7 @@
 ## Prerequisites
 
 | Tool | Minimum Version | Notes |
-|---|---|---|
+| --- | --- | --- |
 | CMake | 3.16 | [cmake.org](https://cmake.org/download/) |
 | C++ Compiler | C++17 | MSVC 2019+, GCC 9+, or Clang 10+ |
 | Git | Any recent | Required for FetchContent dependency downloads |
@@ -22,6 +22,7 @@ cd LiteAeroSim
 Eigen3 must be available as a system or user installation. It is a header-only library.
 
 **Windows (winget):**
+
 ```powershell
 winget install eigen
 ```
@@ -64,6 +65,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 Or from the build directory:
+
 ```bash
 cd build && ctest -C Release --output-on-failure
 ```
@@ -73,6 +75,7 @@ Expected output: all tests pass except the known pre-existing failures documente
 ## 5. VSCode Setup
 
 Install the following extensions:
+
 - **CMake Tools** (`ms-vscode.cmake-tools`) — configure, build, and run CTest from the IDE
 - **C/C++** (`ms-vscode.cpptools`) — IntelliSense and debugging
 
@@ -133,7 +136,7 @@ does not require re-running the script.
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
-|---|---|---|
+| --- | --- | --- |
 | `Could not find Eigen3` | Eigen not installed or path not set | Set `EIGEN3_INCLUDE_DIR` environment variable |
 | FetchContent download fails | No internet / proxy | Pre-populate fetch cache or use offline mirror |
 | `gh` not found in terminal | PATH not updated | Restart VSCode after adding `C:\Program Files\GitHub CLI` to PATH |
