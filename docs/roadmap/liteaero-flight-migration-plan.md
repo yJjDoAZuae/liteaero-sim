@@ -37,6 +37,7 @@ Namespace decisions are final. All target namespaces are recorded in `decisions.
 | Tests migrate alongside the code | The liteaero-flight repo includes its own test suite; relevant tests are moved from LiteAero Sim in Phase 1 and removed from LiteAero Sim in Phase 2 |
 | `ControlLoop` and `Control*` elements stay in LiteAero Sim | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, and `ControlLoop` are simulation-internal; they will use `liteaero::control` infrastructure after Phase 2 but remain in `liteaero::simulation` |
 | Estimation stubs (`NavigationFilter`, `WindEstimator`, `FlowAnglesEstimator`) are part of Phase 1 | Create them in `liteaero-flight` at Step 9, not in LiteAero Sim; any LiteAero Sim stub files for these must be removed |
+| ICD ownership follows the component that defines the type | `liteaero-flight` owns the ICDs for its inputs and outputs (`AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, sensor measurement structs, `V_Terrain`, `ILogger`/`LogSource`); these live in `liteaero-flight/docs/interfaces/icds.md`; LiteAero Sim owns only its internal ICDs (`AtmosphericState`, `EnvironmentState`, and any future sim-internal interfaces); at Step 12 the liteaero-sim ICD entries for flight-owned types are replaced with cross-references to `liteaero-flight/docs/interfaces/icds.md` |
 
 ---
 
@@ -200,6 +201,9 @@ liteaero-flight/
   CMakeLists.txt          # root — defines all targets, fetches dependencies
   cmake/
     Dependencies.cmake    # FetchContent for googletest, nlohmann/json, protobuf, Eigen
+  CMakeLists.txt          # root — defines all targets, fetches dependencies
+  cmake/
+    Dependencies.cmake    # FetchContent for googletest, nlohmann/json, protobuf, Eigen
   include/
     liteaero/
       log/
@@ -226,6 +230,19 @@ liteaero-flight/
     autopilot/
   proto/
     liteaero_flight.proto
+  docs/
+    guidelines/           # general.md and cpp.md copied from LiteAero Sim
+    interfaces/
+      icds.md             # stub — populated at Step 7
+    architecture/         # populated per step alongside code
+    algorithms/           # populated per step alongside code
+    roadmap/              # populated per step alongside code
+    testing/
+      strategy.md
+    installation/
+      README.md
+    dependencies/
+      README.md
 ```
 
 The root `CMakeLists.txt` defines one `STATIC` library target per subsystem, each with
@@ -429,6 +446,14 @@ used as a placeholder below):
 All types in this target are plain value structs with no virtual methods, no lifecycle, and
 no serialization machinery (per the `decisions.md` module communication interface decision).
 
+**Write ICD entries:** For each type created above, add a corresponding ICD entry to
+`liteaero-flight/docs/interfaces/icds.md`. Each entry documents the producer, consumer(s),
+transport, field list with units, and any constraints. These ICDs are the design authority
+for the interface — `liteaero-flight` owns them because it defines the types. The existing
+ICD-1 (`AircraftCommand`) and ICD-4 (`KinematicState`) entries in
+`liteaero-sim/docs/architecture/system/present/icds.md` are not yet modified; they will be
+replaced with cross-references at Step 12.
+
 **Verification:** `cmake --build build && test/interfaces/liteaero_ifc_test` — all static
 assertion tests pass.
 
@@ -579,6 +604,14 @@ liteaero-flight interfaces test (Step 7).
 **`AircraftCommand`:** All LiteAero Sim references to `liteaerosim::AircraftCommand` are
 updated to the shared interface target's `AircraftCommand`. The definition is removed from
 `Aircraft.hpp`.
+
+**ICD cross-references — replace flight-owned ICD entries in LiteAero Sim:** In
+`liteaero-sim/docs/architecture/system/present/icds.md`, replace the entries for ICD-1
+(`AircraftCommand`), ICD-4 (`KinematicState`/`KinematicStateSnapshot`), ICD-5
+(`AirDataMeasurement`), ICD-6 (`V_Terrain`), and ICD-7 (`ILogger`/`LogSource`) with a
+one-line cross-reference to `liteaero-flight/docs/interfaces/icds.md`. LiteAero Sim retains
+only ICD-2 (`AtmosphericState`) and ICD-3 (`EnvironmentState`), which are
+simulation-internal and never cross to flight code.
 
 **Verification:** `cmake --build build && build/test/liteaerosim_test.exe` — all LiteAero Sim
 tests pass. liteaero-flight tests are unchanged.
