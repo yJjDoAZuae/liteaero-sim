@@ -16,8 +16,9 @@ This is the primary runtime boundary between LiteAeroSim and the FlightCode comp
 
 **Transport options (any of the following; selected by deployment configuration):**
 
-- Direct in-process function call (co-resident SITL, same process)
-- Local IPC (co-resident SITL, separate processes on same host)
+- Direct in-process function call (development SITL, same process — not permitted in verification venues)
+- Local IPC (development SITL, separate processes on same host — not permitted in verification venues)
+- Container network — UDP or TCP socket across the Docker container boundary (containerized SITL verification; UC-2b)
 - Network message (HITL; companion-computer SITL)
 - MAVLink over UDP (ArduPilot/PX4 integration)
 
@@ -37,6 +38,9 @@ This is the primary runtime boundary between LiteAeroSim and the FlightCode comp
 - Timing: in real-time SITL, commands must arrive within one timestep; late commands
   are held at last value (zero-order hold).
 - The interface is stateless: LiteAeroSim does not depend on any FlightCode internal state.
+- In SITL verification venues (UC-2b), the transport must be a container network transport.
+  Direct in-process calls and shared-memory IPC are not permitted in verification configurations
+  because they cannot be reproduced in the flight software deployment environment.
 
 ---
 
