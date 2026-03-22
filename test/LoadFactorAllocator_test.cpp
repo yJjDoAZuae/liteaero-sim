@@ -349,3 +349,285 @@ TEST_F(AllocatorFixture, ProtoSchemaVersionMismatchThrows) {
     LoadFactorAllocator restored(liftRestored, kS, kCYb);
     EXPECT_THROW(restored.deserializeProto(bad), std::runtime_error);
 }
+
+// ── Branch-continuation predictor ─────────────────────────────────────────────
+//
+// The predictor computes a first-order warm-start:
+//   α₀ = α_prev + δn_z · m·g / f′(α_prev)
+//   β₀ = β_prev + δn_y · m·g / g′(β_prev)
+//
+// In the linear lift region f is linear in α, so the predictor is exact: it
+// places Newton's initial iterate directly at the solution.  The solver
+// converges in a single iteration (i.e. the loop runs once and then checks
+// that f(α₀) = 0, yielding |α_new − α₀| = 0 < kTol).
+//
+// Without the predictor the warm-start is α_prev (the previous solution), so
+// a linear step of Δn = 0.1 g requires two loop iterations: one large Newton
+// step to the solution, then a second iteration to confirm |Δ| < kTol.
+//
+// The three tests below will not compile until `iterations` is added to
+// LoadFactorOutputs, and the convergence test will fail at runtime until the
+// predictor is implemented.
+
+TEST_F(AllocatorFixture, PredictorReducesIterationsOnLinearStep) {
+    // Establish warm-start at n=1 g (linear region, α ≈ 0.0699 rad).
+    alloc.solve({1.0f, 0.f, kQ, 0.f, kMass});
+
+    // Small step to n=1.1 g — still fully in the linear region.
+    // With the predictor, α₀ = α_prev + 0.1·m·g / (q·S·C_Lα) which is the
+    // exact solution: f(α₀) = 0 → |α_new − α₀| = 0 → converged on iteration 1.
+    const auto out = alloc.solve({1.1f, 0.f, kQ, 0.f, kMass});
+
+    // Correct solution sanity check.
+    const float alpha_expected = 1.1f * kMass * kG / (kQ * kS * gaLiftParams().cl_alpha);
+    EXPECT_NEAR(out.alpha_rad, alpha_expected, 1e-5f);
+
+    // With predictor: 1 iteration.  Without predictor: 2 iterations.
+    EXPECT_EQ(out.iterations, 1)
+        << "predictor must place the warm-start at the exact solution in the "
+           "linear region, converging in 1 iteration";
+}
+
+TEST_F(AllocatorFixture, PredictorJsonRoundTrip_IncludesNzPrevAndNyPrev) {
+    // After a solve the allocator must persist n_z_prev and n_y_prev so that
+    // the branch-continuation predictor state survives serialization.
+    alloc.solve({1.5f, 0.1f, kQ, 0.f, kMass});
+    const nlohmann::json j = alloc.serializeJson();
+
+    ASSERT_TRUE(j.contains("n_z_prev_nd")) << "JSON missing n_z_prev_nd";
+    ASSERT_TRUE(j.contains("n_y_prev_nd")) << "JSON missing n_y_prev_nd";
+    EXPECT_NEAR(j["n_z_prev_nd"].get<float>(), 1.5f, 1e-4f);
+    EXPECT_NEAR(j["n_y_prev_nd"].get<float>(), 0.1f, 1e-4f);
+
+    // After round-trip, a subsequent linear step must also converge in 1 iteration.
+    LiftCurveModel liftRestored(gaLiftParams());
+    LoadFactorAllocator restored(liftRestored, kS, kCYb);
+    restored.deserializeJson(j);
+
+    const auto outOrig = alloc.solve({1.6f, 0.1f, kQ, 0.f, kMass});
+    const auto outRest = restored.solve({1.6f, 0.1f, kQ, 0.f, kMass});
+
+    EXPECT_NEAR(outRest.alpha_rad, outOrig.alpha_rad, 1e-5f);
+    EXPECT_EQ(outRest.iterations, 1)
+        << "restored allocator must predict correctly — n_z_prev must be serialized";
+}
+
+TEST_F(AllocatorFixture, PredictorProtoRoundTrip_IncludesNzPrev) {
+    // Proto serialization must also preserve n_z_prev / n_y_prev.
+    alloc.solve({1.5f, 0.1f, kQ, 0.f, kMass});
+    const std::vector<uint8_t> bytes = alloc.serializeProto();
+
+    LiftCurveModel liftRestored(gaLiftParams());
+    LoadFactorAllocator restored(liftRestored, kS, kCYb);
+    restored.deserializeProto(bytes);
+
+    const auto outOrig = alloc.solve({1.6f, 0.1f, kQ, 0.f, kMass});
+    const auto outRest = restored.solve({1.6f, 0.1f, kQ, 0.f, kMass});
+
+    EXPECT_NEAR(outRest.alpha_rad, outOrig.alpha_rad, 1e-5f);
+    EXPECT_EQ(outRest.iterations, 1)
+        << "restored allocator (proto) must predict correctly — n_z_prev must be serialized";
+}
+
+// ── Continuity and monotonicity across all lift-curve segments ─────────────────
+//
+// Derived values for gaLiftParams() (cl_alpha=5.73, cl_max=1.20, delta=0.05):
+//   alpha_peak = cl_max/cl_alpha + delta/2  ≈  0.234 rad
+//   alpha_star = alpha_peak − delta         ≈  0.184 rad   (Linear↔Incipient join)
+//   n_ceiling  = cl_max·qS/mg              ≈  3.0 g
+//   n_star     = cl_alpha·alpha_star·qS/mg ≈  2.64 g       (n at the join)
+//   Symmetric negative values by construction.
+
+TEST_F(AllocatorFixture, MonotonicNz_PositiveSweepThroughStall) {
+    // Sweeps n from 0 to 120 % of the positive stall ceiling, covering the full
+    // path: Linear → IncipientStall → clamp at alphaPeak.
+    // Extends MonotonicNStaysPreStall (which stops at 95 %) to include the
+    // incipient-stall transition and the clamp itself.
+    const float n_ceiling = gaLiftParams().cl_max * kQ * kS / (kMass * kG);
+
+    float alpha_prev = 0.f;
+    LoadFactorOutputs last{};
+    for (int i = 1; i <= 120; ++i) {
+        const float n = n_ceiling * (static_cast<float>(i) / 100.f);
+        last = alloc.solve({n, 0.f, kQ, 0.f, kMass});
+        EXPECT_GE(last.alpha_rad, alpha_prev - 1e-4f)
+            << "non-monotonic α at n = " << n << " g (step " << i << ")";
+        alpha_prev = last.alpha_rad;
+    }
+    EXPECT_NEAR(last.alpha_rad, lift.alphaPeak(), 1e-4f)
+        << "α must clamp at alphaPeak when Nz exceeds the stall ceiling";
+}
+
+TEST_F(AllocatorFixture, MonotonicNz_NegativeSweepThroughStall) {
+    // Sweeps n from 0 to 120 % of the negative stall ceiling, covering the full
+    // negative path: Linear → IncipientStallNegative → clamp at alphaTrough.
+    const float n_ceiling_neg = gaLiftParams().cl_min * kQ * kS / (kMass * kG);
+
+    float alpha_prev = 0.f;
+    LoadFactorOutputs last{};
+    for (int i = 1; i <= 120; ++i) {
+        const float n = n_ceiling_neg * (static_cast<float>(i) / 100.f);
+        last = alloc.solve({n, 0.f, kQ, 0.f, kMass});
+        EXPECT_LE(last.alpha_rad, alpha_prev + 1e-4f)
+            << "non-monotonic α at n = " << n << " g (step " << i << ")";
+        alpha_prev = last.alpha_rad;
+    }
+    EXPECT_NEAR(last.alpha_rad, lift.alphaTrough(), 1e-4f)
+        << "α must clamp at alphaTrough when Nz is below the negative stall ceiling";
+}
+
+TEST_F(AllocatorFixture, SegmentBoundary_AlphaMonotonicAcrossLinearIncipientJoin) {
+    // Fine-step (0.02 g) sweep from 2.5 g through the Linear→IncipientStall
+    // join (n_star ≈ 2.64 g) to 2.85 g.  The C¹ join in C_L(α) implies a
+    // continuous dα/dn — no jump in α should occur at the segment boundary.
+    // Both the Linear and IncipientStallPositive segments must be observed.
+    constexpr float kDn = 0.02f;
+
+    // Establish warm-start just below the sweep range.
+    alloc.solve({2.4f, 0.f, kQ, 0.f, kMass});
+    float alpha_prev  = alloc.solve({2.5f, 0.f, kQ, 0.f, kMass}).alpha_rad;
+
+    bool saw_linear    = false;
+    bool saw_incipient = false;
+
+    for (float n = 2.5f + kDn; n <= 2.85f + 1e-4f; n += kDn) {
+        const auto out = alloc.solve({n, 0.f, kQ, 0.f, kMass});
+        EXPECT_GE(out.alpha_rad, alpha_prev - 1e-4f)
+            << "non-monotonic α near the Linear→IncipientStall join at n = " << n;
+        if (out.alpha_segment == LiftCurveSegment::Linear)                  saw_linear    = true;
+        if (out.alpha_segment == LiftCurveSegment::IncipientStallPositive)  saw_incipient = true;
+        alpha_prev = out.alpha_rad;
+    }
+    EXPECT_TRUE(saw_linear)    << "sweep must pass through the Linear segment";
+    EXPECT_TRUE(saw_incipient) << "sweep must reach the IncipientStallPositive segment";
+}
+
+TEST_F(AllocatorFixture, StallRecovery_RequiresReset) {
+    // After a stall call (_alpha_prev = alphaPeak), Newton starts at the fold
+    // point where f'(alphaPeak) ≈ 0.  In floating-point arithmetic the residual
+    // f'(alphaPeak) is nonzero but tiny, so the fold guard (kTol = 1e-6) does
+    // not fire; Newton then takes a huge step to the wrong branch.
+    //
+    // Calling reset() clears the warm-start to zero.  The branch-continuation
+    // predictor then places Newton directly at the correct linear-region
+    // solution, converging in one iteration.
+    //
+    // This documents the correct usage: call reset() after any discontinuous
+    // change in demand (e.g., re-engagement after a stall event).
+    const float n_ceiling = gaLiftParams().cl_max * kQ * kS / (kMass * kG);
+    const float n_1g      = 1.0f;
+    const float alpha_1g  = n_1g * kMass * kG / (kQ * kS * gaLiftParams().cl_alpha);
+
+    // Drive to stall; warm-start is now at alphaPeak.
+    alloc.solve({n_ceiling * 1.5f, 0.f, kQ, 0.f, kMass});
+
+    // Without reset(): stale warm-start at the fold point causes the solver to
+    // converge to the wrong branch — result is far from the correct 1 g value.
+    const auto out_wrong = alloc.solve({n_1g, 0.f, kQ, 0.f, kMass});
+    EXPECT_GT(std::abs(out_wrong.alpha_rad - alpha_1g), 0.1f)
+        << "without reset(), stale warm-start at alphaPeak must corrupt the solve";
+
+    // After reset(): predictor finds the exact linear solution in one iteration.
+    alloc.reset();
+    const auto out_correct = alloc.solve({n_1g, 0.f, kQ, 0.f, kMass});
+    EXPECT_EQ(out_correct.alpha_segment, LiftCurveSegment::Linear)
+        << "after reset(), solver must return to the Linear segment";
+    EXPECT_NEAR(out_correct.alpha_rad, alpha_1g, 1e-4f)
+        << "after reset(), α must equal the linear-region solution";
+}
+
+// ── Black-box continuity: α must be monotone in Nz across the full domain ─────
+//
+// These tests treat the allocator as a black box.  They reference only the
+// test-fixture sizing parameters (kMass, kS, kQ, kCYb, kLargeThrust) — never
+// internal lift-curve quantities such as alphaPeak, alphaStar, or n_ceiling.
+//
+// Physical basis: for fixed T the normal-force equation f(α,n)=0 defines a
+// unique monotone branch α(n).  A positive increment in Nz must produce a
+// non-negative increment in α everywhere in the domain, including through the
+// stall transition and the clamped plateau.  10 g safely exceeds the stall
+// ceiling for both the zero-thrust and large-thrust cases.
+
+TEST_F(AllocatorFixture, Alpha_IsMonotone_ZeroThrust_PositiveSweep) {
+    // Sweeps Nz from 0 to +10 g in 0.02 g steps with warm-starting (T = 0).
+    // Covers the pre-stall, stall-transition, and clamped-plateau regions.
+    float alpha_prev = 0.f;
+    for (int i = 1; i <= 500; ++i) {
+        const float n   = static_cast<float>(i) * 0.02f;   // 0.02 g … 10 g
+        const auto  out = alloc.solve({n, 0.f, kQ, 0.f, kMass});
+        EXPECT_GE(out.alpha_rad, alpha_prev - 1e-4f)
+            << "α decreased on positive sweep at n = " << n << " g (T = 0)";
+        alpha_prev = out.alpha_rad;
+    }
+}
+
+TEST_F(AllocatorFixture, Alpha_IsMonotone_ZeroThrust_NegativeSweep) {
+    // Sweeps Nz from 0 to −10 g in 0.02 g steps with warm-starting (T = 0).
+    // Covers the negative pre-stall, stall-transition, and clamped-plateau regions.
+    float alpha_prev = 0.f;
+    for (int i = 1; i <= 500; ++i) {
+        const float n   = static_cast<float>(-i) * 0.02f;  // −0.02 g … −10 g
+        const auto  out = alloc.solve({n, 0.f, kQ, 0.f, kMass});
+        EXPECT_LE(out.alpha_rad, alpha_prev + 1e-4f)
+            << "α increased on negative sweep at n = " << n << " g (T = 0)";
+        alpha_prev = out.alpha_rad;
+    }
+}
+
+TEST_F(AllocatorFixture, Alpha_IsMonotone_WithThrust_PositiveSweep) {
+    // Sweeps Nz from 0 to +10 g with T = kLargeThrust.  Positive thrust raises
+    // the stall ceiling above the zero-thrust alphaPeak; the test verifies that
+    // α is monotone through this thrust-augmented ceiling without referencing
+    // its location.
+    float alpha_prev = 0.f;
+    for (int i = 1; i <= 500; ++i) {
+        const float n   = static_cast<float>(i) * 0.02f;
+        const auto  out = alloc.solve({n, 0.f, kQ, kLargeThrust, kMass});
+        EXPECT_GE(out.alpha_rad, alpha_prev - 1e-4f)
+            << "α decreased on positive sweep at n = " << n << " g (T = kLargeThrust)";
+        alpha_prev = out.alpha_rad;
+    }
+}
+
+TEST_F(AllocatorFixture, Alpha_Perturbation_IsMonotone_FullDomain) {
+    // At each operating point on a uniform grid, verifies that a positive
+    // perturbation δ in Nz produces a non-negative change in α.  Each point
+    // uses a fresh allocator so the result is independent of the warm-start
+    // path — a point-wise continuity check independent of traversal order.
+    //
+    // T = 0 case:    n₀ ∈ [−9 g, +9 g], step 0.5 g (37 points).
+    // T > 0 case:    n₀ ∈ [  0 g, +9 g], step 0.5 g (19 points).
+    //   (Large positive thrust makes very negative Nz infeasible; the positive
+    //   half covers the thrust-augmented stall region without hitting that limit.)
+    constexpr float kDelta = 0.05f;  // g
+
+    LiftCurveModel scratch_lift(gaLiftParams());
+
+    // T = 0: full signed domain.
+    for (int i = -18; i <= 18; ++i) {
+        const float n0 = static_cast<float>(i) * 0.5f;  // −9 g … +9 g
+
+        LoadFactorAllocator lo(scratch_lift, kS, kCYb);
+        LoadFactorAllocator hi(scratch_lift, kS, kCYb);
+
+        const float alpha_lo = lo.solve({n0 - kDelta, 0.f, kQ, 0.f, kMass}).alpha_rad;
+        const float alpha_hi = hi.solve({n0 + kDelta, 0.f, kQ, 0.f, kMass}).alpha_rad;
+
+        EXPECT_LE(alpha_lo, alpha_hi + 1e-4f)
+            << "T=0: α(n₀−δ) > α(n₀+δ) at n₀ = " << n0 << " g";
+    }
+
+    // T > 0: positive domain only.
+    for (int i = 0; i <= 18; ++i) {
+        const float n0 = static_cast<float>(i) * 0.5f;  // 0 g … +9 g
+
+        LoadFactorAllocator lo(scratch_lift, kS, kCYb);
+        LoadFactorAllocator hi(scratch_lift, kS, kCYb);
+
+        const float alpha_lo = lo.solve({n0 - kDelta, 0.f, kQ, kLargeThrust, kMass}).alpha_rad;
+        const float alpha_hi = hi.solve({n0 + kDelta, 0.f, kQ, kLargeThrust, kMass}).alpha_rad;
+
+        EXPECT_LE(alpha_lo, alpha_hi + 1e-4f)
+            << "T=kLargeThrust: α(n₀−δ) > α(n₀+δ) at n₀ = " << n0 << " g";
+    }
+}

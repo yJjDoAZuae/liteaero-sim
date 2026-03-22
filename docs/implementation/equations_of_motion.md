@@ -157,12 +157,54 @@ at the correct crossing above `alphaPeak()`.
 The β solver's derivative `g'(β) = q·S·C_Yβ − T·cos(α)·cos(β)` is always ≤ 0 for
 C_Yβ < 0, guaranteeing a unique root and no fold condition.
 
-### Warm-Starting
+### Warm-Starting and Branch-Continuation Predictor
 
-`_alpha_prev` and `_beta_prev` persist between `solve()` calls.  Starting Newton from
-the previous solution keeps the solver on the same branch across small load-factor
-increments and typically converges in 2–4 iterations.  Call `reset()` before a
-discontinuous change in demand.
+`_alpha_prev`, `_beta_prev`, `_n_z_prev`, and `_n_y_prev` persist between `solve()`
+calls.  Before the Newton loop, a first-order branch-continuation predictor computes:
+
+```text
+α₀ = α_prev + δn_z · m·g / f′(α_prev)
+β₀ = β_prev + δn_y · m·g / g′(β_prev)
+```
+
+In the linear lift region `f′(α)` is constant (`q·S·C_Lα`), so the predictor places
+Newton exactly at the solution and the solver converges in a single iteration.  The
+predictor is guarded by two conditions:
+
+- **f′ guard**: skip if `|f′(α_prev)| < kTol` (at the stall ceiling, no meaningful step
+  direction).
+- **Domain guard**: the raw prediction is only applied when it stays within
+  `[alphaSepNeg, alphaSep]`.  If the demand jump would project the warm-start into
+  the flat separated plateau (e.g., a cold-start excess-demand call), the predictor
+  falls back to `α_prev` so that the overshoot guards operate correctly.
+
+`reset()` sets `_alpha_prev`, `_beta_prev`, `_n_z_prev`, and `_n_y_prev` all to zero.
+Call `reset()` before a discontinuous change in demand.  All four fields are included
+in both JSON and proto serialization.
+
+### Stall Warm-Start Limitation
+
+When the fold guard or overshoot guard clamps α at the stall ceiling, `_alpha_prev` is left
+at the clamped value where $f'(\alpha) = 0$ by definition.  On the next `solve()` call:
+
+- The predictor f′ guard fires (`|f′(α_prev)| < kTol`), so the warm-start falls back to
+  α_prev (the clamped value).
+- The Newton loop starts at the clamped α.  In floating-point arithmetic `f′(alphaPeak)` for
+  $T = 0$ evaluates to a small nonzero residual (~3 × 10⁻⁶ for typical parameters) that
+  exceeds `kTol = 1e-6`.  The fold guard therefore does not fire at the first Newton
+  iteration.  Newton takes a large-magnitude step and the overshoot guard may pin α on the
+  opposite-sign branch — converging to the wrong solution.
+
+**Consequence**: a single discontinuous Nz jump past the stall ceiling (e.g., a direct step
+from 1 g to 1.5 × $N_{z,\text{max}}$) leaves the warm-start at the fold point.  The
+subsequent sub-ceiling `solve()` call is likely to converge to the wrong branch.
+
+**Required mitigation**: call `reset()` before any discontinuous change in demand, including
+re-engagement after a stall event.  In normal closed-loop simulation with small $dt$ the Nz
+command evolves continuously within one step, so the warm-start stays near the true solution
+and this limitation does not arise in practice.
+
+See `AllocatorFixture.StallRecovery_RequiresReset` in `test/LoadFactorAllocator_test.cpp`.
 
 ---
 
@@ -172,7 +214,7 @@ discontinuous change in demand.
 | --- | --- | --- |
 | KinematicState | 52 | `test/KinematicState_test.cpp` |
 | LiftCurveModel | 16 | `test/LiftCurveModel_test.cpp` |
-| LoadFactorAllocator | 19 | `test/LoadFactorAllocator_test.cpp` |
+| LoadFactorAllocator | 30 | `test/LoadFactorAllocator_test.cpp` |
 
 ---
 

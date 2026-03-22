@@ -70,6 +70,8 @@ message LoadFactorAllocatorState {
     float cl_y_beta      = 3;
     float alpha_prev_rad = 4;
     float beta_prev_rad  = 5;
+    float n_z_prev_nd    = 6;
+    float n_y_prev_nd    = 7;
 }
 
 // ---------------------------------------------------------------------------

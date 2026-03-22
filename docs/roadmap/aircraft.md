@@ -30,7 +30,7 @@ system integration, and interface details are to be determined by item 1.
 | ----------- | ------ | -------- |
 | `KinematicState` | `include/KinematicState.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `LiftCurveModel` | `include/aerodynamics/LiftCurveModel.hpp` | ✅ Implemented + serialization (JSON + proto); `alphaSep()` / `alphaSepNeg()` accessors added |
-| `LoadFactorAllocator` | `include/aerodynamics/LoadFactorAllocator.hpp` | ✅ Implemented + serialization (JSON + proto); alpha-ceiling guard corrected for positive thrust (see item 20) |
+| `LoadFactorAllocator` | `include/aerodynamics/LoadFactorAllocator.hpp` | ✅ Implemented + serialization (JSON + proto); alpha-ceiling guard corrected for positive thrust (item 20); branch-continuation predictor with domain guard (item 0a) |
 | `WGS84_Datum` | `include/navigation/WGS84.hpp` | ✅ Implemented |
 | `AeroPerformance` | `include/aerodynamics/AeroPerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
@@ -104,6 +104,8 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 18 | Control subsystem refactoring (Steps A–J, all nine issues in [`control_interface_review.md`](../architecture/control_interface_review.md)) — `FilterError`/`DiscretizationMethod` promoted to `enum class`; `LimitBase` deleted, `Limit`/`RateLimit` rebased to `SisoElement`; `Gain` API cleaned up (`set()`, `value()`, stubs removed); `FilterSS2Clip`, `FilterTF2`, `FilterTF`, `FilterFIR`, `FilterSS` migrated to NVI (`onStep()`/`onSerializeJson()`/`onDeserializeJson()`); shadow `_in`/`_out` members and no-op `Filter` defaults removed; `Unwrap` `ref_` field added (`setReference()`, NVI routing, serialization); `SISOPIDFF` derives from `DynamicElement` with full lifecycle, `snake_case_` member renames (`Kp`→`proportional_gain_`, `I`→`integrator_`, etc.), private limits, `ControlLoop` accessor renames (`out()`→`output()`, `pid`→`controller_`); `Integrator`/`Derivative` private member renames (`_dt`→`dt_s_`, `_Tau`→`tau_s_`, `limit`→`limit_`) | `FilterSS2Clip_test.cpp`, `FilterTF2_test.cpp`, `FilterFIR_test.cpp` (new), `FilterSS_test.cpp`, `Unwrap_test.cpp`, `SISOPIDFF_test.cpp` (new) — 29 new tests; 435 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 19 | `SensorAirData` — pitot-static air data computer; differential pressure ($q_c$) and static pressure ($P_s$) transducers with Gaussian noise, first-order Tustin lag, and fuselage crossflow pressure error (two-port symmetric crosslinked model); derives IAS, CAS, EAS, TAS, Mach, barometric altitude (Kollsman-referenced, troposphere + tropopause), OAT; RNG pimpl with seed + advance serialization; JSON + proto round-trips | `SensorAirData_test.cpp` — 19 tests; 454 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 20 | `LoadFactorAllocator` alpha-ceiling fix — Newton overshoot and fold guards corrected for positive-thrust case; the achievable-Nz ceiling is at $\alpha^*$ (where $f'(\alpha) = qSC_L'(\alpha) + T\cos\alpha = 0$), not at `alphaPeak()`, when $T > 0$; overshoot guard now clamps the proposed Newton step to the CL parabolic domain using `LiftCurveModel::alphaSep()` / `alphaSepNeg()` before checking $f'$, preventing escape into the flat separated plateau where $f' = T\cos\alpha$ stays positive until $\alpha > \pi/2$; bisects to locate $\alpha^*$ when the guard fires; fold guard stays at current iterate rather than snapping to `alphaPeak()`; `LiftCurveModel::alphaSep()` and `alphaSepNeg()` added to public interface; design documentation updated in `docs/implementation/equations_of_motion.md` and `docs/algorithms/equations_of_motion.md` | 4 new tests in `LoadFactorAllocator_test.cpp`; 19 tests total; 458 pass, 2 pre-existing `FilterTFTest` failures unchanged |
+| 0a | `LoadFactorAllocator` branch-continuation predictor — first-order warm-start $\alpha_0 = \alpha_\text{prev} + \delta n_z \cdot mg / f'(\alpha_\text{prev})$ and symmetric $\beta_0$ formula added to `solve()`; predictor is skipped at the stall ceiling ($f' \approx 0$) or when the raw prediction would fall outside $[\alpha_\text{sep\_neg}, \alpha_\text{sep}]$ (domain guard prevents cross-branch jumps on cold-start excess-demand calls); `_n_z_prev` and `_n_y_prev` added as serialized state fields in both JSON (`n_z_prev_nd`, `n_y_prev_nd`) and proto (`LoadFactorAllocatorState` fields 6–7); `iterations` (alpha solver iteration count) added to `LoadFactorOutputs`; `reset()` clears all four warm-start fields; `docs/implementation/equations_of_motion.md` §Warm-Starting updated | 3 new tests in `LoadFactorAllocator_test.cpp`: `PredictorReducesIterationsOnLinearStep` (iterations == 1 for an exact linear-region prediction), `PredictorJsonRoundTrip_IncludesNzPrevAndNyPrev`, `PredictorProtoRoundTrip_IncludesNzPrev`; 22 tests total |
+| 0b | `LoadFactorAllocator` test coverage extension — 8 new tests close continuity and domain-coverage gaps identified by code review. **White-box tests** (4): full positive and negative Nz sweeps through stall verifying the clamp value against `alphaPeak()`/`alphaTrough()`; fine-step sweep across the C¹ Linear→IncipientStall boundary confirming both segments are traversed; stall warm-start limitation test documenting that `reset()` is required after a discontinuous Nz jump. **Black-box tests** (4): uniform 500-step monotonicity sweeps from 0 to ±10 g for T = 0 (positive and negative) and T = `kLargeThrust` (positive); point-wise perturbation test at 37 grid points (T = 0, −9 g to +9 g) and 19 grid points (T > 0, 0 to +9 g) using fresh allocators. Stall warm-start limitation documented in `docs/implementation/equations_of_motion.md` §Stall Warm-Start Limitation | 30 tests total in `LoadFactorAllocator_test.cpp` |
 
 ---
 
@@ -168,7 +170,7 @@ are retained:
   config parameters added without a design; must be reconciled with or replaced by the
   parameters defined in the design document.
 
-### Deliverables
+### Deliverables — Command Processing
 
 1. ✅ Design authority document at `docs/architecture/aircraft.md` updated to cover the
    command processing architecture: filter topology (all three axes `setLowPassSecondIIR`),
@@ -183,30 +185,6 @@ are retained:
    roll-rate filter, and reads `cmd_deriv_tau_s` / `cmd_roll_rate_tau_s` from config
    rather than the natural-frequency and damping-ratio parameters the design prescribes.
 4. Fixture JSON files (`test/data/aircraft/`) updated to match new config schema.
-
----
-
-## 0a. LoadFactorAllocator — Branch-Continuation Predictor
-
-`docs/algorithms/equations_of_motion.md` documents a first-order predictor for the
-Newton warm-start that uses the implicit function theorem to estimate the new $\alpha$
-from the load-factor step change:
-
-$$\alpha_0 = \alpha_\text{prev} + \frac{\delta n \cdot mg}{f'(\alpha_\text{prev})}$$
-
-The current implementation uses only the plain warm-start $\alpha_0 = \alpha_\text{prev}$
-with no predictor step. For slowly varying load-factor commands the difference is
-negligible (Newton converges in 2–4 iterations either way), but for large discontinuous
-steps — such as those from an autopilot mode transition or a gust response — the plain
-warm-start may track a different branch and converge slowly. The predictor eliminates
-that risk.
-
-### Deliverables — Predictor
-
-1. Implement the first-order predictor in `LoadFactorAllocator::solve()`.
-2. Add a test case demonstrating that a large step-change in commanded Nz (e.g., from 1 g
-   to 3 g in a single call) converges in fewer iterations with the predictor than without.
-3. Update `docs/implementation/equations_of_motion.md` to remove the noted gap.
 
 ---
 
@@ -298,7 +276,7 @@ are added to the aerodynamic and propulsion contributions in `Aircraft::step()`.
 
 Produce documentation of requirements, architecture, algorithm design, verification, and implementation plan.
 
-### Scope
+### Scope — Gain Scheduling
 
 The design must address at minimum:
 
@@ -370,14 +348,14 @@ point commands. Control gains are derived by the Python gain design workflow (it
 autopilot must support simulation use cases (reset and initialization to arbitrary conditions
 for batch testing) as well as deployment as flight software.
 
-### Interface sketch
+### Interface Sketch — Autopilot
 
 *To be defined during design. Inputs will include the kinematic state, atmospheric state,
 and a set point struct (target altitude, target vertical speed, target heading, target roll
 attitude). The output command type and its interface to the simulation plant model will be
 defined by the architecture.*
 
-### Tests
+### Tests — Autopilot
 
 - Altitude hold: starting from a displaced altitude, output drives altitude error to zero
   within the expected settling time.
@@ -388,7 +366,7 @@ defined by the architecture.*
 - JSON and proto round-trips preserve filter states.
 - Reset and re-initialization to arbitrary conditions produces correct initial output.
 
-### Build Integration
+### Build Integration — Autopilot
 
 To be determined by item 1. The component must be buildable as standalone flight code and
 as a component co-resident with the LiteAeroSim simulation for integration testing.
@@ -406,7 +384,7 @@ cross-track error, along-track distance, and desired heading at a query position
 initial concrete segment type is `PathSegmentHelix` (straight line is a degenerate helix
 with infinite radius).
 
-### Interface sketch
+### Interface Sketch — Path
 
 ```cpp
 // Provisional — namespace and location subject to architecture definition (item 1)
@@ -447,7 +425,7 @@ public:
 - A path with two segments advances to the second segment when the first is complete.
 - `Path::query()` delegates to the active segment.
 
-### Build Integration
+### Build Integration — Path
 
 To be determined by item 1.
 
@@ -497,7 +475,7 @@ producing heading and altitude set point commands to `Autopilot`.
 - JSON and proto round-trips preserve filter state; next `step()` output matches between
   original and restored instances.
 
-### Build Integration
+### Build Integration — Guidance
 
 To be determined by item 1.
 
@@ -514,7 +492,7 @@ Define autotakeoff and autolanding behavior for fixed-wing aircraft operating in
 traffic pattern. Behavior definitions are drawn from FAA non-towered airfield VFR operations
 and AMA club field conventions.
 
-### Scope
+### Scope — Traffic Pattern
 
 - **Normal pattern operations** — pattern entry, upwind, crosswind, downwind, base, and
   final legs; pattern exit; go-around.
@@ -560,7 +538,7 @@ Define the operational sequence for ground operations at an RC airfield, from po
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
 
-### Deliverables
+### Deliverables — Plot Visualization
 
 - `python/tools/plot_flight.py`: CLI script that reads a `.csv` log file produced by
   `Logger` and plots a configurable set of channels vs. time. Outputs a `.png` or
@@ -568,7 +546,7 @@ post-flight analysis. These are Application Layer tools and live under `python/t
 - Channel groups: kinematics (position, velocity, attitude), aerodynamics (α, β, CL, CD),
   propulsion (thrust, throttle), guidance (cross-track error, altitude error).
 
-### Tests
+### Tests — Plot Visualization
 
 - `python/test/test_plot_flight.py`: verifies that `load_log(path)` returns a DataFrame
   with the expected columns and correct dtype; does not test rendering (matplotlib is
@@ -594,14 +572,14 @@ dev = [
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
 
-### Deliverables
+### Deliverables — Manual Input
 
 - `KeyboardInput`: maps configurable key bindings to throttle, roll, pitch, yaw increments.
   Operates at the simulation timestep rate.
 - `JoystickInput`: reads a raw joystick device (SDL2 or platform API) and maps axes and
   buttons to the `AircraftCommand` fields. Applies a configurable dead zone and axis scaling.
 
-### Interface sketch
+### Interface Sketch — Manual Input
 
 ```cpp
 // include/input/ManualInput.hpp
@@ -616,14 +594,14 @@ public:
 } // namespace liteaerosim::input
 ```
 
-### Tests
+### Tests — Manual Input
 
 - `KeyboardInput` with no keys pressed returns zero lateral/directional commands and
   configured idle throttle.
 - `JoystickInput` axis value at dead-zone boundary maps to zero output.
 - Axis scaling: full-deflection axis value maps to the configured maximum command.
 
-### CMake
+### CMake — Manual Input
 
 Add `src/input/KeyboardInput.cpp` and `src/input/JoystickInput.cpp` to `liteaerosim`.
 Add a platform-conditional dependency on SDL2 for `JoystickInput`.
@@ -641,7 +619,7 @@ are required:
 | **Scaled real-time** | Same as real-time but with a configurable speed multiplier (0.5×, 2×, etc.). |
 | **Full-rate batch** | Steps run as fast as possible; no sleep; used for CI, Monte Carlo, and data generation. |
 
-### Interface sketch
+### Interface Sketch — SimRunner
 
 ```cpp
 // include/runner/SimRunner.hpp
@@ -667,7 +645,7 @@ public:
 } // namespace liteaerosim::runner
 ```
 
-### Tests
+### Tests — SimRunner
 
 - `Batch` mode with `duration_s = 1.0` and `dt_s = 0.01` calls `Aircraft::step()` exactly
   100 times and then stops.
@@ -675,7 +653,7 @@ public:
 - `stop()` called from outside (threaded test) terminates the run loop within one timestep.
 - `elapsed_sim_time_s()` returns `n_steps * dt_s` after `n_steps` have been executed.
 
-### CMake
+### CMake — SimRunner
 
 Add `src/runner/SimRunner.cpp` to `liteaerosim`.
 Add `test/SimRunner_test.cpp` to the test executable.

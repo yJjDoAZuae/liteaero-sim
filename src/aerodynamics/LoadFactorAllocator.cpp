@@ -7,11 +7,14 @@ LoadFactorAllocator::LoadFactorAllocator(const LiftCurveModel& liftCurve,
                                          float S_ref_m2,
                                          float cl_y_beta)
     : _lift(liftCurve), _S(S_ref_m2), _cl_y_beta(cl_y_beta),
-      _alpha_prev(0.0f), _beta_prev(0.0f) {}
+      _alpha_prev(0.0f), _beta_prev(0.0f),
+      _n_z_prev(0.0f), _n_y_prev(0.0f) {}
 
 void LoadFactorAllocator::reset(float alpha0_rad, float beta0_rad) {
     _alpha_prev = alpha0_rad;
     _beta_prev  = beta0_rad;
+    _n_z_prev   = 0.0f;
+    _n_y_prev   = 0.0f;
 }
 
 LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
@@ -22,11 +25,32 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
     // ── α solver ─────────────────────────────────────────────────────────────
     // f(α) = q·S·C_L(α) + T·sin(α) − n·m·g = 0
     // f'(α) = q·S·C_L'(α) + T·cos(α)
+
+    // Branch-continuation predictor: first-order warm-start via implicit function theorem.
+    //   α₀ = α_prev + δn_z · m·g / f′(α_prev)
+    // In the linear lift region this places Newton exactly at the solution, so
+    // the solver converges in a single iteration.
+    // The predictor is applied only when the raw prediction stays within the
+    // parabolic domain [alphaSepNeg, alphaSep].  If the step would overshoot that
+    // boundary (e.g., a cold-start excess-demand call) the warm-start falls back
+    // to α_prev, keeping the overshoot guards operative.
     float alpha = _alpha_prev;
+    {
+        const float fprime_prev = qS * _lift.derivative(_alpha_prev) + T * std::cos(_alpha_prev);
+        if (std::abs(fprime_prev) > kTol) {
+            const float alpha_pred = _alpha_prev + (in.n_z - _n_z_prev) * mg / fprime_prev;
+            if (alpha_pred >= _lift.alphaSepNeg() && alpha_pred <= _lift.alphaSep()) {
+                alpha = alpha_pred;
+            }
+        }
+    }
+
     bool  positive_stall = false;
     bool  negative_stall = false;
+    int   alpha_iterations = 0;
 
     for (int i = 0; i < kMaxIter; ++i) {
+        alpha_iterations = i + 1;
         const float fval   = qS * _lift.evaluate(alpha)   + T * std::sin(alpha) - in.n_z * mg;
         const float fprime = qS * _lift.derivative(alpha) + T * std::cos(alpha);
 
@@ -87,6 +111,7 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
     }
 
     _alpha_prev = alpha;
+    _n_z_prev   = in.n_z;
 
     // ── alphaDot: implicit function theorem on f(α, n) = 0 ───────────────────
     // df/dα · dα/dt + df/dn · dn/dt = 0
@@ -100,8 +125,17 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
     // ── β solver ─────────────────────────────────────────────────────────────
     // g(β) = q·S·C_Yβ·β − T·cos(α)·sin(β) − n_y·m·g = 0
     // g'(β) = q·S·C_Yβ − T·cos(α)·cos(β)   (always ≤ 0 → unique root)
-    float beta      = _beta_prev;
     const float Tca = T * std::cos(alpha);
+
+    // Branch-continuation predictor for β:
+    //   β₀ = β_prev + δn_y · m·g / g′(β_prev)
+    float beta = _beta_prev;
+    {
+        const float gprime_prev = qS * _cl_y_beta - Tca * std::cos(_beta_prev);
+        if (std::abs(gprime_prev) > kTol) {
+            beta = _beta_prev + (in.n_y - _n_y_prev) * mg / gprime_prev;
+        }
+    }
 
     for (int i = 0; i < kMaxIter; ++i) {
         const float gval   = qS * _cl_y_beta * beta - Tca * std::sin(beta) - in.n_y * mg;
@@ -116,6 +150,7 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
     }
 
     _beta_prev = beta;
+    _n_y_prev  = in.n_y;
 
     // ── betaDot: implicit function theorem on g(β, n_y, α) = 0 ───────────────
     // dg/dβ · dβ/dt + dg/dα · dα/dt + dg/dn_y · dn_y/dt = 0
@@ -129,7 +164,7 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
         betaDot = (mg * in.n_y_dot - dg_dalpha * alphaDot) / gprime_beta;
     }
 
-    return {alpha, beta, _lift.classify(alpha), alphaDot, betaDot};
+    return {alpha, beta, _lift.classify(alpha), alphaDot, betaDot, alpha_iterations};
 }
 
 // ── Serialization ─────────────────────────────────────────────────────────────
@@ -142,6 +177,8 @@ nlohmann::json LoadFactorAllocator::serializeJson() const {
         {"cl_y_beta",       _cl_y_beta},
         {"alpha_prev_rad",  _alpha_prev},
         {"beta_prev_rad",   _beta_prev},
+        {"n_z_prev_nd",     _n_z_prev},
+        {"n_y_prev_nd",     _n_y_prev},
     };
 }
 
@@ -153,6 +190,8 @@ void LoadFactorAllocator::deserializeJson(const nlohmann::json& j) {
     _cl_y_beta  = j.at("cl_y_beta").get<float>();
     _alpha_prev = j.at("alpha_prev_rad").get<float>();
     _beta_prev  = j.at("beta_prev_rad").get<float>();
+    _n_z_prev   = j.at("n_z_prev_nd").get<float>();
+    _n_y_prev   = j.at("n_y_prev_nd").get<float>();
 }
 
 std::vector<uint8_t> LoadFactorAllocator::serializeProto() const {
@@ -162,6 +201,8 @@ std::vector<uint8_t> LoadFactorAllocator::serializeProto() const {
     proto.set_cl_y_beta(_cl_y_beta);
     proto.set_alpha_prev_rad(_alpha_prev);
     proto.set_beta_prev_rad(_beta_prev);
+    proto.set_n_z_prev_nd(_n_z_prev);
+    proto.set_n_y_prev_nd(_n_y_prev);
     const std::string s = proto.SerializeAsString();
     return std::vector<uint8_t>(s.begin(), s.end());
 }
@@ -178,4 +219,6 @@ void LoadFactorAllocator::deserializeProto(const std::vector<uint8_t>& bytes) {
     _cl_y_beta  = proto.cl_y_beta();
     _alpha_prev = proto.alpha_prev_rad();
     _beta_prev  = proto.beta_prev_rad();
+    _n_z_prev   = proto.n_z_prev_nd();
+    _n_y_prev   = proto.n_y_prev_nd();
 }

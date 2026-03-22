@@ -22,6 +22,7 @@ struct LoadFactorOutputs {
     LiftCurveSegment alpha_segment = LiftCurveSegment::Linear; // lift curve segment containing α
     float            alphaDot_rps  = 0.f;  // d(alpha)/dt (rad/s) — analytical, via implicit function theorem
     float            betaDot_rps   = 0.f;  // d(beta)/dt  (rad/s) — analytical, via implicit function theorem
+    int              iterations    = 0;    // Newton iterations taken by the α solver (diagnostic)
 };
 
 // Implicit Newton solver that maps commanded load factors (n, n_y) to angle of
@@ -61,6 +62,8 @@ private:
     float _cl_y_beta;
     float _alpha_prev;
     float _beta_prev;
+    float _n_z_prev;   // n_z from the previous solve() call — used by branch-continuation predictor
+    float _n_y_prev;   // n_y from the previous solve() call — used by branch-continuation predictor
 
     static constexpr int   kMaxIter = 20;
     static constexpr float kTol     = 1e-6f;
