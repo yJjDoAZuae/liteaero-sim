@@ -36,10 +36,10 @@ Stub headers in LiteAero Sim (to be relocated to `liteaero-flight` at repo split
 Infrastructure to be migrated from LiteAero Sim at repo split:
 
 - `DynamicElement`, `SisoElement`, `Filter` hierarchy, `Integrator`, `Derivative`,
-  `RateLimit`, `Limit`, `SISOPIDFF` → `avraero::control`
-- `ILogger` and logging sinks → `avraero::log`
+  `RateLimit`, `Limit`, `SISOPIDFF` → `liteaero::control`
+- `ILogger` and logging sinks → `liteaero::log`
 - `TerrainVertex`, `TerrainFacet`, `TerrainLod`, `TerrainTile`, `GeodeticPoint`,
-  `GeodeticAABB`, `LocalAABB`, `V_Terrain` → `avraero::terrain`
+  `GeodeticAABB`, `LocalAABB`, `V_Terrain` → `liteaero::terrain`
 - Shared interface types (`AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`,
   sensor measurement structs) → `liteaero-flight` (target name TBD)
 
@@ -52,18 +52,18 @@ matching the C++ namespace structure:
 
 | CMake target | C++ namespace | Contents |
 | --- | --- | --- |
-| `avraero::log` | `avraero::log` | `ILogger`, logging sinks |
-| `avraero::control` | `avraero::control` | `DynamicElement`, `SisoElement`, `Filter` hierarchy, `Integrator`, `Derivative`, `RateLimit`, `Limit`, `SISOPIDFF` |
-| `avraero::terrain` | `avraero::terrain` | Terrain mesh types, `V_Terrain` |
+| `liteaero::log` | `liteaero::log` | `ILogger`, logging sinks |
+| `liteaero::control` | `liteaero::control` | `DynamicElement`, `SisoElement`, `Filter` hierarchy, `Integrator`, `Derivative`, `RateLimit`, `Limit`, `SISOPIDFF` |
+| `liteaero::terrain` | `liteaero::terrain` | Terrain mesh types, `V_Terrain` |
 | Shared interface target (name TBD) | — | `AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, sensor measurement structs |
-| `avraero::nav` | `avraero::nav` | Navigation filter, wind/flow-angle estimators |
-| `avraero::guidance` | `avraero::guidance` | Path guidance, vertical guidance, park tracking |
-| `avraero::autopilot` | `avraero::autopilot` | Autopilot inner loop |
-| `avraero::perception` | `avraero::perception` | Vision navigator, lidar terrain estimator |
-| `avraero::mission_autonomy` | `avraero::mission_autonomy` | Link budget estimator |
+| `liteaero::nav` | `liteaero::nav` | Navigation filter, wind/flow-angle estimators |
+| `liteaero::guidance` | `liteaero::guidance` | Path guidance, vertical guidance, park tracking |
+| `liteaero::autopilot` | `liteaero::autopilot` | Autopilot inner loop |
+| `liteaero::perception` | `liteaero::perception` | Vision navigator, lidar terrain estimator |
+| `liteaero::mission_autonomy` | `liteaero::mission_autonomy` | Link budget estimator |
 
 Migrate infrastructure and shared interface types from LiteAero Sim. Update LiteAero Sim
-`CMakeLists.txt` to take a versioned dependency on `liteaero-flight`. Apply `avraero::` namespace
+`CMakeLists.txt` to take a versioned dependency on `liteaero-flight`. Apply `liteaero::` namespace
 to all migrated code. Verify all LiteAero Sim tests still pass after migration.
 
 **Prerequisite:** Repo split milestone (see project roadmap `README.md`).
@@ -130,7 +130,7 @@ commands. Control gains are derived by the Python gain design workflow (FC-4). T
 must support simulation use cases (reset and initialization to arbitrary conditions for batch
 testing) as well as deployment as flight software.
 
-Namespace: `avraero::autopilot`. Derives from `DynamicElement`.
+Namespace: `liteaero::autopilot`. Derives from `DynamicElement`.
 
 ### Interface Sketch — Autopilot
 
@@ -153,7 +153,7 @@ vertical speed, target heading, target roll attitude). Output is `AircraftComman
 
 ## FC-6. Path Representation — `V_PathSegment`, `PathSegmentHelix`, `Path`
 
-Namespace: `avraero::guidance`. A `Path` is an ordered sequence of `V_PathSegment` objects.
+Namespace: `liteaero::guidance`. A `Path` is an ordered sequence of `V_PathSegment` objects.
 Each segment exposes a cross-track error, along-track distance, and desired heading at a
 query position. The initial concrete segment type is `PathSegmentHelix` (a straight line is a
 degenerate helix with infinite radius).
@@ -161,7 +161,7 @@ degenerate helix with infinite radius).
 ### Interface Sketch — Path
 
 ```cpp
-namespace avraero::guidance {
+namespace liteaero::guidance {
 
 struct PathQuery {
     Eigen::Vector3f position_NED_m;
@@ -183,7 +183,7 @@ public:
     virtual ~V_PathSegment() = default;
 };
 
-} // namespace avraero::guidance
+} // namespace liteaero::guidance
 ```
 
 ### Tests — `PathSegmentHelix`
@@ -205,7 +205,7 @@ public:
 Guidance is the outer loop that wraps around `Autopilot`. It converts path and altitude
 errors into set point commands (target altitude, vertical speed, heading, roll attitude) that
 are fed to `Autopilot::step()`. Each guidance class derives from `DynamicElement` and
-implements the full component lifecycle. Namespace: `avraero::guidance`.
+implements the full component lifecycle. Namespace: `liteaero::guidance`.
 
 ### `PathGuidance` — Lateral Path Tracking
 
@@ -244,7 +244,7 @@ producing heading and altitude set point commands to `Autopilot`.
 
 ## FC-8. Estimation Subsystem
 
-Namespace: `avraero::nav`. Each class derives from `DynamicElement` with the full component
+Namespace: `liteaero::nav`. Each class derives from `DynamicElement` with the full component
 lifecycle. Design authorities listed below.
 
 | Class | Depends on | Design authority |
@@ -263,6 +263,6 @@ will be scheduled when the prerequisite terrain and sensor models are available.
 
 | Element | Namespace | Responsibility |
 | --- | --- | --- |
-| `VisionNavigator` | `avraero::perception` | Position/attitude estimation from synthetic or real imagery against terrain model; fuses measurements into `NavigationFilter` |
-| `LidarTerrainEstimator` | `avraero::perception` | Terrain-relative navigation from lidar point cloud against terrain model |
-| `LinkBudgetEstimator` | `avraero::mission_autonomy` | RF link quality assessment via line-of-sight terrain occlusion; informs waypoint planning |
+| `VisionNavigator` | `liteaero::perception` | Position/attitude estimation from synthetic or real imagery against terrain model; fuses measurements into `NavigationFilter` |
+| `LidarTerrainEstimator` | `liteaero::perception` | Terrain-relative navigation from lidar point cloud against terrain model |
+| `LinkBudgetEstimator` | `liteaero::mission_autonomy` | RF link quality assessment via line-of-sight terrain occlusion; informs waypoint planning |

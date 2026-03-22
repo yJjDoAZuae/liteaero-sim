@@ -55,7 +55,7 @@ following additions and clarifications.
 | `Aircraft6DOF` | **Proposed — not yet designed** | Full 6DOF aircraft dynamics model; depends on `V_AeroModel` for forces and moments; accepts `SurfaceDeflectionCommand` (control surface angles + per-motor throttle) rather than the load-factor `AircraftCommand`; produces `KinematicStateSnapshot`; used directly by ArduPilot and PX4 simulations (no FBW bridge in that topology); see OQ-16 |
 | `FBWController` | **Proposed — not yet designed** | Inner-loop FBW control law that bridges the existing load-factor `AircraftCommand` interface to `SurfaceDeflectionCommand` for `Aircraft6DOF`; when paired with `Aircraft6DOF` forms a drop-in replacement for the existing `Aircraft` model for side-by-side comparison; not used in ArduPilot/PX4 simulation topologies |
 | `SurfaceDeflectionCommand` | **Proposed — not yet designed** | Plain value struct: control surface deflection angles (elevator, aileron, rudder) and per-motor throttle; the native command interface of `Aircraft6DOF`; produced by `FBWController` (when bridging from load-factor) or directly by ArduPilot/PX4 inner-loop controllers |
-| `SensorCamera` | **Proposed — not yet designed** | Synthetic image sensor; generates imagery from terrain and scene model against `V_Terrain`; provides measurements for vision-based navigation in `avraero::perception` |
+| `SensorCamera` | **Proposed — not yet designed** | Synthetic image sensor; generates imagery from terrain and scene model against `V_Terrain`; provides measurements for vision-based navigation in `liteaero::perception` |
 | `SensorLidar` | **Proposed — not yet designed** | Synthetic lidar sensor; generates 3D point cloud by ray-casting against `V_Terrain`; provides measurements for terrain-relative navigation and obstacle avoidance |
 | `SensorLaserAGL` | **Proposed — not yet designed** | Synthetic laser altimeter; computes range to terrain directly below by ray-casting against `V_Terrain`; provides above-ground-level height measurement |
 | `SensorLineOfSight` | **Proposed — not yet designed** | Computes RF link quality and occlusion by ray-casting against `V_Terrain`; supports communication link planning and mission autonomy decisions |
@@ -77,9 +77,9 @@ LiteAero Sim. Its repository location is to be determined by this architecture d
 | `NavigationFilter` | EKF/UKF navigation: fuses GNSS, air data, magnetometer, INS, and vision/lidar measurements into navigation state | sensor measurements | `NavigationState` |
 | `WindEstimator` | Estimates wind NED from navigation state and air data | `NavigationState`, `AirDataMeasurement` | wind_NED_mps |
 | `FlowAnglesEstimator` | Estimates alpha and beta from wind estimate and air data | wind estimate, `AirDataMeasurement` | alpha_rad, beta_rad |
-| `VisionNavigator` | **Proposed — not yet designed** (`avraero::perception`): estimates position/attitude from synthetic or real imagery against terrain model; fuses into `NavigationFilter` | camera measurements, `V_Terrain` | position/attitude observation |
-| `LidarTerrainEstimator` | **Proposed — not yet designed** (`avraero::perception`): processes lidar point cloud against terrain model for terrain-relative navigation | lidar measurements, `V_Terrain` | position/altitude observation |
-| `LinkBudgetEstimator` | **Proposed — not yet designed** (`avraero::mission_autonomy`): assesses RF link quality using line-of-sight terrain occlusion analysis; informs waypoint planning and communication link selection | position, `V_Terrain` | link quality estimate |
+| `VisionNavigator` | **Proposed — not yet designed** (`liteaero::perception`): estimates position/attitude from synthetic or real imagery against terrain model; fuses into `NavigationFilter` | camera measurements, `V_Terrain` | position/attitude observation |
+| `LidarTerrainEstimator` | **Proposed — not yet designed** (`liteaero::perception`): processes lidar point cloud against terrain model for terrain-relative navigation | lidar measurements, `V_Terrain` | position/altitude observation |
+| `LinkBudgetEstimator` | **Proposed — not yet designed** (`liteaero::mission_autonomy`): assesses RF link quality using line-of-sight terrain occlusion analysis; informs waypoint planning and communication link selection | position, `V_Terrain` | link quality estimate |
 
 **Key architectural constraints on LiteAero Flight:**
 

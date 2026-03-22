@@ -11,11 +11,11 @@ a three-phase operation:
   repository has full LiteAero Sim development history for every file that migrates, with
   all unrelated history discarded.
 - **Phase 1** (Steps 1–10): Build out the `liteaero-flight` repository — add CMake scaffolding,
-  reorganize paths into the `liteaero-flight` directory layout, apply the `avraero::` namespace
+  reorganize paths into the `liteaero-flight` directory layout, apply the `liteaero::` namespace
   changes, add the shared interface target, and relocate LiteAero Flight stubs. LiteAero Sim is
   not touched. Each step produces a buildable, tested addition to `liteaero-flight`.
 - **Phase 2** (Steps 11–13): Execute the LiteAero Sim repo split as a single coordinated
-  event — update CMake to depend on `liteaero-flight`, apply `avraero::simulation` namespace to
+  event — update CMake to depend on `liteaero-flight`, apply `liteaero::simulation` namespace to
   all remaining LiteAero Sim code, and remove code that has migrated. The coordinated
   approach is required by the no-backward-compatibility policy and the single-step migration
   decision in `docs/architecture/system/future/decisions.md`.
@@ -32,10 +32,10 @@ Namespace decisions are final. All target namespaces are recorded in `decisions.
 | Three-phase approach | Phase 0 seeds the repo from history; Phase 1 builds it out independently; Phase 2 is the single coordinated LiteAero Sim update |
 | No forwarding aliases or backward-compat shims | Project is in initial development; no-backward-compat policy applies |
 | `KinematicStateSnapshot` requires a design step | The current `KinematicState` is a rich class with computed properties and serialization; converting it to a plain value struct requires deciding which fields to store vs. derive, and how the control subsystem accesses derived quantities |
-| Terrain type split requires a design step | `TerrainTile` currently bundles mesh data with serialization and file I/O; only the data elements migrate to `avraero::terrain`; the serialization machinery stays in `avraero::simulation`; a class-level split is needed |
+| Terrain type split requires a design step | `TerrainTile` currently bundles mesh data with serialization and file I/O; only the data elements migrate to `liteaero::terrain`; the serialization machinery stays in `liteaero::simulation`; a class-level split is needed |
 | Shared interface target name is TBD | The CMake target and C++ namespace for `AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, and sensor measurement structs has not been decided; Step 6 resolves this |
 | Tests migrate alongside the code | The liteaero-flight repo includes its own test suite; relevant tests are moved from LiteAero Sim in Phase 1 and removed from LiteAero Sim in Phase 2 |
-| `ControlLoop` and `Control*` elements stay in LiteAero Sim | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, and `ControlLoop` are simulation-internal; they will use `avraero::control` infrastructure after Phase 2 but remain in `avraero::simulation` |
+| `ControlLoop` and `Control*` elements stay in LiteAero Sim | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, and `ControlLoop` are simulation-internal; they will use `liteaero::control` infrastructure after Phase 2 but remain in `liteaero::simulation` |
 | Estimation stubs (`NavigationFilter`, `WindEstimator`, `FlowAnglesEstimator`) are part of Phase 1 | Create them in `liteaero-flight` at Step 9, not in LiteAero Sim; any LiteAero Sim stub files for these must be removed |
 
 ---
@@ -154,7 +154,7 @@ test/WGS84_test.cpp
 
 - `include/control/Control*.hpp` and `src/control/Control*.cpp`
   (`ControlAltitude`, `ControlHeading`, etc.) are intentionally excluded — they stay in
-  LiteAero Sim as `avraero::simulation` elements.
+  LiteAero Sim as `liteaero::simulation` elements.
 - `include/KinematicState.hpp` and `src/KinematicState.cpp` are included to preserve
   history for `KinematicStateSnapshot` (Step 7), even though the current class will be
   redesigned rather than moved directly.
@@ -197,85 +197,74 @@ yet — those are applied per subsystem in Steps 2–8.
 
 ```text
 liteaero-flight/
-  CMakeLists.txt          # root — fetches dependencies, includes subdirs
+  CMakeLists.txt          # root — defines all targets, fetches dependencies
   cmake/
     Dependencies.cmake    # FetchContent for googletest, nlohmann/json, protobuf, Eigen
-  log/
-    include/avraero/log/
-    src/
-    test/
-    CMakeLists.txt
-  control/
-    include/avraero/control/
-    src/
-    test/
-    CMakeLists.txt
-  terrain/
-    include/avraero/terrain/
-    src/
-    test/
-    CMakeLists.txt
-  interfaces/             # name TBD — resolved in Step 6
-    include/avraero/interfaces/
-    src/
-    test/
-    CMakeLists.txt
-  nav/
-    include/avraero/nav/
-    src/
-    test/
-    CMakeLists.txt
-  guidance/
-    include/avraero/guidance/
-    src/
-    test/
-    CMakeLists.txt
-  autopilot/
-    include/avraero/autopilot/
-    src/
-    test/
-    CMakeLists.txt
+  include/
+    liteaero/
+      log/
+      control/
+      terrain/
+      interfaces/         # name TBD — resolved in Step 6
+      nav/
+      guidance/
+      autopilot/
+  src/
+    log/
+    control/
+    terrain/
+    nav/
+    guidance/
+    autopilot/
+  test/
+    log/
+    control/
+    terrain/
+    interfaces/
+    nav/
+    guidance/
+    autopilot/
   proto/
     liteaero_flight.proto
 ```
 
-Each subdirectory `CMakeLists.txt` defines one `STATIC` library target with the matching
-`avraero::X` alias. The root `CMakeLists.txt` includes all subdirectories and sets up
-`FetchContent` for Eigen, nlohmann/json, protobuf, and googletest (same versions pinned
-in LiteAero Sim). No target links anything yet — dependency edges are added per step.
+The root `CMakeLists.txt` defines one `STATIC` library target per subsystem, each with
+the matching `liteaero::X` alias, and sets up `FetchContent` for Eigen, nlohmann/json,
+protobuf, and googletest (same versions pinned in LiteAero Sim). All targets share the
+root `include/` directory. No target links anything yet — dependency edges are added per step.
 
 **Verification:** `cmake -B build && cmake --build build` produces an empty build with no
 errors.
 
 ---
 
-### Step 2 — `avraero::log`: ILogger and Logging Infrastructure
+### Step 2 — `liteaero::log`: ILogger and Logging Infrastructure
 
-Migrate the logging interface and sinks from LiteAero Sim to `liteaero-flight/log/`.
+Migrate the logging interface and sinks from LiteAero Sim to `liteaero-flight/`.
 
 **Source files to copy and adapt:**
 
 | LiteAero Sim source | liteaero-flight destination | Namespace change |
 | --- | --- | --- |
-| `include/ILogger.hpp` | `log/include/avraero/log/ILogger.hpp` | `liteaero-sim` → `avraero::log` |
-| `include/logger/LogSource.hpp` | `log/include/avraero/log/LogSource.hpp` | `liteaerosim::logger` → `avraero::log` |
-| `include/logger/Logger.hpp` | `log/include/avraero/log/Logger.hpp` | `liteaerosim::logger` → `avraero::log` |
-| `include/logger/LogReader.hpp` | `log/include/avraero/log/LogReader.hpp` | `liteaerosim::logger` → `avraero::log` |
-| `src/logger/Logger.cpp` | `log/src/Logger.cpp` | `liteaerosim::logger` → `avraero::log` |
-| `src/logger/LogReader.cpp` | `log/src/LogReader.cpp` | `liteaerosim::logger` → `avraero::log` |
-| `src/logger/mcap_impl.cpp` | `log/src/mcap_impl.cpp` | (no namespace; MCAP implementation) |
-| `src/logger/mcap_static.hpp` | `log/src/mcap_static.hpp` | (private header) |
-| `test/Logger_test.cpp` | `log/test/Logger_test.cpp` | Update includes and namespace |
+| `include/ILogger.hpp` | `include/liteaero/log/ILogger.hpp` | `liteaerosim` → `liteaero::log` |
+| `include/logger/LogSource.hpp` | `include/liteaero/log/LogSource.hpp` | `liteaerosim::logger` → `liteaero::log` |
+| `include/logger/Logger.hpp` | `include/liteaero/log/Logger.hpp` | `liteaerosim::logger` → `liteaero::log` |
+| `include/logger/LogReader.hpp` | `include/liteaero/log/LogReader.hpp` | `liteaerosim::logger` → `liteaero::log` |
+| `src/logger/Logger.cpp` | `src/log/Logger.cpp` | `liteaerosim::logger` → `liteaero::log` |
+| `src/logger/LogReader.cpp` | `src/log/LogReader.cpp` | `liteaerosim::logger` → `liteaero::log` |
+| `src/logger/mcap_impl.cpp` | `src/log/mcap_impl.cpp` | (no namespace; MCAP implementation) |
+| `src/logger/mcap_static.hpp` | `src/log/mcap_static.hpp` | (private header) |
+| `test/Logger_test.cpp` | `test/log/Logger_test.cpp` | Update includes and namespace |
 
-The `avraero::log` CMake target links `nlohmann_json` and the MCAP include path. The
+The `liteaero::log` CMake target links `nlohmann_json` and the MCAP include path. The
 `ILogger` interface has no implementation dependencies.
 
-**Verification:** `cmake --build build && log/test/avraero_log_test` — all Logger tests
+**Verification:** `cmake --build build && test/log/liteaero_log_test` — all Logger tests
 pass.
 
 ---
 
-### Step 3 — `avraero::control`: `DynamicElement` and `SisoElement`
+### Step 3 — `liteaero::control`: `DynamicElement` and `SisoElement`
 
 Migrate the root abstract lifecycle interfaces.
 
@@ -283,12 +272,12 @@ Migrate the root abstract lifecycle interfaces.
 
 | LiteAero Sim source | liteaero-flight destination | Namespace change |
 | --- | --- | --- |
-| `include/DynamicElement.hpp` | `control/include/avraero/control/DynamicElement.hpp` | `liteaero-sim` → `avraero::control` |
-| `src/DynamicElement.cpp` | `control/src/DynamicElement.cpp` | `liteaero-sim` → `avraero::control` |
-| `include/SisoElement.hpp` | `control/include/avraero/control/SisoElement.hpp` | `liteaero-sim` → `avraero::control` |
-| `src/SisoElement.cpp` | `control/src/SisoElement.cpp` | `liteaero-sim` → `avraero::control` |
+| `include/DynamicElement.hpp` | `include/liteaero/control/DynamicElement.hpp` | `liteaerosim` → `liteaero::control` |
+| `src/DynamicElement.cpp` | `src/control/DynamicElement.cpp` | `liteaerosim` → `liteaero::control` |
+| `include/SisoElement.hpp` | `include/liteaero/control/SisoElement.hpp` | `liteaerosim` → `liteaero::control` |
+| `src/SisoElement.cpp` | `src/control/SisoElement.cpp` | `liteaerosim` → `liteaero::control` |
 
-The `avraero::control` target links `avraero::log` (for `ILogger`), `nlohmann_json`, and
+The `liteaero::control` target links `liteaero::log` (for `ILogger`), `nlohmann_json`, and
 protobuf. No test files added in this step — `DynamicElement` and `SisoElement` are
 abstract; tests arrive with their concrete subclasses.
 
@@ -296,49 +285,49 @@ abstract; tests arrive with their concrete subclasses.
 
 ---
 
-### Step 4 — `avraero::control`: Filter Hierarchy
+### Step 4 — `liteaero::control`: Filter Hierarchy
 
 Migrate the full discrete-filter infrastructure.
 
-**Source files to copy and adapt** (namespace `liteaerosim::control` → `avraero::control`
+**Source files to copy and adapt** (namespace `liteaerosim::control` → `liteaero::control`
 throughout):
 
 | LiteAero Sim source | liteaero-flight destination |
 | --- | --- |
-| `include/control/Filter.hpp` | `control/include/avraero/control/Filter.hpp` |
-| `include/control/FilterSS.hpp` | `control/include/avraero/control/FilterSS.hpp` |
-| `include/control/FilterSS2.hpp` | `control/include/avraero/control/FilterSS2.hpp` |
-| `include/control/FilterSS2Clip.hpp` | `control/include/avraero/control/FilterSS2Clip.hpp` |
-| `include/control/FilterTF.hpp` | `control/include/avraero/control/FilterTF.hpp` |
-| `include/control/FilterTF2.hpp` | `control/include/avraero/control/FilterTF2.hpp` |
-| `include/control/FilterFIR.hpp` | `control/include/avraero/control/FilterFIR.hpp` |
-| `include/control/filter_realizations.hpp` | `control/include/avraero/control/filter_realizations.hpp` |
-| `src/control/FilterSS.cpp` | `control/src/FilterSS.cpp` |
-| `src/control/FilterSS2.cpp` | `control/src/FilterSS2.cpp` |
-| `src/control/FilterSS2Clip.cpp` | `control/src/FilterSS2Clip.cpp` |
-| `src/control/FilterTF.cpp` | `control/src/FilterTF.cpp` |
-| `src/control/FilterTF2.cpp` | `control/src/FilterTF2.cpp` |
-| `src/control/FilterFIR.cpp` | `control/src/FilterFIR.cpp` |
-| `src/control/filter_realizations.cpp` | `control/src/filter_realizations.cpp` |
-| `src/control/FilterSS_copy_from_SS2.cpp` | `control/src/FilterSS_copy_from_SS2.cpp` |
-| `test/FilterSS_test.cpp` | `control/test/FilterSS_test.cpp` |
-| `test/FilterSS2_test.cpp` | `control/test/FilterSS2_test.cpp` |
-| `test/FilterSS2Clip_test.cpp` | `control/test/FilterSS2Clip_test.cpp` |
-| `test/FilterTF_test.cpp` | `control/test/FilterTF_test.cpp` |
-| `test/FilterTF2_test.cpp` | `control/test/FilterTF2_test.cpp` |
-| `test/FilterFIR_test.cpp` | `control/test/FilterFIR_test.cpp` |
-| `test/FilterRealizations_test.cpp` | `control/test/FilterRealizations_test.cpp` |
+| `include/control/Filter.hpp` | `include/liteaero/control/Filter.hpp` |
+| `include/control/FilterSS.hpp` | `include/liteaero/control/FilterSS.hpp` |
+| `include/control/FilterSS2.hpp` | `include/liteaero/control/FilterSS2.hpp` |
+| `include/control/FilterSS2Clip.hpp` | `include/liteaero/control/FilterSS2Clip.hpp` |
+| `include/control/FilterTF.hpp` | `include/liteaero/control/FilterTF.hpp` |
+| `include/control/FilterTF2.hpp` | `include/liteaero/control/FilterTF2.hpp` |
+| `include/control/FilterFIR.hpp` | `include/liteaero/control/FilterFIR.hpp` |
+| `include/control/filter_realizations.hpp` | `include/liteaero/control/filter_realizations.hpp` |
+| `src/control/FilterSS.cpp` | `src/control/FilterSS.cpp` |
+| `src/control/FilterSS2.cpp` | `src/control/FilterSS2.cpp` |
+| `src/control/FilterSS2Clip.cpp` | `src/control/FilterSS2Clip.cpp` |
+| `src/control/FilterTF.cpp` | `src/control/FilterTF.cpp` |
+| `src/control/FilterTF2.cpp` | `src/control/FilterTF2.cpp` |
+| `src/control/FilterFIR.cpp` | `src/control/FilterFIR.cpp` |
+| `src/control/filter_realizations.cpp` | `src/control/filter_realizations.cpp` |
+| `src/control/FilterSS_copy_from_SS2.cpp` | `src/control/FilterSS_copy_from_SS2.cpp` |
+| `test/FilterSS_test.cpp` | `test/control/FilterSS_test.cpp` |
+| `test/FilterSS2_test.cpp` | `test/control/FilterSS2_test.cpp` |
+| `test/FilterSS2Clip_test.cpp` | `test/control/FilterSS2Clip_test.cpp` |
+| `test/FilterTF_test.cpp` | `test/control/FilterTF_test.cpp` |
+| `test/FilterTF2_test.cpp` | `test/control/FilterTF2_test.cpp` |
+| `test/FilterFIR_test.cpp` | `test/control/FilterFIR_test.cpp` |
+| `test/FilterRealizations_test.cpp` | `test/control/FilterRealizations_test.cpp` |
 
 Preserve the GCC vtable fix: `FilterSS.hpp` must not include `FilterSS2.hpp`;
 `FilterSS_copy_from_SS2.cpp` is the separate translation unit that includes both.
 
-**Verification:** `cmake --build build && control/test/avraero_control_test` — all filter
+**Verification:** `cmake --build build && test/control/liteaero_control_test` — all filter
 tests pass; `FilterTFTest.FirstOrderLP00` and `FilterTFTest.SecondOrderLP00` are
 pre-existing failures and should appear unchanged.
 
 ---
 
-### Step 5 — `avraero::control`: SISO Elements and Scheduling Infrastructure
+### Step 5 — `liteaero::control`: SISO Elements and Scheduling Infrastructure
 
 Migrate integrators, rate limiters, PID, antiwindup, gain scheduling, and related
 infrastructure.
@@ -347,43 +336,43 @@ infrastructure.
 
 | LiteAero Sim source | liteaero-flight destination |
 | --- | --- |
-| `include/control/Integrator.hpp` | `control/include/avraero/control/Integrator.hpp` |
-| `include/control/Derivative.hpp` | `control/include/avraero/control/Derivative.hpp` |
-| `include/control/Limit.hpp` | `control/include/avraero/control/Limit.hpp` |
-| `include/control/LimitBase.hpp` | `control/include/avraero/control/LimitBase.hpp` |
-| `include/control/LimitElement.hpp` | `control/include/avraero/control/LimitElement.hpp` |
-| `include/control/RateLimit.hpp` | `control/include/avraero/control/RateLimit.hpp` |
-| `include/control/Unwrap.hpp` | `control/include/avraero/control/Unwrap.hpp` |
-| `include/control/SISOPIDFF.hpp` | `control/include/avraero/control/SISOPIDFF.hpp` |
-| `include/control/Antiwindup.hpp` | `control/include/avraero/control/Antiwindup.hpp` |
-| `include/control/Gain.hpp` | `control/include/avraero/control/Gain.hpp` |
-| `include/control/RectilinearTable.hpp` | `control/include/avraero/control/RectilinearTable.hpp` |
-| `include/control/TableAxis.hpp` | `control/include/avraero/control/TableAxis.hpp` |
-| `include/control/control.hpp` | `control/include/avraero/control/control.hpp` |
-| `src/control/Integrator.cpp` | `control/src/Integrator.cpp` |
-| `src/control/Derivative.cpp` | `control/src/Derivative.cpp` |
-| `src/control/Limit.cpp` | `control/src/Limit.cpp` |
-| `src/control/RateLimit.cpp` | `control/src/RateLimit.cpp` |
-| `src/control/Unwrap.cpp` | `control/src/Unwrap.cpp` |
-| `src/control/SISOPIDFF.cpp` | `control/src/SISOPIDFF.cpp` |
-| `src/control/Antiwindup.cpp` | `control/src/Antiwindup.cpp` |
-| `src/control/control.cpp` | `control/src/control.cpp` |
-| `test/Integrator_test.cpp` | `control/test/Integrator_test.cpp` |
-| `test/Derivative_test.cpp` | `control/test/Derivative_test.cpp` |
-| `test/Limit_test.cpp` | `control/test/Limit_test.cpp` |
-| `test/RateLimit_test.cpp` | `control/test/RateLimit_test.cpp` |
-| `test/Unwrap_test.cpp` | `control/test/Unwrap_test.cpp` |
-| `test/SISOPIDFF_test.cpp` | `control/test/SISOPIDFF_test.cpp` |
-| `test/Antiwindup_test.cpp` | `control/test/Antiwindup_test.cpp` |
-| `test/Gain_test.cpp` | `control/test/Gain_test.cpp` |
-| `test/RectilinearTable_test.cpp` | `control/test/RectilinearTable_test.cpp` |
-| `test/TableAxis_test.cpp` | `control/test/TableAxis_test.cpp` |
+| `include/control/Integrator.hpp` | `include/liteaero/control/Integrator.hpp` |
+| `include/control/Derivative.hpp` | `include/liteaero/control/Derivative.hpp` |
+| `include/control/Limit.hpp` | `include/liteaero/control/Limit.hpp` |
+| `include/control/LimitBase.hpp` | `include/liteaero/control/LimitBase.hpp` |
+| `include/control/LimitElement.hpp` | `include/liteaero/control/LimitElement.hpp` |
+| `include/control/RateLimit.hpp` | `include/liteaero/control/RateLimit.hpp` |
+| `include/control/Unwrap.hpp` | `include/liteaero/control/Unwrap.hpp` |
+| `include/control/SISOPIDFF.hpp` | `include/liteaero/control/SISOPIDFF.hpp` |
+| `include/control/Antiwindup.hpp` | `include/liteaero/control/Antiwindup.hpp` |
+| `include/control/Gain.hpp` | `include/liteaero/control/Gain.hpp` |
+| `include/control/RectilinearTable.hpp` | `include/liteaero/control/RectilinearTable.hpp` |
+| `include/control/TableAxis.hpp` | `include/liteaero/control/TableAxis.hpp` |
+| `include/control/control.hpp` | `include/liteaero/control/control.hpp` |
+| `src/control/Integrator.cpp` | `src/control/Integrator.cpp` |
+| `src/control/Derivative.cpp` | `src/control/Derivative.cpp` |
+| `src/control/Limit.cpp` | `src/control/Limit.cpp` |
+| `src/control/RateLimit.cpp` | `src/control/RateLimit.cpp` |
+| `src/control/Unwrap.cpp` | `src/control/Unwrap.cpp` |
+| `src/control/SISOPIDFF.cpp` | `src/control/SISOPIDFF.cpp` |
+| `src/control/Antiwindup.cpp` | `src/control/Antiwindup.cpp` |
+| `src/control/control.cpp` | `src/control/control.cpp` |
+| `test/Integrator_test.cpp` | `test/control/Integrator_test.cpp` |
+| `test/Derivative_test.cpp` | `test/control/Derivative_test.cpp` |
+| `test/Limit_test.cpp` | `test/control/Limit_test.cpp` |
+| `test/RateLimit_test.cpp` | `test/control/RateLimit_test.cpp` |
+| `test/Unwrap_test.cpp` | `test/control/Unwrap_test.cpp` |
+| `test/SISOPIDFF_test.cpp` | `test/control/SISOPIDFF_test.cpp` |
+| `test/Antiwindup_test.cpp` | `test/control/Antiwindup_test.cpp` |
+| `test/Gain_test.cpp` | `test/control/Gain_test.cpp` |
+| `test/RectilinearTable_test.cpp` | `test/control/RectilinearTable_test.cpp` |
+| `test/TableAxis_test.cpp` | `test/control/TableAxis_test.cpp` |
 
 **Move design authority document:** Copy `docs/algorithms/filters.md` to
 `liteaero-flight/docs/algorithms/filters.md`. Remove from `liteaero-sim` in Phase 2
 (Step 12) once the code has migrated.
 
-**Verification:** `cmake --build build && control/test/avraero_control_test` — all SISO
+**Verification:** `cmake --build build && test/control/liteaero_control_test` — all SISO
 element and PID tests pass.
 
 ---
@@ -404,12 +393,12 @@ Do not implement in this step.
   are removed from the interface.
 - **Shared interface target name:** Decide the CMake target name and C++ namespace for
   `AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, and sensor measurement
-  structs. Candidates: `avraero::interfaces`, `avraero::icd`, `avraero::types`. Update
+  structs. Candidates: `liteaero::interfaces`, `liteaero::icd`, `liteaero::types`. Update
   `liteaero-flight/CMakeLists.txt` and `interfaces/` directory name accordingly. Record the
   decision in `docs/architecture/system/future/decisions.md`.
 - **Control subsystem access to derived quantities:** The `ControlAltitude`, `ControlRoll`,
   etc. classes currently accept `const KinematicState&` and call methods like `roll()`,
-  `pitch()`, `heading()`. After migration to `avraero::control`, they will receive
+  `pitch()`, `heading()`. After migration to `liteaero::control`, they will receive
   `KinematicStateSnapshot`. Any derived quantities they need must be present as stored
   fields or computable from the snapshot's plain fields.
 - **`WGS84_Datum` dependency:** `KinematicState` includes a `WGS84_Datum` position. Decide
@@ -424,58 +413,58 @@ Do not implement in this step.
 Implement the shared interface target as designed in Step 6. Namespace and CMake target
 name as decided in Step 6.
 
-**Files to create** (using the namespace and target name decided in Step 6; `avraero::ifc`
+**Files to create** (using the namespace and target name decided in Step 6; `liteaero::ifc`
 used as a placeholder below):
 
 | File | Contents |
 | --- | --- |
-| `interfaces/include/avraero/ifc/AircraftCommand.hpp` | Extract from `Aircraft.hpp`; plain value struct |
-| `interfaces/include/avraero/ifc/KinematicStateSnapshot.hpp` | New plain value struct per Step 6 design |
-| `interfaces/include/avraero/ifc/NavigationState.hpp` | New plain value struct; at minimum a stub with the fields used by `Autopilot`, `PathGuidance`, `VerticalGuidance`, `ParkTracking`, `WindEstimator`, `FlowAnglesEstimator` |
-| `interfaces/include/avraero/ifc/AirDataMeasurement.hpp` | Sensor measurement struct for air data (airspeed, altitude, AOA, sideslip) |
-| `interfaces/include/avraero/ifc/GnssMeasurement.hpp` | Sensor measurement struct stub for GNSS |
-| `interfaces/include/avraero/ifc/MagMeasurement.hpp` | Sensor measurement struct stub for magnetometer |
-| `interfaces/test/Interfaces_test.cpp` | Static-assert plain-struct properties; round-trip layout tests |
+| `include/liteaero/ifc/AircraftCommand.hpp` | Extract from `Aircraft.hpp`; plain value struct |
+| `include/liteaero/ifc/KinematicStateSnapshot.hpp` | New plain value struct per Step 6 design |
+| `include/liteaero/ifc/NavigationState.hpp` | New plain value struct; at minimum a stub with the fields used by `Autopilot`, `PathGuidance`, `VerticalGuidance`, `ParkTracking`, `WindEstimator`, `FlowAnglesEstimator` |
+| `include/liteaero/ifc/AirDataMeasurement.hpp` | Sensor measurement struct for air data (airspeed, altitude, AOA, sideslip) |
+| `include/liteaero/ifc/GnssMeasurement.hpp` | Sensor measurement struct stub for GNSS |
+| `include/liteaero/ifc/MagMeasurement.hpp` | Sensor measurement struct stub for magnetometer |
+| `test/interfaces/Interfaces_test.cpp` | Static-assert plain-struct properties; round-trip layout tests |
 
 All types in this target are plain value structs with no virtual methods, no lifecycle, and
 no serialization machinery (per the `decisions.md` module communication interface decision).
 
-**Verification:** `cmake --build build && interfaces/test/avraero_ifc_test` — all static
+**Verification:** `cmake --build build && test/interfaces/liteaero_ifc_test` — all static
 assertion tests pass.
 
 ---
 
-### Step 8 — `avraero::terrain`: Terrain Element Types and `V_Terrain`
+### Step 8 — `liteaero::terrain`: Terrain Element Types and `V_Terrain`
 
 Migrate the shared terrain mesh types and the `V_Terrain` query interface.
 
 **Design note — `TerrainTile` split:** The current `TerrainTile` class bundles mesh data
 (`lod_`, list of `TerrainCell*`) with serialization and file I/O. Only the data elements
-listed in `decisions.md` migrate to `avraero::terrain`. If `TerrainTile` cannot be cleanly
-separated, create a new `TerrainTileData` plain struct in `avraero::terrain` and keep the
-full `TerrainTile` class (with serialization) in `avraero::simulation`. Update `TerrainMesh`
+listed in `decisions.md` migrate to `liteaero::terrain`. If `TerrainTile` cannot be cleanly
+separated, create a new `TerrainTileData` plain struct in `liteaero::terrain` and keep the
+full `TerrainTile` class (with serialization) in `liteaero::simulation`. Update `TerrainMesh`
 and `LodSelector` to use the split accordingly. Resolve this before starting file moves.
 
-**Files to create in `liteaero-flight/terrain/`:**
+**Files to create in `liteaero-flight/`:**
 
 | LiteAero Sim source | liteaero-flight destination | Namespace change |
 | --- | --- | --- |
-| `include/environment/TerrainVertex.hpp` | `terrain/include/avraero/terrain/TerrainVertex.hpp` | `liteaerosim::environment` → `avraero::terrain` |
-| `include/environment/TerrainFacet.hpp` | `terrain/include/avraero/terrain/TerrainFacet.hpp` | `liteaerosim::environment` → `avraero::terrain` |
-| `include/environment/TerrainTile.hpp` (or `TerrainTileData.hpp`) | `terrain/include/avraero/terrain/TerrainTileData.hpp` | See design note |
-| `include/environment/GeodeticPoint.hpp` | `terrain/include/avraero/terrain/GeodeticPoint.hpp` | `liteaerosim::environment` → `avraero::terrain` |
-| `include/environment/GeodeticAABB.hpp` | `terrain/include/avraero/terrain/GeodeticAABB.hpp` | `liteaerosim::environment` → `avraero::terrain` |
-| `include/environment/LocalAABB.hpp` | `terrain/include/avraero/terrain/LocalAABB.hpp` | `liteaerosim::environment` → `avraero::terrain` |
-| `include/environment/Terrain.hpp` | `terrain/include/avraero/terrain/V_Terrain.hpp` | `liteaerosim::environment` → `avraero::terrain`; rename file to `V_Terrain.hpp` to match the class name |
+| `include/environment/TerrainVertex.hpp` | `include/liteaero/terrain/TerrainVertex.hpp` | `liteaerosim::environment` → `liteaero::terrain` |
+| `include/environment/TerrainFacet.hpp` | `include/liteaero/terrain/TerrainFacet.hpp` | `liteaerosim::environment` → `liteaero::terrain` |
+| `include/environment/TerrainTile.hpp` (or `TerrainTileData.hpp`) | `include/liteaero/terrain/TerrainTileData.hpp` | See design note |
+| `include/environment/GeodeticPoint.hpp` | `include/liteaero/terrain/GeodeticPoint.hpp` | `liteaerosim::environment` → `liteaero::terrain` |
+| `include/environment/GeodeticAABB.hpp` | `include/liteaero/terrain/GeodeticAABB.hpp` | `liteaerosim::environment` → `liteaero::terrain` |
+| `include/environment/LocalAABB.hpp` | `include/liteaero/terrain/LocalAABB.hpp` | `liteaerosim::environment` → `liteaero::terrain` |
+| `include/environment/Terrain.hpp` | `include/liteaero/terrain/V_Terrain.hpp` | `liteaerosim::environment` → `liteaero::terrain`; rename file to `V_Terrain.hpp` to match the class name |
 
-The `avraero::terrain` target has no source files (all headers are either pure abstractions
+The `liteaero::terrain` target has no source files (all headers are either pure abstractions
 or plain structs) and no runtime dependencies. It links Eigen only.
 
-**Tests:** Add a test file `terrain/test/Terrain_test.cpp` covering basic geometric
+**Tests:** Add a test file `test/terrain/Terrain_test.cpp` covering basic geometric
 property checks for each migrated struct type; copy relevant assertions from
 `test/Terrain_test.cpp`.
 
-**Verification:** `cmake --build build && terrain/test/avraero_terrain_test` — all struct
+**Verification:** `cmake --build build && test/terrain/liteaero_terrain_test` — all struct
 tests pass.
 
 ---
@@ -491,16 +480,16 @@ currently exist as untracked files in LiteAero Sim (`include/control/Autopilot.h
 
 | Target namespace | File | Notes |
 | --- | --- | --- |
-| `avraero::autopilot` | `autopilot/include/avraero/autopilot/Autopilot.hpp` | Replace `include/control/Autopilot.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/PathGuidance.hpp` | Replace `include/guidance/PathGuidance.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/VerticalGuidance.hpp` | Replace `include/guidance/VerticalGuidance.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/ParkTracking.hpp` | Replace `include/guidance/ParkTracking.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/V_PathSegment.hpp` | Replace `include/path/V_PathSegment.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/PathSegmentHelix.hpp` | Replace `include/path/PathSegmentHelix.hpp` |
-| `avraero::guidance` | `guidance/include/avraero/guidance/Path.hpp` | Replace `include/path/Path.hpp` |
-| `avraero::nav` | `nav/include/avraero/nav/NavigationFilter.hpp` | Create; design authority in `docs/architecture/navigation_filter.md` |
-| `avraero::nav` | `nav/include/avraero/nav/WindEstimator.hpp` | Create; design authority in `docs/architecture/wind_estimator.md` |
-| `avraero::nav` | `nav/include/avraero/nav/FlowAnglesEstimator.hpp` | Create; design authority in `docs/architecture/flow_angles_estimator.md` |
+| `liteaero::autopilot` | `include/liteaero/autopilot/Autopilot.hpp` | Replace `include/control/Autopilot.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/PathGuidance.hpp` | Replace `include/guidance/PathGuidance.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/VerticalGuidance.hpp` | Replace `include/guidance/VerticalGuidance.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/ParkTracking.hpp` | Replace `include/guidance/ParkTracking.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/V_PathSegment.hpp` | Replace `include/path/V_PathSegment.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/PathSegmentHelix.hpp` | Replace `include/path/PathSegmentHelix.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/Path.hpp` | Replace `include/path/Path.hpp` |
+| `liteaero::nav` | `include/liteaero/nav/NavigationFilter.hpp` | Create; design authority in `docs/architecture/navigation_filter.md` |
+| `liteaero::nav` | `include/liteaero/nav/WindEstimator.hpp` | Create; design authority in `docs/architecture/wind_estimator.md` |
+| `liteaero::nav` | `include/liteaero/nav/FlowAnglesEstimator.hpp` | Create; design authority in `docs/architecture/flow_angles_estimator.md` |
 
 Each stub is a comment-only or minimal class declaration noting the design authority
 document and the target namespace. No implementation.
@@ -533,8 +522,8 @@ baseline is the regression reference for Phase 2.
 ### Step 11 — LiteAero Sim CMake: Dependency on `liteaero-flight`
 
 Update `liteaero-sim/CMakeLists.txt` and `liteaero-sim/cmake/Dependencies.cmake` to add
-`liteaero-flight` as a versioned `FetchContent` or `find_package` dependency. Add `avraero::log`,
-`avraero::control`, `avraero::terrain`, and the shared interface target to the
+`liteaero-flight` as a versioned `FetchContent` or `find_package` dependency. Add `liteaero::log`,
+`liteaero::control`, `liteaero::terrain`, and the shared interface target to the
 `liteaero-sim` library's `target_link_libraries`. Do not yet remove any LiteAero Sim source
 files — this step establishes that both copies coexist and the build does not break before
 the namespace changes are applied.
@@ -552,27 +541,27 @@ Execute the full namespace migration as a single coordinated change:
 
 | Old namespace | New namespace | Scope |
 | --- | --- | --- |
-| `liteaero-sim` (root) | `avraero::simulation` | `Aircraft`, `KinematicState`, `AeroCoeffEstimator`, all aerodynamics, airframe, propulsion, environment, sensor classes |
-| `liteaerosim::control` | `avraero::simulation::control` | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, `ControlLoop` |
-| `liteaerosim::environment` | `avraero::simulation` | All environment implementation classes that remain in LiteAero Sim after terrain type split |
-| `liteaerosim::logger` | `avraero::log` | Logger and sinks now redirect to liteaero-flight's `avraero::log` |
+| `liteaerosim` (root) | `liteaero::simulation` | `Aircraft`, `KinematicState`, `AeroCoeffEstimator`, all aerodynamics, airframe, propulsion, environment, sensor classes |
+| `liteaerosim::control` | `liteaero::simulation::control` | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, `ControlLoop` |
+| `liteaerosim::environment` | `liteaero::simulation` | All environment implementation classes that remain in LiteAero Sim after terrain type split |
+| `liteaerosim::logger` | `liteaero::log` | Logger and sinks now redirect to liteaero-flight's `liteaero::log` |
 
 **Infrastructure headers replaced by liteaero-flight equivalents** (includes updated at all call
 sites):
 
 | Remove from LiteAero Sim | Replace with |
 | --- | --- |
-| `include/DynamicElement.hpp` | `avraero/control/DynamicElement.hpp` from `avraero::control` |
-| `include/SisoElement.hpp` | `avraero/control/SisoElement.hpp` from `avraero::control` |
-| `include/ILogger.hpp` | `avraero/log/ILogger.hpp` from `avraero::log` |
-| `include/logger/Logger.hpp` | `avraero/log/Logger.hpp` from `avraero::log` |
-| `include/logger/LogReader.hpp` | `avraero/log/LogReader.hpp` from `avraero::log` |
-| `include/logger/LogSource.hpp` | `avraero/log/LogSource.hpp` from `avraero::log` |
-| `include/control/Filter.hpp` and filter hierarchy | `avraero/control/Filter.hpp` etc. from `avraero::control` |
-| `include/control/Integrator.hpp` etc. | Corresponding `avraero::control` headers |
-| `include/control/SISOPIDFF.hpp` | `avraero/control/SISOPIDFF.hpp` from `avraero::control` |
-| `include/environment/TerrainVertex.hpp` etc. (migrated terrain element types) | Corresponding `avraero::terrain` headers |
-| `include/environment/Terrain.hpp` (`V_Terrain`) | `avraero/terrain/V_Terrain.hpp` from `avraero::terrain` |
+| `include/DynamicElement.hpp` | `liteaero/control/DynamicElement.hpp` from `liteaero::control` |
+| `include/SisoElement.hpp` | `liteaero/control/SisoElement.hpp` from `liteaero::control` |
+| `include/ILogger.hpp` | `liteaero/log/ILogger.hpp` from `liteaero::log` |
+| `include/logger/Logger.hpp` | `liteaero/log/Logger.hpp` from `liteaero::log` |
+| `include/logger/LogReader.hpp` | `liteaero/log/LogReader.hpp` from `liteaero::log` |
+| `include/logger/LogSource.hpp` | `liteaero/log/LogSource.hpp` from `liteaero::log` |
+| `include/control/Filter.hpp` and filter hierarchy | `liteaero/control/Filter.hpp` etc. from `liteaero::control` |
+| `include/control/Integrator.hpp` etc. | Corresponding `liteaero::control` headers |
+| `include/control/SISOPIDFF.hpp` | `liteaero/control/SISOPIDFF.hpp` from `liteaero::control` |
+| `include/environment/TerrainVertex.hpp` etc. (migrated terrain element types) | Corresponding `liteaero::terrain` headers |
+| `include/environment/Terrain.hpp` (`V_Terrain`) | `liteaero/terrain/V_Terrain.hpp` from `liteaero::terrain` |
 
 **LiteAero Sim stub headers removed** (LiteAero Flight stubs now live in `liteaero-flight`):
 
@@ -626,7 +615,7 @@ Update `docs/roadmap/flight_code.md` Current State table: update all stub paths 
 2. **`TerrainTile` split (Step 8)** — `TerrainTile` bundles tile geometry (which migrates)
    with serialization and LOD selection state (which does not). If the class cannot be split
    cleanly without breaking `TerrainMesh`, `LodSelector`, and `.las_terrain` I/O, introduce
-   a `TerrainTileData` plain struct and keep `TerrainTile` in `avraero::simulation` as a
+   a `TerrainTileData` plain struct and keep `TerrainTile` in `liteaero::simulation` as a
    thin wrapper.
 
 3. **Shared interface target name (Step 6)** — naming is a prerequisite for Steps 7, 11,
