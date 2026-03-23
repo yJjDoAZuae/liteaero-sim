@@ -14,59 +14,46 @@ set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 
 option(BUILD_SHARED_LIBS "Build libraries as shared instead of static" OFF)
 
+# M_PI and other POSIX math constants are not defined in strict C++17 mode
+# (-std=c++17, not -std=gnu++17). The Conan toolchain disables GNU extensions,
+# so _USE_MATH_DEFINES must be set globally to restore them on MinGW/MSVC.
+add_compile_definitions(_USE_MATH_DEFINES)
+
 # Enable CTest at the project root so all subdirectories are registered
 enable_testing()
 
 # ---------------------------------------------------------------------------
 # Dependencies
 #
-# All external dependencies are declared here in one place.
-# See docs/guidelines/cpp.md — "External Dependency Management" for policy.
+# C++ dependencies are managed via Conan 2.x. Run:
+#   conan install . --output-folder=build --build=missing --profile=liteaero-gcc
+# then configure with:
+#   cmake -B build -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake
+#
+# See docs/dependencies/README.md and docs/installation/README.md.
 #
 # Registry:
 #   Dependency       | Version/SHA                              | License      | Method
-#   -----------------|------------------------------------------|--------------|----------------
-#   Eigen3           | 3.4+ (system)                            | MPL-2        | find_package
-#   nlohmann_json    | v3.12.0                                  | MIT          | FetchContent (1a)
-#   googletest       | v1.17.0                                  | BSD-3-Clause | FetchContent (1a)
-#   trochoids        | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (1b)
-#   protobuf         | v3.21.12                                 | BSD-3-Clause | find_package + FetchContent (1a)
-#   mcap             | releases/cpp/v1.4.0                      | MIT          | FetchContent (1b)
-#   tinygltf         | v2.9.3                                   | MIT          | FetchContent (1b)
+#   -----------------|------------------------------------------|--------------|----------------------
+#   Eigen3           | 3.4.0                                    | MPL-2        | Conan (find_package)
+#   nlohmann_json    | 3.12.0                                   | MIT          | Conan (find_package)
+#   gtest            | 1.14.0                                   | BSD-3-Clause | Conan (find_package)
+#   protobuf         | 3.21.12                                  | BSD-3-Clause | Conan (find_package)
+#   trochoids        | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (pattern 1b — catkin CMake)
+#   mcap             | releases/cpp/v1.4.0                      | MIT          | FetchContent (pattern 1b — header-only)
+#   tinygltf         | v2.9.3                                   | MIT          | FetchContent (pattern 1b — header-only)
 # ---------------------------------------------------------------------------
-include(FetchContent)
 
 # --- Eigen3 (MPL-2) — linear algebra ---
-# Allow the caller to point at a non-system Eigen installation via the
-# EIGEN3_INCLUDE_DIR environment variable.
-if(DEFINED ENV{EIGEN3_INCLUDE_DIR})
-    list(APPEND CMAKE_PREFIX_PATH "$ENV{EIGEN3_INCLUDE_DIR}")
-endif()
-find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(Eigen3 REQUIRED NO_MODULE)
 
-# --- nlohmann/json v3.12.0 (MIT) — JSON serialization ---
-# Prefer a system installation; fall back to FetchContent.
-find_package(nlohmann_json 3.12 QUIET)
-if(NOT nlohmann_json_FOUND)
-    FetchContent_Declare(
-        nlohmann_json
-        URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
-    )
-    FetchContent_MakeAvailable(nlohmann_json)
-endif()
+# --- nlohmann/json (MIT) — JSON serialization ---
+find_package(nlohmann_json REQUIRED)
 
-# --- Google Test v1.17.0 (BSD-3-Clause) — unit testing ---
-# Prefer a system installation; fall back to FetchContent.
-find_package(GTest QUIET)
-if(NOT GTest_FOUND)
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.zip
-    )
-    # Prevent gtest from overriding the parent project's compiler/linker settings on MSVC
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-endif()
+# --- Google Test (BSD-3-Clause) — unit testing ---
+find_package(GTest REQUIRED)
+
+include(FetchContent)
 
 # --- trochoids (Clear BSD) — time-optimal UAV path planning (Dubins + trochoids) ---
 # Source: https://github.com/castacks/trochoids
@@ -103,20 +90,9 @@ if(NOT trochoids_POPULATED)
     )
 endif()
 
-# --- protobuf v3.21.12 (BSD-3-Clause) — binary serialization ---
+# --- protobuf (BSD-3-Clause) — binary serialization ---
 # v3.21.x is the last pre-abseil release; avoids pulling in ~30 abseil targets.
-# Prefer a system installation (e.g. MSYS2 pacman); fall back to FetchContent.
-find_package(Protobuf QUIET)
-if(NOT Protobuf_FOUND)
-    FetchContent_Declare(
-        protobuf
-        GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-        GIT_TAG        v3.21.12
-    )
-    set(protobuf_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(protobuf)
-endif()
+find_package(protobuf REQUIRED CONFIG)
 
 # --- mcap (MIT) — MCAP binary log format; C++ header-with-implementation library ---
 # Pattern 1b: upstream CMakeLists in cpp/mcap/ pulls in optional compression deps.

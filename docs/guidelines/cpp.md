@@ -310,40 +310,52 @@ Always record the license of every dependency in the table below and in the depe
 ### Decision Tree for Adding a New Dependency
 
 ```text
-Is the library available with source code?
-├── YES → Does it have CMake support?
-│         ├── YES → Use CMake FetchContent             (preferred)
-│         └── NO  → Use git submodule + manual CMake target
-└── NO  → Binary-only distribution?
-          ├── YES → Vendor in libs/<name>/ with CMake wrapper  (last resort)
-          └── NO  → Reconsider; find a source-available alternative
+Is the library in ConanCenter?
+├── YES → Add to conanfile.txt; use find_package() in CMakeLists.txt  (preferred)
+└── NO  → Is source available?
+          ├── YES → FetchContent pattern 1b (manual target, bypass upstream CMake)
+          └── NO  → Binary-only vendor in libs/<name>/                (last resort)
 ```
 
-### Tier 1 — CMake FetchContent (Preferred)
+### Tier 1 — Conan (Preferred)
 
-Use `FetchContent` for all libraries that distribute source, whether or not they natively support CMake. This is already established in the project for `googletest` and `nlohmann_json`.
+Use Conan for all libraries available in ConanCenter. Declare them in `conanfile.txt` and
+locate them in CMake with `find_package()` after running `conan install`.
 
-There are two sub-patterns depending on whether the upstream `CMakeLists.txt` is compatible:
+```ini
+# conanfile.txt
+[requires]
+eigen/3.4.0
+nlohmann_json/3.12.0
+gtest/1.14.0
+protobuf/3.21.12
 
-**1a — Upstream CMakeLists.txt is compatible** (e.g., googletest, nlohmann_json):
+[generators]
+CMakeDeps
+CMakeToolchain
+```
+
+```cmake
+# CMakeLists.txt — after conan_toolchain.cmake is loaded
+find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(nlohmann_json REQUIRED)
+find_package(GTest REQUIRED)
+find_package(protobuf REQUIRED CONFIG)
+```
+
+Run `conan install` before configuring CMake (see `docs/installation/README.md`).
+
+### Tier 2 — FetchContent (Not in ConanCenter)
+
+Use FetchContent **only** for packages that are not available in ConanCenter. All current
+FetchContent deps (trochoids, mcap, tinygltf) have incompatible upstream build systems and
+are integrated with pattern 1b — download source only, define a manual CMake target.
+
+**Pattern 1b — source with incompatible build system:**
 
 ```cmake
 include(FetchContent)
 
-FetchContent_Declare(
-    nlohmann_json                                   # MIT license
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(nlohmann_json)
-```
-
-**1b — Upstream CMakeLists.txt is incompatible** (e.g., catkin/ROS packages, Makefile-only projects):
-
-Use `FetchContent_Populate` to download the source only, then manually define the CMake target. This is how the `trochoids` library is integrated — its upstream uses catkin/ROS as a build system, but the library source itself has no ROS dependencies.
-
-```cmake
 FetchContent_Declare(
     trochoids                                       # Clear BSD license — AirLab / CMU 2023
     GIT_REPOSITORY https://github.com/castacks/trochoids.git
@@ -358,7 +370,7 @@ if(NOT trochoids_POPULATED)
         ${trochoids_SOURCE_DIR}/src/trochoid_utils.cpp
         ${trochoids_SOURCE_DIR}/src/DubinsStateSpace.cpp
     )
-    target_include_directories(trochoids PUBLIC
+    target_include_directories(trochoids SYSTEM PUBLIC
         ${trochoids_SOURCE_DIR}/include
     )
     target_compile_features(trochoids PUBLIC cxx_std_17)
@@ -370,9 +382,8 @@ Rules:
 - Always pin to a specific **tag or commit SHA** — never `main` or `master`.
 - Use `GIT_SHALLOW TRUE` when pinning to a tag; omit it when pinning to a bare SHA.
 - Record the library name, version/SHA, and license in a comment next to the `FetchContent_Declare` call.
-- Group all `FetchContent` declarations in a dedicated `cmake/Dependencies.cmake` file included from the root `CMakeLists.txt`.
 
-### Tier 2 — Git Submodules
+### Tier 3 — Git Submodules
 
 Use git submodules when:
 
@@ -414,14 +425,18 @@ set_target_properties(example_lib PROPERTIES
 
 ### Dependency Registry
 
-Maintain this table in `cmake/Dependencies.cmake` as a comment header:
+Maintain this table as a comment header in the root `CMakeLists.txt` dependency block:
 
 ```text
-# Dependency         | Version/Commit                           | License      | Method
-# ------------------|------------------------------------------|--------------|------------------
-# googletest         | v1.14.0                                  | BSD-3-Clause | FetchContent (1a)
-# nlohmann_json      | v3.11.3                                  | MIT          | FetchContent (1a)
-# trochoids          | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (1b)
+# Dependency       | Version/Commit                           | License      | Method
+# ----------------|------------------------------------------|--------------|----------------------
+# eigen            | 3.4.0                                    | MPL-2        | Conan (find_package)
+# nlohmann_json    | 3.12.0                                   | MIT          | Conan (find_package)
+# gtest            | 1.14.0                                   | BSD-3-Clause | Conan (find_package)
+# protobuf         | 3.21.12                                  | BSD-3-Clause | Conan (find_package)
+# trochoids        | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (1b)
+# mcap             | releases/cpp/v1.4.0                      | MIT          | FetchContent (1b)
+# tinygltf         | v2.9.3                                   | MIT          | FetchContent (1b)
 ```
 
 ---

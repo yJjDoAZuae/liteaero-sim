@@ -60,14 +60,11 @@ The Debug configuration enables `-fsanitize=address,undefined` on GCC/Clang.
 
 ## 4. Run Tests
 
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-Or from the build directory:
+PATH must include ucrt64/bin when running ctest. Without it, Windows finds the wrong
+`libstdc++` DLL and every test crashes with an "Entry Point Not Found" dialog box.
 
 ```bash
-cd build && ctest -C Release --output-on-failure
+PATH="/c/msys64/ucrt64/bin:$PATH" ctest --test-dir build --output-on-failure
 ```
 
 Expected output: all tests pass except the known pre-existing failures documented in [testing/strategy.md](../testing/strategy.md#known-failures).

@@ -1,13 +1,10 @@
 # ---------------------------------------------------------------------------
 # liteaerosim_proto — generated C++ from proto/liteaerosim.proto
 #
-# Protobuf is fetched (or found on the system) by the root CMakeLists.txt
-# before this subdirectory is processed.
+# protobuf is provided by Conan and found by the root CMakeLists.txt.
+# protobuf_generate_cpp() and protobuf::libprotobuf are available after
+# find_package(protobuf REQUIRED CONFIG) in the root.
 # ---------------------------------------------------------------------------
-
-# Protobuf is fetched/found by the root CMakeLists.txt — do not call
-# find_package again here. protobuf_generate_cpp() and protobuf::libprotobuf
-# are already available.
 
 protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS
     ${CMAKE_CURRENT_SOURCE_DIR}/liteaerosim.proto

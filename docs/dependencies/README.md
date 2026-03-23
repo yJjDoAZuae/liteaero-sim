@@ -13,20 +13,17 @@ Prefer permissive open-source licenses. See [guidelines/general.md](../guideline
 
 ## Current Dependencies
 
-### C++ Runtime Dependencies
+### C++ Dependencies
 
 | Library | Version / SHA | License | Integration | Purpose |
 | --- | --- | --- | --- | --- |
-| [Eigen3](https://eigen.tuxfamily.org) | 3.4+ | MPL-2 | System `find_package` | Linear algebra — matrices, vectors, state-space |
-| [nlohmann/json](https://github.com/nlohmann/json) | v3.12.0 | MIT | FetchContent (tarball) | JSON serialization / deserialization |
-| [protobuf](https://github.com/protocolbuffers/protobuf) | v3.21.12 | BSD-3-Clause | `find_package` + FetchContent fallback (pattern 1a) | Binary serialization (proto3 wire format) |
-| [trochoids](https://github.com/castacks/trochoids) | `38d23eb` | Clear BSD | FetchContent (source, pattern 1b) | Dubins and trochoidal path planning |
-
-### C++ Test Dependencies
-
-| Library | Version | License | Integration | Purpose |
-| --- | --- | --- | --- | --- |
-| [googletest](https://github.com/google/googletest) | v1.17.0 | BSD-3-Clause | FetchContent (zip) | Unit testing (gtest + gmock) |
+| [Eigen3](https://eigen.tuxfamily.org) | 3.4.0 | MPL-2 | Conan | Linear algebra — matrices, vectors, state-space |
+| [nlohmann/json](https://github.com/nlohmann/json) | 3.12.0 | MIT | Conan | JSON serialization / deserialization |
+| [googletest](https://github.com/google/googletest) | 1.14.0 | BSD-3-Clause | Conan | Unit testing (gtest + gmock) |
+| [protobuf](https://github.com/protocolbuffers/protobuf) | 3.21.12 | BSD-3-Clause | Conan | Binary serialization (proto3 wire format) |
+| [trochoids](https://github.com/castacks/trochoids) | `38d23eb` | Clear BSD | FetchContent (pattern 1b) | Dubins and trochoidal path planning |
+| [mcap](https://github.com/foxglove/mcap) | v1.4.0 | MIT | FetchContent (pattern 1b) | MCAP binary log format |
+| [tinygltf](https://github.com/syoyo/tinygltf) | v2.9.3 | MIT | FetchContent (pattern 1b) | glTF 2.0 / GLB export |
 
 ### Python Dependencies
 
@@ -169,21 +166,20 @@ re-evaluate whether the fix has been merged upstream.
 
 ## Integration Methods
 
-### FetchContent Pattern 1a — CMake-native (nlohmann/json, googletest)
+### Conan — Preferred (Eigen3, nlohmann_json, googletest, protobuf)
 
-Used when the upstream library has a compatible `CMakeLists.txt`.
+Used for all packages available in ConanCenter. Declare in `conanfile.txt`; locate with `find_package()` after the Conan toolchain is loaded.
 
 ```cmake
-FetchContent_Declare(
-    nlohmann_json
-    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
-)
-FetchContent_MakeAvailable(nlohmann_json)
+find_package(Eigen3 REQUIRED NO_MODULE)
+find_package(nlohmann_json REQUIRED)
+find_package(GTest REQUIRED)
+find_package(protobuf REQUIRED CONFIG)
 ```
 
-### FetchContent Pattern 1b — Source with incompatible build system (trochoids)
+### FetchContent Pattern 1b — Source with incompatible build system (trochoids, mcap, tinygltf)
 
-Used when the upstream uses a non-CMake build system (catkin/ROS in this case). Source is downloaded and compiled with a manually defined target, bypassing the upstream `CMakeLists.txt`.
+Used for packages not in ConanCenter whose upstream build system is incompatible. Source is downloaded and compiled with a manually defined CMake target, bypassing the upstream `CMakeLists.txt`.
 
 ```cmake
 FetchContent_Declare(
@@ -207,29 +203,9 @@ endif()
 
 > **Note:** `FetchContent_Populate(<name>)` is deprecated in CMake 3.30. If the project minimum is raised to 3.28+, migrate to `FetchContent_MakeAvailable` with a cmake override directory.
 
-### System `find_package` (Eigen3)
-
-Eigen3 is a large header-only library that is better installed system-wide than fetched per-build.
-
-```cmake
-if(DEFINED ENV{EIGEN3_INCLUDE_DIR})
-    list(APPEND CMAKE_PREFIX_PATH "$ENV{EIGEN3_INCLUDE_DIR}")
-endif()
-find_package(Eigen3 3.4 REQUIRED NO_MODULE)
-```
-
 ## Adding a New Dependency
 
 1. Check the license against the policy above.
-2. Choose the integration method:
-
-```mermaid
-flowchart TD
-    A{Source available?} -->|Yes| B{CMake support?}
-    A -->|No| E["libs/ — binary vendor<br/>Last resort"]
-    B -->|Yes| C["FetchContent 1a<br/>cmake/Dependencies.cmake"]
-    B -->|No| D["FetchContent 1b<br/>manual target<br/>or git submodule"]
-```
-
-1. Add to `CMakeLists.txt` dependency registry comment block.
-2. Record in this document.
+2. Choose the integration method — in ConanCenter? Use Conan. Source available but not in ConanCenter? Use FetchContent pattern 1b. Binary-only? Vendor in `libs/` as a last resort.
+3. Add to `conanfile.txt` (if Conan) or `CMakeLists.txt` dependency registry comment block.
+4. Record in this document.
