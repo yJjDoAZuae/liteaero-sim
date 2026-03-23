@@ -30,12 +30,13 @@ target_include_directories(liteaerosim
 # library and do not form part of its public API. Consumers of liteaerosim
 # do not need to link these separately.
 target_link_libraries(liteaerosim
+    PUBLIC
+        liteaero::log
     PRIVATE
         Eigen3::Eigen
         nlohmann_json::nlohmann_json
         trochoids
         liteaerosim_proto
-        mcap_headers
         tinygltf_headers
 )
 

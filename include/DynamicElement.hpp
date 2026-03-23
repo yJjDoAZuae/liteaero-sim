@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ILogger.hpp"
+#include <liteaero/log/ILogger.hpp>
 #include <nlohmann/json.hpp>
 
 namespace liteaerosim {
@@ -45,7 +45,7 @@ public:
 
     /// Attach a logger. Pass nullptr to detach.
     /// The logger is available to onLog() calls after each step.
-    void attachLogger(ILogger* logger) noexcept;
+    void attachLogger(liteaero::log::ILogger* logger) noexcept;
 
 protected:
     virtual void           onInitialize(const nlohmann::json& config) = 0;
@@ -54,7 +54,7 @@ protected:
     virtual void           onDeserializeJson(const nlohmann::json&)    = 0;
 
     /// Called after each step() when a logger is attached. Default: no-op.
-    virtual void onLog(ILogger& /*logger*/) const {}
+    virtual void onLog(liteaero::log::ILogger& /*logger*/) const {}
 
     /// Schema version for this subclass. Increment when serialized fields change.
     virtual int schemaVersion() const = 0;
@@ -62,7 +62,7 @@ protected:
     /// Human-readable type name injected into every serialized snapshot.
     virtual const char* typeName() const = 0;
 
-    ILogger* logger_ = nullptr;
+    liteaero::log::ILogger* logger_ = nullptr;
 
 private:
     void validateSchema(const nlohmann::json& state) const;

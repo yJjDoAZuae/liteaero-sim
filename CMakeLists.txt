@@ -40,8 +40,11 @@ enable_testing()
 #   gtest            | 1.14.0                                   | BSD-3-Clause | Conan (find_package)
 #   protobuf         | 3.21.12                                  | BSD-3-Clause | Conan (find_package)
 #   trochoids        | 38d23eb3346737fe9d6e9ff57c742113e29dfe4f | Clear BSD    | FetchContent (pattern 1b — catkin CMake)
-#   mcap             | releases/cpp/v1.4.0                      | MIT          | FetchContent (pattern 1b — header-only)
 #   tinygltf         | v2.9.3                                   | MIT          | FetchContent (pattern 1b — header-only)
+#   liteaero-flight  | co-located sibling repo                  | proprietary  | add_subdirectory (co-located dev)
+#
+# NOTE: mcap is intentionally absent. It was liteaero-sim's only consumer of mcap
+# and is now provided transitively via liteaero::log from liteaero-flight.
 # ---------------------------------------------------------------------------
 
 # --- Eigen3 (MPL-2) — linear algebra ---
@@ -94,29 +97,6 @@ endif()
 # v3.21.x is the last pre-abseil release; avoids pulling in ~30 abseil targets.
 find_package(protobuf REQUIRED CONFIG)
 
-# --- mcap (MIT) — MCAP binary log format; C++ header-with-implementation library ---
-# Pattern 1b: upstream CMakeLists in cpp/mcap/ pulls in optional compression deps.
-# We download source and expose only the include path via an INTERFACE target.
-# MCAP_IMPLEMENTATION is defined in src/logger/mcap_impl.cpp.
-# Compression is disabled at compile time (no lz4/zstd deps required).
-FetchContent_Declare(
-    mcap
-    GIT_REPOSITORY https://github.com/foxglove/mcap.git
-    GIT_TAG        releases/cpp/v1.4.0
-)
-FetchContent_GetProperties(mcap)
-if(NOT mcap_POPULATED)
-    FetchContent_Populate(mcap)
-    add_library(mcap_headers INTERFACE)
-    target_include_directories(mcap_headers SYSTEM INTERFACE
-        ${mcap_SOURCE_DIR}/cpp/mcap/include
-    )
-    target_compile_definitions(mcap_headers INTERFACE
-        MCAP_COMPRESSION_NO_LZ4
-        MCAP_COMPRESSION_NO_ZSTD
-    )
-endif()
-
 # --- tinygltf v2.9.3 (MIT) — glTF 2.0 / GLB export for game engine rendering ---
 # Pattern 1b: upstream CMakeLists.txt pulls in stb_image and optional draco;
 # we only need the header.  FetchContent_Populate + manual INTERFACE target.
@@ -141,6 +121,16 @@ if(NOT tinygltf_POPULATED)
         TINYGLTF_NO_EXTERNAL_IMAGE
     )
 endif()
+
+# ---------------------------------------------------------------------------
+# liteaero-flight (co-located sibling repo — co-located development dependency)
+# ---------------------------------------------------------------------------
+# liteaero-flight is the shared flight-software library extracted from this repo.
+# During co-located development both repos live side-by-side, so we use
+# add_subdirectory to bring in liteaero-flight targets directly from source.
+# When liteaero-flight is released as a packaged library, this block is replaced
+# by find_package(liteaero_flight REQUIRED).
+add_subdirectory(../liteaero-flight liteaero-flight-build)
 
 # ---------------------------------------------------------------------------
 # Subdirectories

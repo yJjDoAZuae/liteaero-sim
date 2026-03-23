@@ -26,7 +26,7 @@ void DynamicElement::deserializeJson(const nlohmann::json& state) {
     onDeserializeJson(state);
 }
 
-void DynamicElement::attachLogger(ILogger* logger) noexcept {
+void DynamicElement::attachLogger(liteaero::log::ILogger* logger) noexcept {
     logger_ = logger;
 }
 

@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 0 | Extract history with `git filter-repo`; push to remote | Complete |
 | 1 | Repository scaffolding and CMake skeleton | Complete |
-| 2 | `liteaero::log`: ILogger and logging infrastructure | liteaero-flight: Complete; sim cleanup: Not started |
+| 2 | `liteaero::log`: ILogger and logging infrastructure | Complete |
 | 3 | `liteaero::control`: `DynamicElement` and `SisoElement` | Not started |
 | 4 | `liteaero::control`: Filter hierarchy | Not started |
 | 5 | `liteaero::control`: SISO elements and scheduling infrastructure | Not started |
@@ -383,40 +383,28 @@ Result: proto target builds clean. All other targets are INTERFACE stubs (no com
 
 **Verification:** 6/6 Logger tests pass (`LoggerTest.*`).
 
-**LiteAero Sim half** (Not started)
+**LiteAero Sim half** (Complete)
 
-**Prerequisite — establish liteaero-sim → liteaero-flight dependency:**
+**Delivered:**
 
-Before deleting any LiteAero Sim code, update `liteaero-sim/CMakeLists.txt` to consume
-liteaero-flight targets. Select the appropriate mechanism (see Migration Strategy section):
-
-- For co-located development: `add_subdirectory(../liteaero-flight liteaero-flight-build)`
-- For CI or distributed builds: `FetchContent` pointing to a tagged commit
-
-Document the chosen mechanism in `liteaero-sim/CLAUDE.md`. Verify that liteaero-sim builds
-and all existing liteaero-sim tests still pass before removing any code.
-
-**Code to remove from LiteAero Sim:**
-
-| LiteAero Sim file | Replacement |
+| Change | Detail |
 | --- | --- |
-| `include/ILogger.hpp` | `<liteaero/log/ILogger.hpp>` from `liteaero::log` |
-| `include/logger/Logger.hpp` | `<liteaero/log/Logger.hpp>` from `liteaero::log` |
-| `include/logger/LogSource.hpp` | `<liteaero/log/LogSource.hpp>` from `liteaero::log` |
-| `include/logger/LogReader.hpp` | `<liteaero/log/LogReader.hpp>` from `liteaero::log` |
-| `src/logger/Logger.cpp` | (compiled in liteaero-flight) |
-| `src/logger/LogReader.cpp` | (compiled in liteaero-flight) |
-| `src/logger/mcap_impl.cpp` | (compiled in liteaero-flight) |
-| `src/logger/mcap_static.hpp` | (private to liteaero-flight) |
-| `test/Logger_test.cpp` | (tests now in liteaero-flight) |
+| `liteaero-sim/CMakeLists.txt` | Added `add_subdirectory(../liteaero-flight liteaero-flight-build)` (co-located dev mechanism); removed mcap FetchContent block (mcap now comes transitively via `liteaero::log`); updated dependency registry comment |
+| `liteaero-sim/src/CMakeLists.txt` | Replaced `mcap_headers` with `liteaero::log` (PUBLIC, so its include path propagates to sim public headers that reference `ILogger`) |
+| `include/DynamicElement.hpp` | `#include "ILogger.hpp"` → `#include <liteaero/log/ILogger.hpp>`; all `ILogger*` and `ILogger&` occurrences qualified to `liteaero::log::ILogger` |
+| `src/DynamicElement.cpp` | `attachLogger(ILogger*)` → `attachLogger(liteaero::log::ILogger*)` |
+| `include/control/FilterSS2.hpp` | `onLog(liteaerosim::ILogger&)` → `onLog(liteaero::log::ILogger&)` |
+| `src/control/FilterSS2.cpp` | `onLog(liteaerosim::ILogger&)` → `onLog(liteaero::log::ILogger&)` |
+| `include/ILogger.hpp` | Deleted |
+| `include/logger/` (Logger.hpp, LogSource.hpp, LogReader.hpp) | Deleted |
+| `src/logger/` (Logger.cpp, LogReader.cpp, mcap_impl.cpp, mcap_static.hpp) | Deleted |
+| `test/Logger_test.cpp` | Deleted |
+| `liteaero-flight/CMakeLists.txt` | Tests only built when liteaero-flight is the top-level project (`CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR`). When consumed via `add_subdirectory`, tests are skipped — each migration step verifies liteaero-flight tests standalone. |
+| `liteaero-flight/src/CMakeLists.txt` | `CMAKE_SOURCE_DIR` → `PROJECT_SOURCE_DIR` throughout (required for correct include resolution when liteaero-flight is a subdirectory); `liteaero::control` INTERFACE target declares `liteaero::log` as an INTERFACE dep (because `DynamicElement.hpp` includes `ILogger.hpp`) |
 
-Update all LiteAero Sim include sites: replace `"ILogger.hpp"`, `"logger/Logger.hpp"`,
-`"logger/LogSource.hpp"`, `"logger/LogReader.hpp"` with the corresponding `<liteaero/log/...>`
-angle-bracket includes. Update all `using namespace liteaerosim::logger` or `liteaerosim`
-references in logger consumers to `liteaero::log`. Update `liteaero-sim/CMakeLists.txt` to
-link `liteaero::log` instead of compiling the logger sources directly.
-
-**Verification:** All LiteAero Sim tests pass. No logger source files remain in `liteaero-sim/src/logger/`. The directory may be removed once empty.
+**Verification:** 463/465 LiteAero Sim tests pass (2 FilterTF failures are pre-existing,
+unrelated to the logger migration). 6/6 `liteaero_log_test` tests pass in the standalone
+liteaero-flight build.
 
 ---
 
@@ -694,6 +682,7 @@ Add a test file `test/terrain/Terrain_test.cpp` covering basic geometric propert
 for each migrated struct type.
 
 **Verification:**
+
 ```bash
 PATH="/c/msys64/ucrt64/bin:$PATH" mingw32-make -C build liteaero_terrain_test
 PATH="/c/msys64/ucrt64/bin:$PATH" ctest --test-dir build -R Terrain --output-on-failure

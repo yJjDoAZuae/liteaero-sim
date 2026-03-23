@@ -61,7 +61,7 @@ protected:
     float          onStep(float u)                                   override;
     nlohmann::json onSerializeJson()                           const override;
     void           onDeserializeJson(const nlohmann::json& state)    override;
-    void           onLog(liteaerosim::ILogger& logger)         const override;
+    void           onLog(liteaero::log::ILogger& logger)       const override;
     int            schemaVersion()                             const override { return 1; }
     const char*    typeName()                                  const override { return "FilterSS2"; }
 

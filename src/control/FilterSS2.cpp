@@ -109,7 +109,7 @@ void FilterSS2::onDeserializeJson(const nlohmann::json& state) {
     x_(1) = s.at("x1").get<float>();
 }
 
-void FilterSS2::onLog(liteaerosim::ILogger& logger) const {
+void FilterSS2::onLog(liteaero::log::ILogger& logger) const {
     logger.log("FilterSS2.in",  in_);
     logger.log("FilterSS2.out", out_);
     logger.log("FilterSS2.x0",  x_(0));
