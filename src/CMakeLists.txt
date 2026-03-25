@@ -33,6 +33,7 @@ target_link_libraries(liteaerosim
     PUBLIC
         liteaero::log
         liteaero::control
+        liteaero::nav
     PRIVATE
         Eigen3::Eigen
         nlohmann_json::nlohmann_json

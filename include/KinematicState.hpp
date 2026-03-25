@@ -1,80 +1,57 @@
 #pragma once
 
-// Kinematic/temporal state and all quantities derived from kinematics
-
-// Jerk and angular accelerations are not included, so trajectory torsion will not be calculated
+// KinematicState — simulation integrator and state accessor.
+//
+// Holds a liteaero::nav::KinematicStateSnapshot as its primary data member.
+// Derived-quantity methods are one-line forwarders to liteaero::nav::KinematicStateUtil.
+// The simulation engine (constructors and step()) lives here; all other logic is in
+// liteaero-flight.
 
 #include "navigation/WGS84.hpp"
+#include <liteaero/nav/KinematicStateUtil.hpp>
 #include <Eigen/Dense>
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <vector>
 
-typedef Eigen::Vector3f EulerAngles;
-typedef Eigen::Vector3f EulerRates;
-
-class PlaneOfMotion
-{
-
-public:
-    Eigen::Quaternionf q_np; // POM to NED rotation
-};
-
-class TurnCircle
-{
-
-public:
-    PlaneOfMotion pom;
-
-    Eigen::Vector3f turnCenter_deltaNED_m;
-};
+// Convenience type aliases preserved for existing sim call sites.
+using EulerAngles = Eigen::Vector3f;
+using EulerRates  = Eigen::Vector3f;
 
 class KinematicState
 {
 
 public:
-    KinematicState() : _time_sec(0.0),
-                       _positionDatum(),
-                       _velocity_NED_mps(Eigen::Vector3f::Zero()),
-                       _acceleration_NED_mps(Eigen::Vector3f::Zero()),
-                       _q_nw(Eigen::Quaternionf::Identity()),
-                       _q_nb(Eigen::Quaternionf::Identity()),
-                       _rates_Body_rps(Eigen::Vector3f::Zero()),
-                       _wind_NED_mps(Eigen::Vector3f::Zero()),
-                       _alpha_rad(0.f),
-                       _beta_rad(0.f),
-                       _alphaDot_rps(0.f),
-                       _betaDot_rps(0.f),
-                       _rollRate_Wind_rps(0.f) {};
 
+    // ── Construction ─────────────────────────────────────────────────────────
+
+    KinematicState() = default;
+
+    // Constructor 1: supply q_nw, alpha, beta, and wind explicitly.
     KinematicState(double time_sec,
-                   const WGS84_Datum &position_datum,
-                   const Eigen::Vector3f &velocity_NED_mps,
-                   const Eigen::Vector3f &acceleration_Wind_mps,
-                   const Eigen::Quaternionf &q_nw,
+                   const WGS84_Datum& position_datum,
+                   const Eigen::Vector3f& velocity_NED_mps,
+                   const Eigen::Vector3f& acceleration_Wind_mps,
+                   const Eigen::Quaternionf& q_nw,
                    float rollRate_Wind_rps,
-                   float alpha,
-                   float beta,
-                   float alphaDot,
-                   float betaDot,
-                   const Eigen::Vector3f &wind_NED_mps);
+                   float alpha_rad,
+                   float beta_rad,
+                   float alphaDot_rps,
+                   float betaDot_rps,
+                   const Eigen::Vector3f& wind_NED_mps);
 
-    // Constructor 2: accepts q_nb directly (e.g. from an Euler-angle specification).
-    // _q_nw is derived exactly from velocity_NED_mps and q_nb.  With
-    // q_wb = Ry(α)·Rz(−β) the body-frame airmass velocity satisfies
-    //   u = V·cosα·cosβ,  v = V·cosα·sinβ,  w = V·sinα
-    // which inverts to α = atan2(w, √(u²+v²)), β = atan2(v, u).
-    // Then _q_nw = q_nb · Rz(β) · Ry(−α).  Below the small-V threshold α=β=0.
+    // Constructor 2: supply q_nb directly; alpha, beta, q_nw are derived.
     KinematicState(double time_sec,
-                   const WGS84_Datum &position_datum,
-                   const Eigen::Vector3f &velocity_NED_mps,
-                   const Eigen::Vector3f &acceleration_NED_mps,
-                   const Eigen::Quaternionf &q_nb,
-                   const Eigen::Vector3f &rates_Body_rps);
+                   const WGS84_Datum& position_datum,
+                   const Eigen::Vector3f& velocity_NED_mps,
+                   const Eigen::Vector3f& acceleration_NED_mps,
+                   const Eigen::Quaternionf& q_nb,
+                   const Eigen::Vector3f& rates_Body_rps);
 
-    ~KinematicState() {};
+    ~KinematicState() = default;
 
-    // state update
+    // ── Simulation engine ─────────────────────────────────────────────────────
+
     void step(double time_sec,
               Eigen::Vector3f acceleration_Wind_mps,
               float rollRate_Wind_rps,
@@ -82,93 +59,76 @@ public:
               float beta_rad,
               float alphaDot_rps,
               float betaDot_rps,
-              const Eigen::Vector3f &wind_NED_mps);
+              const Eigen::Vector3f& wind_NED_mps);
 
-    // getters
-    double time_sec() const { return _time_sec; }
-    WGS84_Datum positionDatum() const { return _positionDatum; }
-    Eigen::Vector3f velocity_NED_mps() const { return _velocity_NED_mps; }
-    Eigen::Vector3f acceleration_NED_mps() const { return _acceleration_NED_mps; }
-    Eigen::Quaternionf q_nb() const { return _q_nb; }   // Body to NED rotation
-    Eigen::Quaternionf q_nw() const { return _q_nw; }   // Wind to NED rotation
-    Eigen::Vector3f rates_Body_rps() const { return _rates_Body_rps; }
+    // ── Snapshot access ───────────────────────────────────────────────────────
 
-    // derived quantity methods
-    double latitudeRate_rps() const;
-    double longitudeRate_rps() const;
-    Eigen::Vector3f velocity_Wind_mps() const;
-    Eigen::Vector3f velocity_Stab_mps() const;
-    Eigen::Vector3f velocity_Body_mps() const;
-    Eigen::Vector3f acceleration_Body_mps() const;
-    Eigen::Vector3f acceleration_Wind_mps() const;
-    Eigen::Vector3f eulers() const;
-    float roll() const;
-    float pitch() const;
-    float heading() const;
-    float rollRate_rps() const; // roll Euler time derivative
-    float pitchRate_rps() const; // pitch Euler time derivative
-    float headingRate_rps() const; // heading Euler time derivative
+    const liteaero::nav::KinematicStateSnapshot& snapshot() const { return snapshot_; }
 
-    const PlaneOfMotion &POM() const;
-    const TurnCircle &turnCircle() const;
+    // ── Direct field accessors (mirror existing API) ──────────────────────────
 
-    Eigen::Quaternionf q_nl() const; // Local Level to NED rotation
-    Eigen::Quaternionf q_ns() const; // Stability to NED rotation
-    Eigen::Quaternionf q_nv() const; // Velocity to NED rotation
-    float alpha() const;
-    float beta() const;
-    float rollRate_Wind_rps() const; // roll rate of the Wind frame w.r.t. NED
-    float alphaDot() const;
-    float betaDot() const;
-    float crab() const;
-    float crabRate() const;
+    double          time_sec()          const { return snapshot_.time_s; }
+    WGS84_Datum     positionDatum()     const { return WGS84_Datum(snapshot_.position); }
+    Eigen::Vector3f velocity_NED_mps()  const { return snapshot_.velocity_ned_mps; }
+    Eigen::Vector3f acceleration_NED_mps() const { return snapshot_.acceleration_ned_mps2; }
+    Eigen::Vector3f rates_Body_rps()    const { return snapshot_.rates_body_rps; }
+    Eigen::Quaternionf q_nw()           const { return snapshot_.q_nw; }
+
+    // ── Derived quantity forwarders ────────────────────────────────────────────
+
+    Eigen::Quaternionf q_nb()  const { return liteaero::nav::KinematicStateUtil::q_nb(snapshot_); }
+    Eigen::Quaternionf q_ns()  const { return liteaero::nav::KinematicStateUtil::q_ns(snapshot_); }
+    Eigen::Quaternionf q_nl()  const { return liteaero::nav::KinematicStateUtil::q_nl(snapshot_); }
+    Eigen::Quaternionf q_nv()  const { return Eigen::Quaternionf::Identity(); } // not implemented
+
+    float alpha()              const { return snapshot_.alpha_rad; }
+    float beta()               const { return snapshot_.beta_rad; }
+    float alphaDot()           const { return snapshot_.alpha_dot_rad_s; }
+    float betaDot()            const { return snapshot_.beta_dot_rad_s; }
+    float rollRate_Wind_rps()  const { return snapshot_.roll_rate_wind_rad_s; }
+
+    double latitudeRate_rps()  const { return liteaero::nav::WGS84::latitudeRate_rad_s(snapshot_.position, snapshot_.velocity_ned_mps(0)); }
+    double longitudeRate_rps() const { return liteaero::nav::WGS84::longitudeRate_rad_s(snapshot_.position, snapshot_.velocity_ned_mps(1)); }
+
+    Eigen::Vector3f velocity_Wind_mps()    const { return liteaero::nav::KinematicStateUtil::velocity_wind_mps(snapshot_); }
+    Eigen::Vector3f velocity_Stab_mps()   const { return liteaero::nav::KinematicStateUtil::velocity_stab_mps(snapshot_); }
+    Eigen::Vector3f velocity_Body_mps()   const { return liteaero::nav::KinematicStateUtil::velocity_body_mps(snapshot_); }
+    Eigen::Vector3f acceleration_Wind_mps() const { return liteaero::nav::KinematicStateUtil::acceleration_wind_mps2(snapshot_); }
+    Eigen::Vector3f acceleration_Body_mps() const { return liteaero::nav::KinematicStateUtil::acceleration_body_mps2(snapshot_); }
+
+    Eigen::Vector3f eulers()       const;
+    float roll()                   const { return liteaero::nav::KinematicStateUtil::roll_rad(snapshot_); }
+    float pitch()                  const { return liteaero::nav::KinematicStateUtil::pitch_rad(snapshot_); }
+    float heading()                const { return liteaero::nav::KinematicStateUtil::heading_rad(snapshot_); }
+    float rollRate_rps()           const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(0); }
+    float pitchRate_rps()          const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(1); }
+    float headingRate_rps()        const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(2); }
+
+    liteaero::nav::PlaneOfMotion POM()        const { return liteaero::nav::KinematicStateUtil::plane_of_motion(snapshot_); }
+    liteaero::nav::TurnCircle    turnCircle() const { return liteaero::nav::KinematicStateUtil::turn_circle(snapshot_); }
+
+    float crab()     const { return liteaero::nav::KinematicStateUtil::crab_rad(snapshot_); }
+    float crabRate() const { return liteaero::nav::KinematicStateUtil::crab_rate_rad_s(snapshot_); }
 
     static Eigen::Vector3f EulerRatesToBodyRates(const EulerAngles& ang, const EulerRates& rates);
     static EulerRates BodyRatesToEulerRates(const EulerAngles& ang, const Eigen::Vector3f& rates);
 
-    // Serialization
+    // ── Serialization ─────────────────────────────────────────────────────────
+
     nlohmann::json       serializeJson()                              const;
-    void                 deserializeJson(const nlohmann::json&        j);
+    void                 deserializeJson(const nlohmann::json& j);
     std::vector<uint8_t> serializeProto()                            const;
     void                 deserializeProto(const std::vector<uint8_t>& bytes);
 
 protected:
 
-    // time
-    double _time_sec;
+    liteaero::nav::KinematicStateSnapshot snapshot_;
 
-    // position
-    WGS84_Datum _positionDatum;
+    static void stepQnw(const Eigen::Vector3f& velocity_prev_NED_mps,
+                        const Eigen::Vector3f& velocity_NED_mps,
+                        float rollRate_Wind_rps,
+                        float dt_s,
+                        Eigen::Quaternionf& q_nw);
 
-    // velocity
-    Eigen::Vector3f _velocity_NED_mps;
-
-    // acceleration in NED frame
-    Eigen::Vector3f _acceleration_NED_mps;
-
-    // Wind-to-NED rotation (stored state)
-    Eigen::Quaternionf _q_nw;
-
-    // Body to NED rotation
-    Eigen::Quaternionf _q_nb;
-
-    // Body rates
-    Eigen::Vector3f _rates_Body_rps;
-
-    // Wind velocity in NED frame
-    Eigen::Vector3f _wind_NED_mps;
-
-    // Aerodynamic angles and rates — stored from step() / constructor parameters
-    float _alpha_rad;
-    float _beta_rad;
-    float _alphaDot_rps;
-    float _betaDot_rps;
-    float _rollRate_Wind_rps;
-
-    // Cached derived quantities (computed on demand by const methods)
-    mutable PlaneOfMotion _pom;
-    mutable TurnCircle    _turn_circle;
-
-    static void stepQnv(const Eigen::Vector3f& velocity_NED_mps, Eigen::Quaternionf& q_nv );
-
+    static void stepQnv(const Eigen::Vector3f& velocity_NED_mps, Eigen::Quaternionf& q_nv);
 };

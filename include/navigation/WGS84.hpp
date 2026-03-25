@@ -1,107 +1,90 @@
 #pragma once
 
-#ifndef WGS84_HPP
-#define WGS84_HPP
+// WGS84_Datum — thin wrapper around liteaero::nav::GeodeticPosition.
+//
+// All mathematical operations delegate to liteaero::nav::WGS84 free functions.
+// This class preserves the existing liteaero-sim call-site API through Step 7.
+// The static constants are aliases to liteaero::nav::WGS84 inline constexpr values.
 
-// WGS84 ellipsoid quantities and functions
-
+#include <liteaero/nav/GeodeticPosition.hpp>
+#include <liteaero/nav/WGS84.hpp>
 #include <Eigen/Dense>
+#include <cmath>
 
 class WGS84_Datum {
 
-    private:
+public:
 
-        float _height_WGS84_m;
-        double _latitudeGeodetic_rad;
-        double _longitude_rad;
+    // ── Defining parameters (aliases to liteaero::nav::WGS84 constants) ──────
 
-    public:
+    static constexpr double a     = liteaero::nav::WGS84::kA_m;
+    static constexpr double finv  = liteaero::nav::WGS84::kFinv;
+    static constexpr double GM    = liteaero::nav::WGS84::kGM;
+    static constexpr double omega = liteaero::nav::WGS84::kOmega_rps;
 
-        // defining parameters
-        static const double a; // m, major axis
-        static const double finv; // inverse of flattening
-        static const double GM; // Gravitational constant
-        static const double omega; // earth rotation rate rad/sec
+    // Derived parameters — computed from the defining parameters.
+    // e, E, b require sqrt; they are defined as inline const in the .cpp translation unit.
+    static const double e2;  // = 2/finv - 1/finv²
+    static const double e;   // = sqrt(e2)
+    static const double E;   // = a * sqrt(1/finv * (2 - 1/finv))
+    static const double b;   // = a * (1 - 1/finv)
+    static const double f;   // = 1/finv
 
-        // derived parameters
-        static const double E; // m, Linear eccentricity
-        static const double e2; // 6.69437999014e-3; // First eccentricity squared
-        static const double b; // 6356752.314245;
-        static const double f; // flattening
-        static const double e; // First eccentricity
+    // ── Construction ─────────────────────────────────────────────────────────
 
-        WGS84_Datum() :
-            _height_WGS84_m(0),
-            _latitudeGeodetic_rad(0),
-            _longitude_rad(0)
-         {};
-        
-        ~WGS84_Datum() {};
+    WGS84_Datum() = default;
+    ~WGS84_Datum() = default;
 
-        // setters and getters
-        void setHeight_WGS84_m(float h);
-        float height_WGS84_m() const { return _height_WGS84_m; }
-        void setLatitudeGeodetic_rad(double lat);
-        double latitudeGeodetic_rad() const { return _latitudeGeodetic_rad; }
-        void setLongitude_rad(double lon);
-        double longitude_rad() const { return _longitude_rad; }
+    /// Construct directly from a GeodeticPosition (no normalization applied).
+    explicit WGS84_Datum(const liteaero::nav::GeodeticPosition& pos) : position_(pos) {}
 
-        double northRadius() const;
-        double eastRadius() const;
+    // ── Setters (normalize lat/lon on assignment) ─────────────────────────────
 
-        double meridionalRadius() const;
-        double primeVerticalRadius() const;
-        double skewRadius(double azimuth_rad) const;
-        double latitudeRate(double Vnorth) const;
-        double longitudeRate(double Veast) const;
-        double horizonRate(double Vnorth, double Veast) const;
+    void setLatitudeGeodetic_rad(double lat);
+    void setLongitude_rad(double lon);
+    void setHeight_WGS84_m(float h);
 
-        Eigen::Vector3d transportRate(double Vnorth, double Veast) const;
+    void setECEF(const Eigen::Vector3d& ecef);
+    void setQne(const Eigen::Quaterniond& q_ne);
+    void setLLH(const Eigen::Vector3d& llh);
+    void setCne(const Eigen::Matrix3d& Cne);
 
-        // gravity model
-        double gravityMagnitude_mps2() const;
+    // ── Getters ───────────────────────────────────────────────────────────────
 
-        // earth rate
-        Eigen::Vector3d omega_ie_n() const;
+    double latitudeGeodetic_rad() const { return position_.latitude_rad; }
+    double longitude_rad()        const { return position_.longitude_rad; }
+    float  height_WGS84_m()       const { return position_.altitude_m; }
 
-        // JSON print
-        void printJSON();
+    const liteaero::nav::GeodeticPosition& geodeticPosition() const { return position_; }
 
-        // Eigen getters
-        Eigen::Vector3d ECEF() const;
-        Eigen::Quaterniond qne() const;
-        Eigen::Vector3d LLH() const;
-        Eigen::Matrix3d Cne() const;
+    // ── Derived quantities — delegate to liteaero::nav::WGS84 ────────────────
 
-        // Eigen setters
-        void setECEF(const Eigen::Vector3d& ecefDatum);
-        void setQne(const Eigen::Quaterniond& qneDatum);
-        void setLLH(const Eigen::Vector3d& llhDatum);
-        void setCne(const Eigen::Matrix3d& CneDatum);
+    double northRadius()                           const;
+    double eastRadius()                            const;
+    double meridionalRadius()                      const;
+    double primeVerticalRadius()                   const;
+    double skewRadius(double azimuth_rad)          const;
+    double latitudeRate(double v_north_mps)        const;
+    double longitudeRate(double v_east_mps)        const;
+    double horizonRate(double v_north_mps, double v_east_mps) const;
+    Eigen::Vector3d transportRate(double v_north_mps, double v_east_mps) const;
+    double gravityMagnitude_mps2()                 const;
+    Eigen::Vector3d omega_ie_n()                   const;
 
-        // Rotation from NED to Navigation frame, if datum is provided with a wander angle
-        static Eigen::Quaterniond NED2Nav(const Eigen::Quaterniond& qneDatum);
+    Eigen::Vector3d  ECEF()  const;
+    Eigen::Quaterniond qne() const;
+    Eigen::Vector3d  LLH()   const;
+    Eigen::Matrix3d  Cne()   const;
 
-        // align qne to north, normalize, and enforce positive scalar part
-        static Eigen::Quaterniond qne_fix(const Eigen::Quaterniond& qneDatum);
+    void printJSON();
 
-    private:
+    // Static utilities
+    static Eigen::Quaterniond NED2Nav(const Eigen::Quaterniond& q_ne);
+    static Eigen::Quaterniond qne_fix(const Eigen::Quaterniond& q_ne);
 
-        // datum conversion from ECEF
-        static void ECEF2LatHeight(const Eigen::Vector3d& ecefDatum, double* latitude_geodetic_rad, float* height_WGS84_m);
-        static void ECEF2Lon(const Eigen::Vector3d& ecefDatum, double* longitude_rad);
+private:
 
-        // to/from navigation frame quaternion
-        static void qne2LatLon(const Eigen::Quaterniond& q_ne, double* latitude_geodetic_rad, double* longitude_rad);
-        static void latLon2qne(double latitude_geodetic_rad, double longitude_rad, Eigen::Quaterniond& q_ne);
+    liteaero::nav::GeodeticPosition position_;
 
-        // to/from navigation frame direction cosine matrix
-        static void Cne2LatLon(const Eigen::Matrix3d& Cne, double* latitude_geodetic_rad, double* longitude_rad);
-        static void latLon2Cne(double latitude_geodetic_rad, double longitude_rad, Eigen::Matrix3d& Cne);
-
-        // datum conversion to ECEF
-        static void latLonHeight2ECEF(double latitude_geodetic_rad, double longitude_rad, float height_WGS84_m, Eigen::Vector3d& ecef);
-
+    static void normalizeLatLon(double* lat, double* lon);
 };
-
-#endif // WGS84_HPP

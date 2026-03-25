@@ -585,13 +585,13 @@ TEST(KinematicStateTest, TurnCircleRadiusCorrect) {
     // V=50, a_perp=5 m/s² → R = V²/a_perp = 500 m.
     const float V = 50.f, a = 5.f;
     KinematicState s = makeState1({V, 0.f, 0.f}, {0.f, a, 0.f});
-    EXPECT_NEAR(s.turnCircle().turnCenter_deltaNED_m.norm(), V * V / a, 1.f);
+    EXPECT_NEAR(s.turnCircle().turn_center_delta_ned_m.norm(), V * V / a, 1.f);
 }
 
 TEST(KinematicStateTest, TurnCircleCenterInCurvatureDirection) {
     // Center displacement must point in the a_perp direction = [0,1,0].
     KinematicState s = makeState1({50.f, 0.f, 0.f}, {0.f, 5.f, 0.f});
-    const Eigen::Vector3f dir = s.turnCircle().turnCenter_deltaNED_m.normalized();
+    const Eigen::Vector3f dir = s.turnCircle().turn_center_delta_ned_m.normalized();
     EXPECT_NEAR(dir.x(), 0.f, 1e-4f);
     EXPECT_NEAR(dir.y(), 1.f, 1e-4f);
     EXPECT_NEAR(dir.z(), 0.f, 1e-4f);
@@ -721,7 +721,7 @@ TEST(KinematicStateSerializationTest, JsonSchemaVersionField) {
     KinematicState s = makeNonTrivialState();
     nlohmann::json snap = s.serializeJson();
     EXPECT_EQ(snap.at("schema_version").get<int>(), 1);
-    EXPECT_EQ(snap.at("type").get<std::string>(), "KinematicState");
+    EXPECT_EQ(snap.at("type").get<std::string>(), "KinematicStateSnapshot");
 }
 
 TEST(KinematicStateSerializationTest, JsonSchemaVersionMismatchThrows) {

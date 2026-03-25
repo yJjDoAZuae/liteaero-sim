@@ -11,7 +11,7 @@
 | 4 | `liteaero::control`: Filter hierarchy | Complete |
 | 5 | `liteaero::control`: SISO elements and scheduling infrastructure | Complete |
 | 6 | `KinematicStateSnapshot` design document | Complete |
-| 7 | Shared interface target: `KinematicStateSnapshot`, `AircraftCommand`, `NavigationState` | Not started |
+| 7 | Shared interface target: `KinematicStateSnapshot`, `AircraftCommand`, `NavigationState` | Complete |
 | 8 | `liteaero::terrain`: Terrain element types and `V_Terrain` | Not started |
 | 9 | LiteAero Flight stub headers | Not started |
 | 10 | liteaero-flight build and test verification | Not started |
