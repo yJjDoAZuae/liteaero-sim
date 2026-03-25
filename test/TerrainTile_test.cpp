@@ -1,10 +1,11 @@
 #define _USE_MATH_DEFINES
-#include "environment/TerrainTile.hpp"
+#include <liteaero/terrain/TerrainTile.hpp>
 #include "environment/TerrainCell.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
 #include <stdexcept>
 
+using namespace liteaero::terrain;
 using namespace liteaerosim::environment;
 
 // ---------------------------------------------------------------------------
