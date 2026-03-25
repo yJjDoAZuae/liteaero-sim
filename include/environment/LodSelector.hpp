@@ -30,7 +30,7 @@ public:
 private:
     LodSelectorConfig                        config_;
     // Key: reinterpret_cast<uint64_t>(TerrainCell*) — stable for the mesh lifetime.
-    std::unordered_map<uint64_t, TerrainLod> committed_lod_;
+    std::unordered_map<uint64_t, liteaero::terrain::TerrainLod> committed_lod_;
 };
 
 } // namespace liteaerosim::environment

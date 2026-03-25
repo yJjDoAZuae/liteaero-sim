@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 
+using namespace liteaero::terrain;
 using namespace liteaerosim::environment;
 
 // ---------------------------------------------------------------------------

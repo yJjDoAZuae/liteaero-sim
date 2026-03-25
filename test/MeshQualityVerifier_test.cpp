@@ -1,9 +1,10 @@
 #define _USE_MATH_DEFINES
 #include "environment/MeshQualityVerifier.hpp"
-#include "environment/TerrainTile.hpp"
+#include <liteaero/terrain/TerrainTile.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
 
+using namespace liteaero::terrain;
 using namespace liteaerosim::environment;
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ for the step-by-step record. Architecture and component boundaries are defined i
 
 ## Current State
 
-### Migrated to `liteaero-flight` (Steps 0–3 complete)
+### Migrated to `liteaero-flight` (Steps 0–9 complete)
 
 | Element | Location in liteaero-flight | Step |
 | --- | --- | --- |
@@ -26,29 +26,29 @@ for the step-by-step record. Architecture and component boundaries are defined i
 | `Logger`, `LogSource`, `LogReader` | `include/liteaero/log/`, `src/log/` — `liteaero::log` | 2 |
 | `DynamicElement` | `include/liteaero/control/DynamicElement.hpp` — `liteaero::control` | 3 |
 | `SisoElement` | `include/liteaero/control/SisoElement.hpp` — `liteaero::control` | 3 |
+| `Filter` hierarchy, `Integrator`, `Derivative`, `RateLimit`, `Limit`, `SISOPIDFF` | `include/liteaero/control/`, `src/control/` — `liteaero::control` | 4–5 |
+| `WGS84`, `GeodeticPosition`, `KinematicStateSnapshot`, `KinematicStateUtil` | `include/liteaero/nav/`, `src/nav/` — `liteaero::nav` | 7 |
+| `TerrainVertex`, `TerrainFacet`, `GeodeticPoint`, `GeodeticAABB`, `LocalAABB`, `TerrainTile`, `V_Terrain`, `FlatTerrain` | `include/liteaero/terrain/`, `src/terrain/` — `liteaero::terrain` | 8 |
 
-### Stub headers in LiteAero Sim (to be relocated to `liteaero-flight`)
+### Stub headers in `liteaero-flight` (not yet implemented)
 
-| Element | Stub location | Design authority |
+| Element | Location in liteaero-flight | Design authority |
 | --- | --- | --- |
-| `Autopilot` | `include/control/Autopilot.hpp` | — |
-| `PathGuidance` | `include/guidance/PathGuidance.hpp` | — |
-| `VerticalGuidance` | `include/guidance/VerticalGuidance.hpp` | — |
-| `ParkTracking` | `include/guidance/ParkTracking.hpp` | — |
-| `V_PathSegment` | `include/path/V_PathSegment.hpp` | — |
-| `PathSegmentHelix` | `include/path/PathSegmentHelix.hpp` | — |
-| `Path` | `include/path/Path.hpp` | — |
-| `NavigationFilter` | — (no LiteAero Sim stub; created in `liteaero-flight` at Step 9) | [navigation_filter.md](../architecture/navigation_filter.md) |
-| `WindEstimator` | — (no LiteAero Sim stub; created in `liteaero-flight` at Step 9) | [wind_estimator.md](../architecture/wind_estimator.md) |
-| `FlowAnglesEstimator` | — (no LiteAero Sim stub; created in `liteaero-flight` at Step 9) | [flow_angles_estimator.md](../architecture/flow_angles_estimator.md) |
+| `Autopilot` | `include/liteaero/autopilot/Autopilot.hpp` — `liteaero::autopilot` | FC-5 |
+| `PathGuidance` | `include/liteaero/guidance/PathGuidance.hpp` — `liteaero::guidance` | FC-7 |
+| `VerticalGuidance` | `include/liteaero/guidance/VerticalGuidance.hpp` — `liteaero::guidance` | FC-7 |
+| `ParkTracking` | `include/liteaero/guidance/ParkTracking.hpp` — `liteaero::guidance` | FC-7 |
+| `V_PathSegment` | `include/liteaero/guidance/V_PathSegment.hpp` — `liteaero::guidance` | FC-6 |
+| `PathSegmentHelix` | `include/liteaero/guidance/PathSegmentHelix.hpp` — `liteaero::guidance` | FC-6 |
+| `Path` | `include/liteaero/guidance/Path.hpp` — `liteaero::guidance` | FC-6 |
+| `NavigationFilter` | `include/liteaero/nav/NavigationFilter.hpp` — `liteaero::nav` | FC-8 / [navigation_filter.md](../architecture/navigation_filter.md) |
+| `WindEstimator` | `include/liteaero/nav/WindEstimator.hpp` — `liteaero::nav` | FC-8 / [wind_estimator.md](../architecture/wind_estimator.md) |
+| `FlowAnglesEstimator` | `include/liteaero/nav/FlowAnglesEstimator.hpp` — `liteaero::nav` | FC-8 / [flow_angles_estimator.md](../architecture/flow_angles_estimator.md) |
 
 ### Infrastructure remaining to migrate from LiteAero Sim
 
-- `Filter` hierarchy, `Integrator`, `Derivative`, `RateLimit`, `Limit`, `SISOPIDFF` → `liteaero::control` (Steps 4–5)
-- `TerrainVertex`, `TerrainFacet`, `TerrainLod`, `TerrainTile`, `GeodeticPoint`,
-  `GeodeticAABB`, `LocalAABB`, `V_Terrain` → `liteaero::terrain` (Step 8)
-- Shared interface types (`AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`,
-  sensor measurement structs) → `liteaero-flight` (Step 7)
+- Shared interface types (`AircraftCommand`, `NavigationState`, sensor measurement structs) → `liteaero-flight` (pending)
+- `liteaerosim` internal namespace migration → `liteaero::simulation` (Step 11)
 
 ---
 
@@ -62,11 +62,11 @@ CMake targets and their migration status:
 | --- | --- | --- | --- |
 | `liteaero::log` | `liteaero::log` | `ILogger`, logging sinks | ✅ Complete (Step 2) |
 | `liteaero::control` | `liteaero::control` | `DynamicElement`, `SisoElement` | ✅ Partial (Step 3) — Filter hierarchy, Integrator, Derivative, RateLimit, Limit, SISOPIDFF pending |
-| `liteaero::terrain` | `liteaero::terrain` | Terrain mesh types, `V_Terrain` | Not started (Step 8) |
-| Shared interface target (name TBD) | — | `AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, sensor measurement structs | Not started (Step 7) |
-| `liteaero::nav` | `liteaero::nav` | Navigation filter, wind/flow-angle estimators | Not started (Step 9) |
-| `liteaero::guidance` | `liteaero::guidance` | Path guidance, vertical guidance, park tracking | Not started |
-| `liteaero::autopilot` | `liteaero::autopilot` | Autopilot inner loop | Not started |
+| `liteaero::terrain` | `liteaero::terrain` | Terrain mesh types, `V_Terrain` | ✅ Complete (Step 8) |
+| Shared interface target (name TBD) | — | `AircraftCommand`, `KinematicStateSnapshot`, `NavigationState`, sensor measurement structs | Partial (Step 7) — `KinematicStateSnapshot` complete; others pending |
+| `liteaero::nav` | `liteaero::nav` | Navigation filter, wind/flow-angle estimators | ✅ Partial (Steps 7–8) — WGS84, KinematicStateUtil complete; NavigationFilter, WindEstimator, FlowAnglesEstimator stubs only (Step 9) |
+| `liteaero::guidance` | `liteaero::guidance` | Path guidance, vertical guidance, park tracking | Stubs only (Step 9) |
+| `liteaero::autopilot` | `liteaero::autopilot` | Autopilot inner loop | Stub only (Step 9) |
 | `liteaero::perception` | `liteaero::perception` | Vision navigator, lidar terrain estimator | Not started |
 | `liteaero::mission_autonomy` | `liteaero::mission_autonomy` | Link budget estimator | Not started |
 

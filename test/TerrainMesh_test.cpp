@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 
+using namespace liteaero::terrain;
 using namespace liteaerosim::environment;
 
 // ---------------------------------------------------------------------------

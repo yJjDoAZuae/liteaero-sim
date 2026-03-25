@@ -3,6 +3,8 @@
 
 namespace liteaerosim::environment {
 
+using namespace liteaero::terrain;
+
 void TerrainCell::addTile(TerrainTile tile) {
     const int idx = static_cast<int>(tile.lod());
     tiles_[idx] = std::move(tile);

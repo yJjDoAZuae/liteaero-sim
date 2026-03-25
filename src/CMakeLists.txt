@@ -33,6 +33,7 @@ target_link_libraries(liteaerosim
     PUBLIC
         liteaero::log
         liteaero::control
+        liteaero::terrain
         liteaero::nav
     PRIVATE
         Eigen3::Eigen

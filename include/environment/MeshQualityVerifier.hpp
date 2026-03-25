@@ -1,5 +1,5 @@
 #pragma once
-#include "environment/TerrainTile.hpp"
+#include <liteaero/terrain/TerrainTile.hpp>
 #include <cstdint>
 #include <limits>
 
@@ -27,7 +27,7 @@ struct MeshQualityThresholds {
 
 class MeshQualityVerifier {
 public:
-    [[nodiscard]] static MeshQualityReport verify(const TerrainTile& tile);
+    [[nodiscard]] static MeshQualityReport verify(const liteaero::terrain::TerrainTile& tile);
     [[nodiscard]] static bool              passes(const MeshQualityReport& report,
                                                   const MeshQualityThresholds& thresholds = {});
 };

@@ -1,7 +1,7 @@
-#include "environment/Terrain.hpp"
+#include <liteaero/terrain/V_Terrain.hpp>
 #include <gtest/gtest.h>
 
-using namespace liteaerosim::environment;
+using namespace liteaero::terrain;
 
 // ---------------------------------------------------------------------------
 // T1: FlatTerrain returns the same elevation regardless of position

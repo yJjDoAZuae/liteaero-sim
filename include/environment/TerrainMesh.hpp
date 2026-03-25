@@ -1,8 +1,10 @@
 #pragma once
-#include "environment/GeodeticPoint.hpp"
-#include "environment/LocalAABB.hpp"
+#include <liteaero/terrain/GeodeticAABB.hpp>
+#include <liteaero/terrain/GeodeticPoint.hpp>
+#include <liteaero/terrain/LocalAABB.hpp>
+#include <liteaero/terrain/TerrainTile.hpp>
+#include <liteaero/terrain/V_Terrain.hpp>
 #include "environment/TerrainCell.hpp"
-#include "environment/Terrain.hpp"
 #include <nlohmann/json.hpp>
 #include <array>
 #include <cstdint>
@@ -15,11 +17,11 @@ namespace liteaerosim::environment {
 // Reference returned by spatial query methods.
 // `lod` is the selected LOD level for this cell (respecting the max_lod filter).
 struct TileRef {
-    const TerrainCell* cell;
-    TerrainLod         lod;
+    const TerrainCell*            cell;
+    liteaero::terrain::TerrainLod lod;
 };
 
-class TerrainMesh : public V_Terrain {
+class TerrainMesh : public liteaero::terrain::V_Terrain {
 public:
     // V_Terrain — barycentric interpolation of the finest available LOD tile.
     [[nodiscard]] float elevation_m(double latitude_rad,
@@ -42,12 +44,12 @@ public:
 
     // Returns the ECEF position (X, Y, Z in meters) of every vertex in tile.
     [[nodiscard]] std::vector<std::array<double, 3>>
-        toECEF(const TerrainTile& tile) const;
+        toECEF(const liteaero::terrain::TerrainTile& tile) const;
 
     // Returns the NED displacement (N, E, D in meters) of every vertex in tile
     // relative to the supplied geodetic reference position.
     [[nodiscard]] std::vector<std::array<float, 3>>
-        toNED(const TerrainTile& tile,
+        toNED(const liteaero::terrain::TerrainTile& tile,
               double ref_lat_rad, double ref_lon_rad, double ref_alt_m) const;
 
     // ---------------------------------------------------------------------------
@@ -60,21 +62,22 @@ public:
 
     // Primary simulation interface — metric extents in the local tangent plane.
     [[nodiscard]] std::vector<TileRef>
-        queryLocalAABB(double           center_lat_rad,
-                       double           center_lon_rad,
-                       float            center_height_m,
-                       const LocalAABB& aabb,
-                       TerrainLod       max_lod) const;
+        queryLocalAABB(double                          center_lat_rad,
+                       double                          center_lon_rad,
+                       float                           center_height_m,
+                       const liteaero::terrain::LocalAABB& aabb,
+                       liteaero::terrain::TerrainLod   max_lod) const;
 
     // Ingestion / data-management interface — geodetic rectangle.
     [[nodiscard]] std::vector<TileRef>
-        queryGeodeticAABB(const GeodeticAABB& aabb, TerrainLod max_lod) const;
+        queryGeodeticAABB(const liteaero::terrain::GeodeticAABB& aabb,
+                          liteaero::terrain::TerrainLod          max_lod) const;
 
     // Spherical neighborhood query — primary interface for sensor models.
     [[nodiscard]] std::vector<TileRef>
         querySphere(double center_lat_rad, double center_lon_rad,
                     float  center_height_m, float  radius_m,
-                    TerrainLod max_lod) const;
+                    liteaero::terrain::TerrainLod max_lod) const;
 
     // Returns one TileRef per cell with LOD selected by slant-range rule.
     // Not yet implemented (Step 7).
@@ -94,9 +97,9 @@ public:
     // Game engine export (Step 11)
     // ---------------------------------------------------------------------------
 
-    void exportGltf(const std::filesystem::path& output_path,
-                    TerrainLod                   max_lod,
-                    const GeodeticPoint*         world_origin = nullptr) const;
+    void exportGltf(const std::filesystem::path&          output_path,
+                    liteaero::terrain::TerrainLod         max_lod,
+                    const liteaero::terrain::GeodeticPoint* world_origin = nullptr) const;
 
     // ---------------------------------------------------------------------------
     // Serialization (Step 10)
@@ -116,8 +119,9 @@ private:
     // See §Internal Spatial Index in docs/architecture/terrain.md.
     std::unordered_map<uint64_t, TerrainCell> cells_;
 
-    static uint64_t  cellKey(double lat_rad, double lon_rad, TerrainLod lod);
-    static double    cellExtentRad(TerrainLod lod);
+    static uint64_t cellKey(double lat_rad, double lon_rad,
+                            liteaero::terrain::TerrainLod lod);
+    static double   cellExtentRad(liteaero::terrain::TerrainLod lod);
 };
 
 } // namespace liteaerosim::environment

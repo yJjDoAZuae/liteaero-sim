@@ -11,10 +11,10 @@
 | 4 | `liteaero::control`: Filter hierarchy | Complete |
 | 5 | `liteaero::control`: SISO elements and scheduling infrastructure | Complete |
 | 6 | `KinematicStateSnapshot` design document | Complete |
-| 7 | Shared interface target: `KinematicStateSnapshot`, `AircraftCommand`, `NavigationState` | Complete |
-| 8 | `liteaero::terrain`: Terrain element types and `V_Terrain` | Not started |
-| 9 | LiteAero Flight stub headers | Not started |
-| 10 | liteaero-flight build and test verification | Not started |
+| 7 | `liteaero::nav`: `GeodeticPosition`, `WGS84`, `KinematicStateSnapshot`, `KinematicStateUtil`; `KinematicState` and `WGS84_Datum` redesigned as composition wrappers | Complete |
+| 8 | `liteaero::terrain`: Terrain element types and `V_Terrain` | Complete |
+| 9 | LiteAero Flight stub headers | Complete |
+| 10 | liteaero-flight build and test verification | Complete |
 | 11 | LiteAero Sim internal namespace migration | Not started |
 | 12 | Final build and regression verification | Not started |
 
@@ -326,7 +326,7 @@ liteaero-flight/
   docs/
     guidelines/           # general.md, cpp.md (Conan-adapted), python.md
     interfaces/
-      icds.md             # stub — populated at Step 7
+      icds.md             # stub — ICD entries deferred to Step 11
     architecture/
       README.md
     algorithms/
@@ -613,67 +613,80 @@ All design questions resolved. See that document for full rationale.
 
 ---
 
-### Step 7 — `liteaero::nav`: `KinematicStateSnapshot` and `WGS84`
+### Step 7 — `liteaero::nav`: `GeodeticPosition`, `WGS84`, `KinematicStateSnapshot`, `KinematicStateUtil`
 
 Implement the architecture defined in `liteaero-flight/docs/architecture/kinematic_state_snapshot.md`.
-This step does **not** migrate `KinematicState` itself — that is the liteaero-sim half below.
-The liteaero-flight half creates the value types and utility namespaces; the sim half
-redesigns `KinematicState` to use them.
+The liteaero-flight half creates the value types and utility namespaces. The liteaero-sim
+half redesigns `KinematicState` and `WGS84_Datum` to use them via composition, closing the
+duplication window for all navigation math.
 
 #### Step 7 — liteaero-flight
 
-**Files to create:**
+**Files created:**
 
 | File | Contents |
 | --- | --- |
 | `include/liteaero/nav/GeodeticPosition.hpp` | Value struct: `double latitude_rad`, `double longitude_rad`, `float altitude_m` |
-| `include/liteaero/nav/WGS84.hpp` | Free function declarations: `meridionalRadius`, `primeVerticalRadius`, `northRadius`, `eastRadius`, `latitudeRate_rad_s`, `longitudeRate_rad_s`, `transportRate`, `gravity_mps2`, `omega_ie_n`, `toECEF`, `fromECEF`, `qne`, `fromQne` — all operating on `GeodeticPosition` |
-| `src/nav/WGS84.cpp` | Implementations ported from liteaero-sim `src/navigation/WGS84.cpp` |
-| `include/liteaero/nav/KinematicStateSnapshot.hpp` | Value struct: 14 fields per design document |
-| `include/liteaero/nav/KinematicStateUtil.hpp` | Free function declarations: `q_nb`, `q_ns`, `q_nl`, `roll_rad`, `pitch_rad`, `heading_rad`, `euler_rates_rad_s`, `velocity_body_mps`, `velocity_wind_mps`, `airspeed_mps`, `acceleration_body_mps2`, `acceleration_wind_mps2`, `crab_rad`, `crab_rate_rad_s`, `plane_of_motion`, `turn_circle` |
-| `src/nav/KinematicStateUtil.cpp` | Implementations ported from liteaero-sim `src/KinematicState.cpp` |
+| `include/liteaero/nav/WGS84.hpp` | `inline constexpr` constants (`kA_m`, `kFinv`, `kGM`, `kOmega_rps`); free function declarations: `meridionalRadius`, `primeVerticalRadius`, `northRadius`, `eastRadius`, `latitudeRate_rad_s`, `longitudeRate_rad_s`, `transportRate`, `gravity_mps2`, `omega_ie_n`, `toECEF`, `fromECEF`, `qne`, `fromQne` — all operating on `GeodeticPosition` |
+| `src/nav/WGS84.cpp` | Implementations with file-scope `wrapToPi`, `normalizeLatLon`, `latLon2Cne`, `Cne2LatLon` helpers; Newton-Raphson ECEF inversion; Somigliana gravity model |
+| `include/liteaero/nav/KinematicStateSnapshot.hpp` | 14-field value struct; `q_nb` excluded (derived); `acceleration_ned_mps2` uses `_mps2` suffix |
+| `include/liteaero/nav/KinematicStateUtil.hpp` | `PlaneOfMotion` and `TurnCircle` structs; free function declarations for orientation, Euler angles, frame-transformed velocities/accelerations, geometry, rate conversions, and serialization |
+| `src/nav/KinematicStateUtil.cpp` | Implementations; proto serialization via `liteaero_flight.pb.h`; gimbal-lock guard in `body_rates_to_euler_rates`; zero-velocity guards in `crab_rate_rad_s` and `plane_of_motion` |
 
-**CMakeLists update:** Promote `liteaero_nav` in `src/CMakeLists.txt` from INTERFACE to STATIC; add `src/nav/WGS84.cpp` and `src/nav/KinematicStateUtil.cpp`; add `Eigen3::Eigen` and `nlohmann_json::nlohmann_json` dependencies.
+**CMakeLists updates:**
 
-**Test files to create:**
-
-| File | Contents |
+| File | Change |
 | --- | --- |
-| `test/nav/WGS84_test.cpp` | Update existing stub: ECEF round-trip, gravity, radii of curvature |
-| `test/nav/KinematicStateSnapshot_test.cpp` | Construction, `q_nb` derivation, Euler angle round-trip, velocity frame transforms, JSON round-trip |
-
-**Update `test/nav/CMakeLists.txt`:** Add both test sources; promote from empty list to active target.
-
-**Verification:**
-
-```bash
-PATH="/c/msys64/ucrt64/bin:$PATH" mingw32-make -C build
-PATH="/c/msys64/ucrt64/bin:$PATH" ctest --test-dir build --output-on-failure
-```
-
-All `WGS84Test` and `KinematicStateSnapshotTest` cases pass.
+| `src/CMakeLists.txt` | `liteaero_nav` promoted from INTERFACE to STATIC; sources `nav/WGS84.cpp`, `nav/KinematicStateUtil.cpp` added; `Eigen3::Eigen`, `nlohmann_json::nlohmann_json` PUBLIC; `liteaero_flight_proto`, `protobuf::libprotobuf` PRIVATE |
+| `proto/liteaero_flight.proto` | Added `Vector3f`, `Quaternionf`, `GeodeticPosition`, `KinematicStateSnapshot` messages |
+| `test/nav/CMakeLists.txt` | Activated from empty list; `WGS84_test.cpp` and `KinematicStateSnapshot_test.cpp` added |
 
 #### Step 7 — LiteAero Sim
 
-**Redesign `KinematicState`** to use composition per the design document:
+**`WGS84_Datum` redesigned** as a thin wrapper over `liteaero::nav::GeodeticPosition`:
 
-- `KinematicState` holds `liteaero::nav::KinematicStateSnapshot snapshot_` as its primary data member.
-- Both constructors populate `snapshot_` and perform no other internal state storage.
-- `step()` updates `snapshot_` in place.
-- All existing derived-quantity methods (`roll_rad()`, `heading_rad()`, `velocity_wind_mps()`, etc.) become one-line forwarders to `liteaero::nav::KinematicStateUtil` free functions. No logic is duplicated.
-- `snapshot()` const accessor is added; `state()` on `Aircraft` returns `const liteaero::nav::KinematicStateSnapshot&`.
+- Holds `liteaero::nav::GeodeticPosition position_` as its only data member.
+- Static constants are `constexpr` aliases to `liteaero::nav::WGS84::k*` values; `e2`, `e`, `E`, `b`, `f` remain `static const double` (require `sqrt`).
+- `explicit WGS84_Datum(const liteaero::nav::GeodeticPosition&)` constructor added.
+- `geodeticPosition()` const accessor added.
+- All mathematical methods are one-line delegates to `liteaero::nav::WGS84` free functions.
+- `normalizeLatLon` retained in the sim wrapper (calls `MathUtil::wrapToPi` from sim-internal math).
+- `skewRadius` and `horizonRate` retained locally (not in liteaero-flight public API).
+- All liteaero-sim call sites compile unchanged.
 
-**Redesign `WGS84_Datum`** to delegate to `liteaero::nav::WGS84`:
+**`KinematicState` redesigned** to use composition:
 
-- `WGS84_Datum` holds `liteaero::nav::GeodeticPosition position_` as its only data member.
-- All existing methods (`northRadius()`, `ECEF()`, `qne()`, etc.) become one-line forwarders to `liteaero::nav::WGS84` free functions.
-- All liteaero-sim call sites continue to compile unchanged through this step.
+- Holds `liteaero::nav::KinematicStateSnapshot snapshot_` (protected) as its only data member.
+- Both constructors populate `snapshot_` directly; no other member storage.
+- `step()` updates `snapshot_` in place via RK4; calls `stepQnw` (extracted static helper) for `q_nw` propagation.
+- All derived-quantity methods (`roll()`, `heading()`, `velocity_Wind_mps()`, etc.) are one-line forwarders to `liteaero::nav::KinematicStateUtil`.
+- `snapshot()` const accessor added.
+- `EulerRatesToBodyRates` and `BodyRatesToEulerRates` delegate to `KinematicStateUtil::euler_rates_to_body_rates` / `body_rates_to_euler_rates`.
+- Serialization delegates to `KinematicStateUtil::serializeJson` / `deserializeJson` / `serializeProto` / `deserializeProto`; `liteaeroim.pb.h` no longer included by `KinematicState.cpp`.
+- `mutable PlaneOfMotion _pom` and `mutable TurnCircle _turn_circle` cache members removed; `POM()` and `turnCircle()` return by value.
+- `liteaero::nav` added to `liteaerosim` PUBLIC link libraries in `src/CMakeLists.txt`.
+- `KinematicState_test.cpp`: `turnCenter_deltaNED_m` → `turn_center_delta_ned_m`; JSON `"type"` assertion updated from `"KinematicState"` to `"KinematicStateSnapshot"`.
 
-**Remove:** `liteaero-sim/include/navigation/WGS84.hpp`, `liteaero-sim/src/navigation/WGS84.cpp` (replaced by forwarders in `WGS84_Datum`). `KinematicState.hpp` and `KinematicState.cpp` are updated in place (not removed — the class is redesigned, not deleted).
+**Deferred to Step 11:**
 
-**Update ICD documents:** Replace the `WGS84_Datum` and `KinematicState` entries in `liteaero-sim/docs/architecture/system/present/icds.md` with cross-references to `liteaero-flight/docs/interfaces/icds.md`.
+- `liteaero-sim/include/navigation/WGS84.hpp` and `src/navigation/WGS84.cpp` are NOT removed; they remain as the `WGS84_Datum` forwarder implementation. Removal requires updating all sim call sites that construct `WGS84_Datum` directly — deferred to the sim namespace migration.
+- `Aircraft::state()` returning `const liteaero::nav::KinematicStateSnapshot&` — deferred; `Aircraft` still exposes `const KinematicState&`. The `snapshot()` accessor on `KinematicState` bridges the gap.
+- ICD document updates (`liteaero-sim/docs/architecture/system/present/icds.md`, `liteaero-flight/docs/interfaces/icds.md`) — deferred to Step 11 alongside the full ICD cross-reference pass.
+- `AircraftCommand` and `NavigationState` message definitions — not yet added to `liteaero_flight.proto`; deferred.
 
-**Verification:** All LiteAero Sim tests pass. `KinematicState` and `WGS84_Datum` remain as thin wrappers; no simulation logic has been changed.
+#### Step 7 — Delivered
+
+Both halves verified:
+
+- liteaero-flight: 160/162 tests pass (2 pre-existing `FilterTF` failures unchanged); 16 new `WGS84Test` and `KinematicStateSnapshotTest` cases all pass
+- liteaero-sim: 345/345 tests pass
+
+**Execution notes:**
+
+- `(void)kE; (void)kB;` cannot appear at namespace scope in C++17; replaced with `[[maybe_unused]]` on the constant declarations.
+- `Eigen::AngleAxisd * Eigen::AngleAxisd` yields a `Quaternion`, not a `Matrix3d`; `.toRotationMatrix()` added to `latLon2Cne`.
+- The `q_nv` frame (velocity frame) was computed but never stored in the original `KinematicState`; `stepQnv` is retained as a declared static helper for call-site compatibility but is not invoked in the new constructors or `step()`.
+- `velocity_Stab_mps()` kept as a forwarder to `KinematicStateUtil::velocity_stab_mps`; no external call sites found but removal requires an explicit instruction.
 
 ---
 
@@ -732,33 +745,37 @@ Current State table, under their target namespaces. Remove any corresponding stu
 currently exist as untracked files in LiteAero Sim (`include/control/Autopilot.hpp`,
 `include/guidance/`, `include/path/`).
 
-**Stubs to create:**
+**Stubs created:**
 
 | Target namespace | File | Notes |
 | --- | --- | --- |
-| `liteaero::autopilot` | `include/liteaero/autopilot/Autopilot.hpp` | Replace `include/control/Autopilot.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/PathGuidance.hpp` | Replace `include/guidance/PathGuidance.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/VerticalGuidance.hpp` | Replace `include/guidance/VerticalGuidance.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/ParkTracking.hpp` | Replace `include/guidance/ParkTracking.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/V_PathSegment.hpp` | Replace `include/path/V_PathSegment.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/PathSegmentHelix.hpp` | Replace `include/path/PathSegmentHelix.hpp` |
-| `liteaero::guidance` | `include/liteaero/guidance/Path.hpp` | Replace `include/path/Path.hpp` |
-| `liteaero::nav` | `include/liteaero/nav/NavigationFilter.hpp` | Create; design authority in `docs/architecture/navigation_filter.md` |
-| `liteaero::nav` | `include/liteaero/nav/WindEstimator.hpp` | Create; design authority in `docs/architecture/wind_estimator.md` |
-| `liteaero::nav` | `include/liteaero/nav/FlowAnglesEstimator.hpp` | Create; design authority in `docs/architecture/flow_angles_estimator.md` |
+| `liteaero::autopilot` | `include/liteaero/autopilot/Autopilot.hpp` | Replaces `include/control/Autopilot.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/PathGuidance.hpp` | Replaces `include/guidance/PathGuidance.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/VerticalGuidance.hpp` | Replaces `include/guidance/VerticalGuidance.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/ParkTracking.hpp` | Replaces `include/guidance/ParkTracking.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/V_PathSegment.hpp` | Replaces `include/path/V_PathSegment.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/PathSegmentHelix.hpp` | Replaces `include/path/PathSegmentHelix.hpp` |
+| `liteaero::guidance` | `include/liteaero/guidance/Path.hpp` | Replaces `include/path/Path.hpp` |
+| `liteaero::nav` | `include/liteaero/nav/NavigationFilter.hpp` | Design authority: FC-8 / `navigation_filter.md` (not yet created) |
+| `liteaero::nav` | `include/liteaero/nav/WindEstimator.hpp` | Design authority: FC-8 / `wind_estimator.md` (not yet created) |
+| `liteaero::nav` | `include/liteaero/nav/FlowAnglesEstimator.hpp` | Design authority: FC-8 / `flow_angles_estimator.md` (not yet created) |
 
-Each stub is a comment-only or minimal class declaration noting the design authority
-document and the target namespace. No implementation.
+Each stub is a `#pragma once` header with a forward class declaration and block comment
+noting the design authority (FC item) and target namespace. No implementation.
 
-Remove corresponding LiteAero Sim stubs. Update `flight_code.md` Current State table.
+**LiteAero Sim stubs deleted:**
 
-**Verification:**
+- `include/control/Autopilot.hpp`
+- `include/guidance/PathGuidance.hpp`, `VerticalGuidance.hpp`, `ParkTracking.hpp`
+- `include/path/V_PathSegment.hpp`, `PathSegmentHelix.hpp`, `Path.hpp`
 
-```bash
-PATH="/c/msys64/ucrt64/bin:$PATH" mingw32-make -C build
-```
+`flight_code.md` Current State table updated: migrated elements through Step 8 recorded;
+stub table updated to show liteaero-flight locations; FC-1 status rows updated.
 
-liteaero-flight builds cleanly with stubs in place.
+#### Step 9 — Delivered
+
+- liteaero-flight: 173/173 tests pass (2 pre-existing `FilterTF` failures unchanged); stubs are header-only and do not affect the test count.
+- liteaero-sim: 345/345 tests pass; no code in liteaero-sim included the deleted stubs.
 
 ---
 
@@ -774,6 +791,29 @@ PATH="/c/msys64/ucrt64/bin:$PATH" ctest --test-dir build --output-on-failure
 
 Document the test count baseline. This baseline is the regression reference for Phase 2.
 No LiteAero Sim changes in this step.
+
+#### Step 10 — Delivered
+
+##### Phase 1 baseline — 2026-03-25
+
+| Metric | Count |
+| --- | --- |
+| Total tests | 173 |
+| Passed | 171 |
+| Failed (pre-existing) | 2 (`FilterTFTest.FirstOrderLP00`, `FilterTFTest.SecondOrderLP00`) |
+
+**Test breakdown by suite:**
+
+| Suite | Tests | Notes |
+| --- | --- | --- |
+| `LoggerTest` | 6 | `liteaero::log` |
+| `TableAxisTest`, `RectilinearTableTest` | 4 | gain-scheduling tables |
+| `SISOPIDFFTest`, `GainTest`, `UnwrapTest`, `RateLimitTest`, `LimitTest`, `AntiwindupTest`, `IntegratorTest`, `DerivativeTest`, `FilterSS2Test`, `FilterSS2ClipTest`, `FilterSSTest`, `FilterFIRTest`, `FilterTF2Test`, `FilterTFTest` | 121 | `liteaero::control` — 2 known `FilterTF` failures |
+| `TerrainTileTest`, `TerrainTest` | 11 | `liteaero::terrain` |
+| `KinematicStateSnapshotTest`, `WGS84Test` | 31 | `liteaero::nav` |
+
+This is the Phase 2 regression reference. Any test count change or new failure in Phase 2
+must be explained and justified before merging.
 
 ---
 
@@ -852,12 +892,10 @@ Update `docs/roadmap/flight_code.md` Current State table: update all stub paths 
 
 ## Risk Notes
 
-1. **`KinematicState` to `KinematicStateSnapshot` redesign (Step 6)** — the most
-   significant design risk. The current `KinematicState` has 15+ computed methods called
-   by the control subsystem and tests. A full call-site audit before writing the Step 6
-   design document is required. Do not skip this; discovering post-implementation that the
-   snapshot is missing fields used by the control subsystem requires reopening the Step 7
-   implementation.
+1. **`KinematicState` to `KinematicStateSnapshot` redesign (Step 6)** — ✅ Resolved in
+   Steps 6–7. Design document completed in Step 6; full implementation and test verification
+   completed in Step 7. All 15+ computed methods preserved as one-line forwarders; no
+   call-site breakage.
 
 2. **`TerrainTile` split (Step 8)** — `TerrainTile` bundles tile geometry (which migrates)
    with serialization and LOD selection state (which does not). If the class cannot be split
@@ -865,17 +903,13 @@ Update `docs/roadmap/flight_code.md` Current State table: update all stub paths 
    a `TerrainTileData` plain struct and keep `TerrainTile` in `liteaero::simulation` as a
    thin wrapper.
 
-3. **Shared interface target name (Step 6)** — naming is a prerequisite for Steps 7, 11,
-   and 12. Resolve before starting Step 7.
+3. **Shared interface target name (Step 6)** — ✅ Resolved. `liteaero::nav` / CMake target
+   `liteaero::nav` established in Step 6; promoted to STATIC and implemented in Step 7.
 
-4. **`WGS84_Datum` in `KinematicStateSnapshot`** — `WGS84_Datum` is currently a LiteAero
-   Sim type. If `KinematicStateSnapshot` includes it, `WGS84_Datum` must also migrate to
-   `liteaero-flight`. If the snapshot uses lat/lon/alt floats instead, the dependency is
-   avoided.
+4. **`WGS84_Datum` in `KinematicStateSnapshot`** — ✅ Resolved. `KinematicStateSnapshot`
+   uses `liteaero::nav::GeodeticPosition` (a plain struct with no sim dependency). `WGS84_Datum`
+   remains in liteaero-sim as a thin forwarder wrapper; it is not referenced by any
+   liteaero-flight type.
 
-5. **liteaero-sim dependency mechanism (Step 2 prerequisite)** — the mechanism for
-   liteaero-sim consuming liteaero-flight targets must be established before any code is
-   deleted from liteaero-sim. If the chosen mechanism has build-system complications (e.g.,
-   `add_subdirectory` conan_toolchain interaction, FetchContent cache issues), resolve them
-   before any code deletion proceeds. Deleting code before the replacement build is verified
-   is a one-way door.
+5. **liteaero-sim dependency mechanism (Step 2 prerequisite)** — ✅ Resolved. `add_subdirectory`
+   co-located mechanism established in Step 2; verified through Steps 3–7 without issue.

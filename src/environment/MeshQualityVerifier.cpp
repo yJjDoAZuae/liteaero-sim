@@ -6,6 +6,8 @@
 
 namespace liteaerosim::environment {
 
+using namespace liteaero::terrain;
+
 // Normalize an edge key so (a,b) and (b,a) map to the same entry.
 static std::pair<uint32_t, uint32_t> edgeKey(uint32_t a, uint32_t b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);

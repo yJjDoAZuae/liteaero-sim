@@ -3,6 +3,8 @@
 
 namespace liteaerosim::environment {
 
+using namespace liteaero::terrain;
+
 // ---------------------------------------------------------------------------
 // WGS84 constants (duplicated locally to keep this file self-contained)
 // ---------------------------------------------------------------------------
