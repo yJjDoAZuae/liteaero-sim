@@ -9,7 +9,7 @@
 | 2 | `liteaero::log`: ILogger and logging infrastructure | Complete |
 | 3 | `liteaero::control`: `DynamicElement` and `SisoElement` | Complete |
 | 4 | `liteaero::control`: Filter hierarchy | Complete |
-| 5 | `liteaero::control`: SISO elements and scheduling infrastructure | Not started |
+| 5 | `liteaero::control`: SISO elements and scheduling infrastructure | Complete |
 | 6 | `KinematicStateSnapshot` design document | Not started |
 | 7 | Shared interface target: `KinematicStateSnapshot`, `AircraftCommand`, `NavigationState` | Not started |
 | 8 | `liteaero::terrain`: Terrain element types and `V_Terrain` | Not started |
@@ -581,6 +581,19 @@ contain only `Control*.hpp` files (the sim-internal elements that remain) when t
 done.
 
 **Verification:** All LiteAero Sim tests pass.
+
+#### Step 5 — Delivered
+
+Both halves verified:
+
+- liteaero-flight: 124/126 tests pass (2 pre-existing `FilterTF` failures unchanged)
+- liteaero-sim: 345/345 tests pass (count reduction from 397 is expected — 9 test files migrated to liteaero-flight)
+
+**Execution notes:**
+
+- `Limit`, `LimitBase`, and `LimitElement` were already migrated in Step 4; excluded from Step 5 scope.
+- `RectilinearTable`, `TableAxis`, and `Gain` have no `.cpp` implementation file in liteaero-sim — header-only; no new sources added to CMakeLists.
+- `Unwrap.cpp` and `SISOPIDFF.cpp` used `math/math_util.hpp` (sim-internal, not available in liteaero-flight standalone); replaced with a file-scope `wrapToPi` helper using `<cmath>`.
 
 ---
 

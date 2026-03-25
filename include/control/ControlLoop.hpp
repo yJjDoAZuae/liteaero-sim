@@ -1,5 +1,5 @@
 
-#include "control/SISOPIDFF.hpp"
+#include <liteaero/control/SISOPIDFF.hpp>
 #include "KinematicState.hpp"
 #include <nlohmann/json.hpp>
 
@@ -23,7 +23,7 @@ public:
     float feedForward() const { return controller_.feedForward(); }
 
 protected:
-    SISOPIDFF controller_;
+    liteaero::control::SISOPIDFF controller_;
 
 };
 
