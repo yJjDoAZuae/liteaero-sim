@@ -11,7 +11,7 @@ path representation, navigation, and gain scheduling are LiteAero Flight compone
 architecturally separate. Their design and implementation items are in the LiteAero Flight
 roadmap (`liteaero-flight/docs/roadmap/flight_code.md`; cross-reference at
 [flight_code.md](flight_code.md)). Items in this document are LiteAero Sim items only.
-The system architecture is complete — see `docs/architecture/system/future/` and the
+The system architecture is complete — see [`docs/architecture/system/future/`](../architecture/system/future/) and the
 project roadmap [README.md](README.md) for cross-cutting milestones.
 
 **Item process.** All items follow a documentation-first process:
@@ -103,137 +103,15 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 17 | `Antiwindup` redesign — `AntiwindupConfig` struct with `enum class Direction`; `update(float)` replaces `operator=(float)`; `configure()`, `reset()`, `serializeJson()`/`deserializeJson()` added; `name` field removed; uninitialized-boolean bug fixed; `Integrator` serialization extended to embed `"antiwindup"` array | `Antiwindup_test.cpp` — 12 tests; `Integrator_test.cpp` — 2 new tests; all 408 tests pass |
 | 18 | Control subsystem refactoring (Steps A–J, all nine issues in [`control_interface_review.md`](../architecture/control_interface_review.md)) — `FilterError`/`DiscretizationMethod` promoted to `enum class`; `LimitBase` deleted, `Limit`/`RateLimit` rebased to `SisoElement`; `Gain` API cleaned up (`set()`, `value()`, stubs removed); `FilterSS2Clip`, `FilterTF2`, `FilterTF`, `FilterFIR`, `FilterSS` migrated to NVI (`onStep()`/`onSerializeJson()`/`onDeserializeJson()`); shadow `_in`/`_out` members and no-op `Filter` defaults removed; `Unwrap` `ref_` field added (`setReference()`, NVI routing, serialization); `SISOPIDFF` derives from `DynamicElement` with full lifecycle, `snake_case_` member renames (`Kp`→`proportional_gain_`, `I`→`integrator_`, etc.), private limits, `ControlLoop` accessor renames (`out()`→`output()`, `pid`→`controller_`); `Integrator`/`Derivative` private member renames (`_dt`→`dt_s_`, `_Tau`→`tau_s_`, `limit`→`limit_`) | `FilterSS2Clip_test.cpp`, `FilterTF2_test.cpp`, `FilterFIR_test.cpp` (new), `FilterSS_test.cpp`, `Unwrap_test.cpp`, `SISOPIDFF_test.cpp` (new) — 29 new tests; 435 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 19 | `SensorAirData` — pitot-static air data computer; differential pressure ($q_c$) and static pressure ($P_s$) transducers with Gaussian noise, first-order Tustin lag, and fuselage crossflow pressure error (two-port symmetric crosslinked model); derives IAS, CAS, EAS, TAS, Mach, barometric altitude (Kollsman-referenced, troposphere + tropopause), OAT; RNG pimpl with seed + advance serialization; JSON + proto round-trips | `SensorAirData_test.cpp` — 19 tests; 454 pass, 2 pre-existing `FilterTFTest` failures unchanged |
-| 20 | `LoadFactorAllocator` alpha-ceiling fix — Newton overshoot and fold guards corrected for positive-thrust case; the achievable-Nz ceiling is at $\alpha^*$ (where $f'(\alpha) = qSC_L'(\alpha) + T\cos\alpha = 0$), not at `alphaPeak()`, when $T > 0$; overshoot guard now clamps the proposed Newton step to the CL parabolic domain using `LiftCurveModel::alphaSep()` / `alphaSepNeg()` before checking $f'$, preventing escape into the flat separated plateau where $f' = T\cos\alpha$ stays positive until $\alpha > \pi/2$; bisects to locate $\alpha^*$ when the guard fires; fold guard stays at current iterate rather than snapping to `alphaPeak()`; `LiftCurveModel::alphaSep()` and `alphaSepNeg()` added to public interface; design documentation updated in `docs/implementation/equations_of_motion.md` and `docs/algorithms/equations_of_motion.md` | 4 new tests in `LoadFactorAllocator_test.cpp`; 19 tests total; 458 pass, 2 pre-existing `FilterTFTest` failures unchanged |
-| 0a | `LoadFactorAllocator` branch-continuation predictor — first-order warm-start $\alpha_0 = \alpha_\text{prev} + \delta n_z \cdot mg / f'(\alpha_\text{prev})$ and symmetric $\beta_0$ formula added to `solve()`; predictor is skipped at the stall ceiling ($f' \approx 0$) or when the raw prediction would fall outside $[\alpha_\text{sep\_neg}, \alpha_\text{sep}]$ (domain guard prevents cross-branch jumps on cold-start excess-demand calls); `_n_z_prev` and `_n_y_prev` added as serialized state fields in both JSON (`n_z_prev_nd`, `n_y_prev_nd`) and proto (`LoadFactorAllocatorState` fields 6–7); `iterations` (alpha solver iteration count) added to `LoadFactorOutputs`; `reset()` clears all four warm-start fields; `docs/implementation/equations_of_motion.md` §Warm-Starting updated | 3 new tests in `LoadFactorAllocator_test.cpp`: `PredictorReducesIterationsOnLinearStep` (iterations == 1 for an exact linear-region prediction), `PredictorJsonRoundTrip_IncludesNzPrevAndNyPrev`, `PredictorProtoRoundTrip_IncludesNzPrev`; 22 tests total |
-| 21 | **System architecture definition** — future-state system architecture model covering: originating requirements, use cases (UC-1 through UC-7), element registry (LiteAero Sim, LiteAero Flight, SimulationRunner, External Interface elements), data flow type and instance registries, interface control documents (ICD-8 through ICD-12), architectural decisions (30 recorded), open questions (all pre-design questions resolved; design-phase questions tracked); system boundary between LiteAero Sim simulation plant and LiteAero Flight established; Docker containerization model for SITL verification defined; `liteaero::` namespace structure and CMake target structure decided; repo split plan defined | No code tests — deliverable is the architecture document set under `docs/architecture/system/future/` |
-| 0b | `LoadFactorAllocator` test coverage extension — 8 new tests close continuity and domain-coverage gaps identified by code review. **White-box tests** (4): full positive and negative Nz sweeps through stall verifying the clamp value against `alphaPeak()`/`alphaTrough()`; fine-step sweep across the C¹ Linear→IncipientStall boundary confirming both segments are traversed; stall warm-start limitation test documenting that `reset()` is required after a discontinuous Nz jump. **Black-box tests** (4): uniform 500-step monotonicity sweeps from 0 to ±10 g for T = 0 (positive and negative) and T = `kLargeThrust` (positive); point-wise perturbation test at 37 grid points (T = 0, −9 g to +9 g) and 19 grid points (T > 0, 0 to +9 g) using fresh allocators. Stall warm-start limitation documented in `docs/implementation/equations_of_motion.md` §Stall Warm-Start Limitation | 30 tests total in `LoadFactorAllocator_test.cpp` |
+| 20 | `LoadFactorAllocator` alpha-ceiling fix — Newton overshoot and fold guards corrected for positive-thrust case; the achievable-Nz ceiling is at $\alpha^*$ (where $f'(\alpha) = qSC_L'(\alpha) + T\cos\alpha = 0$), not at `alphaPeak()`, when $T > 0$; overshoot guard now clamps the proposed Newton step to the CL parabolic domain using `LiftCurveModel::alphaSep()` / `alphaSepNeg()` before checking $f'$, preventing escape into the flat separated plateau where $f' = T\cos\alpha$ stays positive until $\alpha > \pi/2$; bisects to locate $\alpha^*$ when the guard fires; fold guard stays at current iterate rather than snapping to `alphaPeak()`; `LiftCurveModel::alphaSep()` and `alphaSepNeg()` added to public interface; design documentation updated in [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) and [`docs/algorithms/equations_of_motion.md`](../algorithms/equations_of_motion.md) | 4 new tests in `LoadFactorAllocator_test.cpp`; 19 tests total; 458 pass, 2 pre-existing `FilterTFTest` failures unchanged |
+| 21 | **System architecture definition** — future-state system architecture model covering: originating requirements, use cases (UC-1 through UC-7), element registry (LiteAero Sim, LiteAero Flight, SimulationRunner, External Interface elements), data flow type and instance registries, interface control documents (ICD-8 through ICD-12), architectural decisions (30 recorded), open questions (all pre-design questions resolved; design-phase questions tracked); system boundary between LiteAero Sim simulation plant and LiteAero Flight established; Docker containerization model for SITL verification defined; `liteaero::` namespace structure and CMake target structure decided; repo split plan defined | No code tests — deliverable is the architecture document set under [`docs/architecture/system/future/`](../architecture/system/future/) |
+| 22 | `LoadFactorAllocator` branch-continuation predictor — first-order warm-start $\alpha_0 = \alpha_\text{prev} + \delta n_z \cdot mg / f'(\alpha_\text{prev})$ and symmetric $\beta_0$ formula added to `solve()`; predictor is skipped at the stall ceiling ($f' \approx 0$) or when the raw prediction would fall outside $[\alpha_\text{sep\_neg}, \alpha_\text{sep}]$ (domain guard prevents cross-branch jumps on cold-start excess-demand calls); `_n_z_prev` and `_n_y_prev` added as serialized state fields in both JSON (`n_z_prev_nd`, `n_y_prev_nd`) and proto (`LoadFactorAllocatorState` fields 6–7); `iterations` (alpha solver iteration count) added to `LoadFactorOutputs`; `reset()` clears all four warm-start fields; [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) §Warm-Starting updated | 3 new tests in `LoadFactorAllocator_test.cpp`: `PredictorReducesIterationsOnLinearStep` (iterations == 1 for an exact linear-region prediction), `PredictorJsonRoundTrip_IncludesNzPrevAndNyPrev`, `PredictorProtoRoundTrip_IncludesNzPrev`; 22 tests total |
+| 23 | `LoadFactorAllocator` test coverage extension — 8 new tests close continuity and domain-coverage gaps identified by code review. **White-box tests** (4): full positive and negative Nz sweeps through stall verifying the clamp value against `alphaPeak()`/`alphaTrough()`; fine-step sweep across the C¹ Linear→IncipientStall boundary confirming both segments are traversed; stall warm-start limitation test documenting that `reset()` is required after a discontinuous Nz jump. **Black-box tests** (4): uniform 500-step monotonicity sweeps from 0 to ±10 g for T = 0 (positive and negative) and T = `kLargeThrust` (positive); point-wise perturbation test at 37 grid points (T = 0, −9 g to +9 g) and 19 grid points (T > 0, 0 to +9 g) using fresh allocators. Stall warm-start limitation documented in [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) §Stall Warm-Start Limitation | 30 tests total in `LoadFactorAllocator_test.cpp` |
+| 24 | **Aircraft command processing redesign** — all three command axes (`_nz_filter`, `_ny_filter`, `_roll_rate_filter`) converted to `setLowPassSecondIIR` (2nd-order LP); config params replaced: `cmd_deriv_tau_s`/`cmd_roll_rate_tau_s` → `nz_wn_rad_s`/`nz_zeta_nd`/`ny_wn_rad_s`/`ny_zeta_nd`/`roll_rate_wn_rad_s`/`roll_rate_zeta_nd`; `n_z_dot`/`n_y_dot` computed analytically from filter state after substep loop (no derivative filter lag); allocator receives shaped commands instead of raw clamped commands; Nyquist constraint enforced per axis (`wn * cmd_filter_dt_s < π`) at `initialize()`; proto `AircraftState` updated; `aircraft_config_v1` schema doc updated; fixture JSON files updated; design authority: [`docs/architecture/aircraft.md`](../architecture/aircraft.md) §Command Processing Architecture | 3 new Nyquist violation tests in `Aircraft_test.cpp` (`NyquistViolation_Nz_Throws`, `_Ny_Throws`, `_RollRate_Throws`); 345 pre-existing tests pass |
 
 ---
 
-## 0. Aircraft Command Processing Redesign
-
-The current `Aircraft` command processing is structurally wrong. The Nz, Ny, and roll rate
-commands enter the physics loop through bare derivative filters (`FilterSS2Clip::setDerivIIR`)
-and a 1st-order roll rate low-pass respectively. This does not model how a real FBW aircraft
-responds to commanded load factors and roll rate. A real FBW inner loop has a finite closed-loop
-bandwidth that shapes how the aircraft responds to pilot commands — the response to a step command
-is not instantaneous but follows a characteristic 2nd-order (or higher) transient. The plant model
-must include this behavior so that guidance and autopilot algorithms developed against it see a
-physically realistic command response behavior.
-
-### What Needs to Be Designed
-
-**Axis command response filters.** Each of the three commanded axes needs a command shaping filter
-that maps the raw pilot/autopilot command to the shaped command that drives the physics:
-
-- **Nz axis** — a 2nd-order low-pass filter on the commanded Nz, parameterized by a natural
-  frequency and damping ratio that represents the aircraft's closed-loop short-period/FBW bandwidth.
-  The shaped Nz output drives the load factor allocator.
-- **Ny axis** — same architecture as Nz, with its own bandwidth parameters.
-- **Roll rate axis** — a 2nd-order or 1st-order command response filter on the commanded roll rate,
-  parameterized by a bandwidth that represents the roll axis FBW closed-loop response.
-
-**Derivative terms for feed-forward.** `LoadFactorAllocator::solve()` accepts `n_z_dot` and
-`n_y_dot` as feed-forward terms for α-dot and β-dot estimation. These must be the time derivatives
-of the *shaped* Nz and Ny commands (not the raw commands). The design must define how these
-derivatives are produced — options include:
-
-- Differentiating the 2nd-order filter output with a separate derivative filter.
-- Computing the derivative analytically from the 2nd-order filter's state vector (exact, no
-  additional lag introduced).
-
-**Inner substep loop.** The command response filters run at a higher rate than the outer
-rigid-body integrator step. The design must specify:
-
-- The substep parameter (integer n: filter runs at `outer_dt / n`).
-- Which quantities are substepped (command response filters only; propulsion and kinematic
-  integration remain at the outer rate).
-- How the substepped filter output is handed off to the outer-rate allocator and integrator.
-
-**Nyquist constraints.** All filter bandwidths must be validated at initialization against the
-Nyquist frequency of their respective update rates. The design must specify which update rate
-(inner or outer) governs each parameter.
-
-**Serialization.** Full JSON and proto round-trips for all new filter states. `AircraftState`
-proto message updated accordingly. `aircraft_config_v1` schema document updated.
-
-### Scope of Current Implementation to Discard or Rework
-
-The following elements of the current `Aircraft` implementation were added without a design
-authority document and must be reviewed against the design produced by this item before any
-are retained:
-
-- `_n_z_deriv`, `_n_y_deriv` (`setDerivIIR`) — derivative filters on the *raw* commands.
-  Retain only if the design confirms this is the correct source for `n_z_dot`/`n_y_dot`.
-- `_roll_rate_filter` (`setLowPassFirstIIR`) — 1st-order roll rate smoothing. To be replaced
-  by the 2nd-order command response filter specified by the design.
-- `_cmd_filter_substeps`, `_cmd_filter_dt_s`, `_cmd_deriv_tau_s`, `_cmd_roll_rate_tau_s` —
-  config parameters added without a design; must be reconciled with or replaced by the
-  parameters defined in the design document.
-
-### Deliverables — Command Processing
-
-1. ✅ Design authority document at `docs/architecture/aircraft.md` updated to cover the
-   command processing architecture: filter topology (all three axes `setLowPassSecondIIR`),
-   parameter definitions, Nyquist constraints, inner substep mechanics, derivative sourcing
-   from filter state vector.
-2. ✅ `aircraft_config_v1` schema document (`docs/schemas/aircraft_config_v1.md`) updated —
-   `aircraft` section now documents `cmd_filter_substeps` and the six command-filter
-   parameters (`nz_wn_rad_s`, `nz_zeta_nd`, `ny_wn_rad_s`, `ny_zeta_nd`,
-   `roll_rate_wn_rad_s`, `roll_rate_zeta_nd`).
-3. ✅ Implementation — all three axes use `setLowPassSecondIIR`; config reads natural
-   frequency and damping ratio parameters; `n_z_dot`/`n_y_dot` computed analytically from
-   filter state; allocator receives shaped commands. Three Nyquist violation tests added
-   (`NyquistViolation_Nz_Throws`, `_Ny_Throws`, `_RollRate_Throws`).
-4. ✅ Fixture JSON files (`test/data/aircraft/`) updated to new config schema.
-
----
-
-## 1. Flight Code and Simulation Architecture Definition ✅
-
-✅ Complete — see delivered item 21 and `docs/architecture/system/future/`.
-
-Define a system architecture model that will inform all subsequent software development. The model will be encoded in Markdown documentation with Mermaid diagrams and tables, organized under `docs/architecture/`, and treated as the primary source of truth for system design. The model will include:
-
-- System originating requirements
-- System use cases
-- System element registry — each element defines its ports and the data flows it produces and consumes
-- Data flow type registry — each type defines the contents and character of a data flow
-- Data flow instance registry — maps data flow instances to their producers, consumers, and routing
-- Data flow diagrams
-- Interface Control Documents for each data flow type — sufficient to identify the interface and confirm the architecture accommodates it; detailed field-level schema definitions are deferred to the software design phase
-
-### Simulation Architecture
-
-The simulation architecture has not been formally defined. The design must establish a flexible architecture that supports integration with external components, optional in-process or out-of-process autopilot and navigation functions, and the computational efficiency requirements of real-time and batch operation.
-
-### Autopilot Architecture
-
-The autopilot will be a separable software component designed to flight-code standards, usable both as embedded flight software and as a component within the simulation. It must support simulation use cases such as reset and initialization to arbitrary conditions for batch testing. Estimation functions are outside the autopilot boundary — they belong to the Navigation system. The architecture must accommodate integration with ArduPilot and PX4, using MAVLink where sufficient and defining custom interfaces where MAVLink does not meet requirements.
-
-### Navigation and Perception Architecture
-
-The navigation system is a separable flight code component that derives kinematic state estimates from sensor measurements. It must be usable both within the simulation and as flight software on a real aircraft. The architecture must also identify the kinds of perception functions anticipated (e.g., image-based navigation, inference-based state estimation) and set requirements that allow those capabilities to be added in the future without requiring a new architecture.
-
-### External Components
-
-- Game engine connection for real-time and scaled-real-time 3D visualization
-- Pilot-in-the-loop input via joystick and RC transmitter (USB)
-- QGroundControl connection
-- PX4 hardware-in-the-loop and software-in-the-loop simulation interfaces
-- ArduPilot hardware-in-the-loop and software-in-the-loop simulation interfaces
-- Autopilot and navigation interfacing to ArduPilot and PX4
-
----
-
-## 2. Gain Scheduling *(→ LiteAero Flight)*
-
-Gain scheduling is a LiteAero Flight infrastructure item. Design and implementation are in
-the LiteAero Flight roadmap ([flight_code.md](flight_code.md)) as FC-2 and FC-3.
-
----
-
-## 4. Landing Gear — Ground Contact Model Design
+## 1. Landing Gear — Ground Contact Model Design
 
 `LandingGear` is a Domain Layer physics component that models the contact forces and
 moments exerted on the airframe by the landing gear during ground operations (taxi,
@@ -241,10 +119,10 @@ takeoff roll, and landing roll). It produces `ContactForces` (body-frame force v
 body-frame moment vector, and `weight_on_wheels` flag) and is internal to both `Aircraft`
 and `Aircraft6DOF`.
 The integration architecture and fidelity target are decided — see
-`docs/architecture/system/future/decisions.md §LandingGear integration model and fidelity target`.
+[`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) §LandingGear integration model and fidelity target.
 
-This item produces the design authority document at `docs/architecture/landing_gear.md`.
-Implementation is item 18. Do not implement in this item.
+This item produces the design authority document at [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md).
+Implementation is item 8. Do not implement in this item.
 
 ### Scope — LandingGear Design
 
@@ -285,57 +163,14 @@ The design must address at minimum:
 
 ### Deliverables — Landing Gear
 
-Design authority document at `docs/architecture/landing_gear.md` to be written
+Design authority document at [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) to be written
 before implementation begins.
 
 Implementation follows TDD: failing tests before production code.
 
 ---
 
-## 5. Autopilot Gain Design — Python Tooling *(→ LiteAero Flight)*
-
-Python workflow for deriving autopilot gains from the `Aircraft` model. This item is in
-the LiteAero Flight roadmap ([flight_code.md](flight_code.md)) as FC-4 since it produces
-inputs for the LiteAero Flight `Autopilot` component.
-
----
-
-## 6. Autopilot *(→ LiteAero Flight)*
-
-LiteAero Flight item — see [flight_code.md](flight_code.md) FC-5. Stub header is in
-`liteaero-flight/include/liteaero/autopilot/Autopilot.hpp`.
-
----
-
-## 7. Path Representation *(→ LiteAero Flight)*
-
-LiteAero Flight item — see [flight_code.md](flight_code.md) FC-6. Stub headers are in
-`liteaero-flight/include/liteaero/guidance/`.
-
----
-
-## 8. Guidance *(→ LiteAero Flight)*
-
-LiteAero Flight item — see [flight_code.md](flight_code.md) FC-7. Stub headers are in
-`liteaero-flight/include/liteaero/guidance/`.
-
----
-
-## 9. Airfield Traffic Pattern Operations *(→ Project Roadmap)*
-
-Integration item spanning LiteAero Sim and LiteAero Flight — see project roadmap
-[README.md](README.md) as integration item I-4.
-
----
-
-## 10. Airfield Ground Operations *(→ Project Roadmap)*
-
-Integration item spanning LiteAero Sim and LiteAero Flight — see project roadmap
-[README.md](README.md) as integration item I-5.
-
----
-
-## 11. Plot Visualization — Python Post-Processing Tools
+## 2. Plot Visualization — Python Post-Processing Tools
 
 Python scripts to load logger output and produce time-series plots for simulation
 post-flight analysis. These are Application Layer tools and live under `python/tools/`.
@@ -369,7 +204,7 @@ dev = [
 
 ---
 
-## 12. Manual Input — Joystick and Keyboard
+## 3. Manual Input — Joystick and Keyboard
 
 Manual input adapters translate human control inputs (joystick axes, keyboard state) into
 an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
@@ -410,7 +245,7 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 13. Execution Modes — Real-Time, Scaled, and Batch Runners
+## 4. Execution Modes — Real-Time, Scaled, and Batch Runners
 
 The simulation runner controls the wall-clock relationship to simulation time. Three modes
 are required:
@@ -462,7 +297,7 @@ Add `test/SimRunner_test.cpp` to the test executable.
 
 ---
 
-## 14. Remaining Sensor Models
+## 5. Remaining Sensor Models
 
 Not blocking any higher-priority item. Stub headers in `include/sensor/` exist for
 `SensorINS`, `SensorAA`, `SensorAAR`, `SensorRadAlt`, `SensorForwardTerrainProfile`, and
@@ -483,17 +318,9 @@ not yet been created. Implement when needed; order within this group follows dep
 
 ---
 
-## 15. Estimation Subsystem *(→ LiteAero Flight)*
+## 6. Aerodynamic Coefficient Design Study
 
-LiteAero Flight item — see [flight_code.md](flight_code.md) FC-8. No stub headers in
-LiteAero Sim — stubs will be created directly in `liteaero-flight` at the repo split
-(see [liteaero-flight-migration-plan.md](liteaero-flight-migration-plan.md) Step 9).
-
----
-
-## 16. Aerodynamic Coefficient Design Study
-
-Prerequisite for item 17 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Cannot be designed
+Prerequisite for item 7 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Cannot be designed
 without first defining how aerodynamic coefficients will be obtained and running the model
 design process through several example aircraft configurations. This item produces the
 design study that resolves OQ-16(c).
@@ -503,14 +330,14 @@ design study that resolves OQ-16(c).
 Design study document defining: aerodynamic coefficient data sources (wind tunnel, CFD,
 DATCOM, flight test); data formats and axes conventions; coefficient model format for
 `BodyAxisCoeffModel` across the range of anticipated fixed-wing configurations. Must be
-complete before item 17 begins.
+complete before item 7 begins.
 
 ---
 
-## 17. Aircraft6DOF — Design and Implementation
+## 7. Aircraft6DOF — Design and Implementation
 
-Full 6DOF aircraft dynamics model. Depends on item 16 (aero coefficient design study).
-Architecture placeholders are defined in `docs/architecture/system/future/element_registry.md`.
+Full 6DOF aircraft dynamics model. Depends on item 6 (aero coefficient design study).
+Architecture placeholders are defined in [`docs/architecture/system/future/element_registry.md`](../architecture/system/future/element_registry.md).
 
 ### Scope
 
@@ -518,7 +345,7 @@ Architecture placeholders are defined in `docs/architecture/system/future/elemen
   body frame; decouples the 6DOF integrator from the coefficient axis convention.
 - **`BodyAxisCoeffModel`** — implements `V_AeroModel` using body-axis stability derivatives
   (CX, CY, CZ, Cl, Cm, Cn) as functions of α, β, control surface deflections, and angular
-  rates. Coefficient model format defined by item 16.
+  rates. Coefficient model format defined by item 6.
 - **`Aircraft6DOF`** — full 6DOF dynamics; depends on `V_AeroModel` for forces and moments;
   accepts `SurfaceDeflectionCommand` (control surface deflection angles + per-motor
   throttle); produces `KinematicStateSnapshot`; used directly by ArduPilot and PX4
@@ -538,12 +365,12 @@ proto serialization and round-trip tests. `Aircraft6DOF` and `Aircraft` must bot
 
 ---
 
-## 18. LandingGear — Implementation
+## 8. LandingGear — Implementation
 
-Implement the design produced in item 4. Architecture decisions are recorded in
-`docs/architecture/system/future/decisions.md` (LandingGear integration model and fidelity
-target). Design authority document at `docs/architecture/landing_gear.md` must exist before
-implementation begins (item 4 deliverable).
+Implement the design produced in item 1. Architecture decisions are recorded in
+[`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) (LandingGear integration model and fidelity
+target). Design authority document at [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) must exist before
+implementation begins (item 1 deliverable).
 
 Produces `ContactForces` (6-component body-frame force + moment + `weight_on_wheels` flag).
 Accepts nose wheel steering angle and differential brake demands. Implements 2nd-order
@@ -554,24 +381,24 @@ Interfaces to both `Aircraft` (load-factor disturbance path) and `Aircraft6DOF` 
 
 ---
 
-## 19. External Interface Elements
+## 9. External Interface Elements
 
 Adapters that connect LiteAero Sim to external systems. All live in the Interface Layer.
 
 | # | Element | Protocol | Depends on |
 | --- | --- | --- | --- |
-| LAS-ext-1 | `ArduPilotInterface` | ArduPilot SITL protocol | SimRunner (item 13); `Aircraft` or `Aircraft6DOF` |
-| LAS-ext-2 | `PX4Interface` | PX4 SITL bridge | SimRunner (item 13); `Aircraft6DOF` |
-| LAS-ext-3 | `QGroundControlLink` | MAVLink over UDP | SimRunner (item 13); `NavigationState` (LiteAero Flight) |
-| LAS-ext-4 | `VisualizationLink` | UDP to Godot 4 GDExtension plugin at simulation rate | SimRunner (item 13); `SimulationFrame` (done) |
+| LAS-ext-1 | `ArduPilotInterface` | ArduPilot SITL protocol | SimRunner (item 4); `Aircraft` or `Aircraft6DOF` |
+| LAS-ext-2 | `PX4Interface` | PX4 SITL bridge | SimRunner (item 4); `Aircraft6DOF` |
+| LAS-ext-3 | `QGroundControlLink` | MAVLink over UDP | SimRunner (item 4); `NavigationState` (LiteAero Flight) |
+| LAS-ext-4 | `VisualizationLink` | UDP to Godot 4 GDExtension plugin at simulation rate | SimRunner (item 4); `SimulationFrame` (done) |
 
 Each element requires a design document before implementation. `VisualizationLink` transport
-and axis convention are decided (see `docs/architecture/terrain.md §Game Engine Integration`
-and `docs/architecture/system/future/decisions.md §Game engine for real-time visualization`).
+and axis convention are decided (see [`docs/architecture/terrain.md`](../architecture/terrain.md) §Game Engine Integration
+and [`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) §Game engine for real-time visualization).
 
 ---
 
-## 20. Synthetic Perception Sensors — Proposed
+## 10. Synthetic Perception Sensors — Proposed
 
 The following sensor elements are proposed and not yet designed. They depend on `V_Terrain`
 for geometry queries. Design items will be scheduled when prerequisite sensor and terrain
