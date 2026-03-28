@@ -123,15 +123,18 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 
 **Blocking dependencies:** None. `AeroCoeffEstimator` is implemented.
 
-Prerequisite for item 7 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Produces the design
-study that resolves OQ-16(c).
+Design authority: [`docs/architecture/aero_coefficient_model.md`](../architecture/aero_coefficient_model.md).
+
+Prerequisite for item 7 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Resolves OQ-16(c).
 
 ### Deliverables — Aerodynamic Coefficient Design Study
 
-Design study document defining: aerodynamic coefficient data sources (wind tunnel, CFD,
-DATCOM, flight test); data formats and axes conventions; coefficient model format for
-`BodyAxisCoeffModel` across the range of anticipated fixed-wing configurations. Must be
-complete before item 7 begins.
+- `aero_coefficient_model.md` completed and all open questions resolved.
+- `AircraftGeometry` JSON files and coefficient tables for Cases A, B, and C.
+- `BodyAxisCoeffModel` coefficient format decided and documented.
+- Element registry updated (`AeroModel` named, `BodyAxisCoeffModel` format defined).
+
+Must be complete before item 7 begins.
 
 ---
 
