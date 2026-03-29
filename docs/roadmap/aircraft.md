@@ -17,9 +17,16 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 **Item process.** All items follow a documentation-first process:
 
 1. Architecture and design documents are produced and reviewed.
-2. Authorization to begin implementation is granted.
-3. Implementation follows TDD — a failing test is written before every production code change.
-4. All implementation items include simulation scenarios and automated tests sufficient for
+2. All open questions in the design document that affect the implementation scope are
+   resolved before authorization to implement is requested. If open questions exist,
+   a design-resolution item precedes the implementation item in the queue.
+3. Authorization to begin implementation is granted.
+4. Implementation follows TDD — a failing test is written before every production code change.
+5. If an open question is discovered during implementation, it is documented immediately
+   in the design document. Implementation continues for all work that does not depend on
+   resolution of that question. No code is written whose correctness depends on the
+   unresolved choice.
+6. All implementation items include simulation scenarios and automated tests sufficient for
    integration testing, demonstration, and investigation of algorithmic alternatives.
 
 ---
@@ -75,13 +82,15 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `AeroModel` | `include/aerodynamics/AeroModel.hpp` | 🔲 Planned — abstract aero model interface; defined by item 7; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
 | `BodyAxisCoeffModel` | `include/aerodynamics/BodyAxisCoeffModel.hpp` | 🔲 Planned — body-axis stability derivative model; implements `AeroModel`; defined by item 6 + item 7; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
 | `PropulsionCouplingCoefficients` | TBD | 🔲 Planned — propulsion-aero coupling coefficient struct; defined by item 6; see [propulsion_coeff_estimator.md](../architecture/propulsion_coeff_estimator.md) |
-| `FlightLogReader` | `python/tools/log_reader.py` | 🔲 Planned — see [post_processing.md](../architecture/post_processing.md) |
+| `FlightLogReader` | `python/tools/log_reader.py` | 🔧 Implemented (first pass) — CSV + JSON-MCAP; open questions OQ-PP-5/6/7/8; see item 1 |
+| `ModeEventSeries` | `python/tools/mode_overlay.py` | 🔧 Implemented (first pass) — step-channel parser; open questions OQ-PP-9/10; see item 1 |
+| `TimeHistoryFigure` | `python/tools/time_history.py` | 🔧 Implemented (first pass) — Plotly multi-panel; open question OQ-PP-11; see item 1 |
+| `RibbonTrail` | `python/tools/trajectory_view.py` | 🔧 Implemented (first pass) — ZYX ribbon geometry; open questions OQ-PP-12/13/14; see item 1 |
+| `HudOverlay` | `python/tools/trajectory_view.py` | 🔧 Implemented (first pass) — 9 text2D artists, fading banner |
+| `TrajectoryView` | `python/tools/trajectory_view.py` | 🔧 Implemented (first pass) — FuncAnimation, dual-source overlay; open question OQ-PP-15; see item 1 |
 | `AnomalyDetector` | `python/tools/anomaly.py` | 🔲 Planned |
 | `BehaviorVerifier` | `python/tools/behavior_verifier.py` | 🔲 Planned |
 | `DataOverlay` | `python/tools/data_overlay.py` | 🔲 Planned |
-| `ModeEventSeries` | `python/tools/mode_overlay.py` | 🔲 Planned |
-| `TimeHistoryFigure` | `python/tools/time_history.py` | 🔲 Planned |
-| `TrajectoryView` | `python/tools/trajectory_view.py` | 🔲 Planned |
 
 ---
 
@@ -119,53 +128,297 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 25 | **Landing gear model design** — full design authority document covering: use case decomposition; class hierarchy (`LandingGear`, `WheelUnit`, `StrutState`, `ContactForces`, `SurfaceFriction`, `SurfaceFrictionUniform`); physical models (suspension spring-damper, Pacejka magic formula, wheel friction, surface friction parameterization, ground plane interface); force assembly; step interface; JSON + proto serialization contract; computational resource estimate; test strategy (unit, integration, scenario, serialization); visualization notebook designs (`landing_gear_contact_forces.ipynb`, `crab_landing_dynamics.ipynb`, `takeoff_roll.ipynb`, `terrain_contact_animation.ipynb`); touchdown animation design (`touchdown_animation.py` — pybind11 driver, layout, visual encoding, coordinate mapping, data flow) | [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) |
 | LG-1 | **LandingGear — C++ implementation** (Steps A–F) — `WheelUnit`, `StrutState`, `ContactForces`, `SurfaceFriction`, `SurfaceFrictionUniform`, `LandingGear`; quasi-static spring-damper strut; Pacejka magic formula tyre forces (longitudinal + lateral); friction-circle saturation; viscous wheel speed integration; nose wheel steering; differential braking; terrain elevation query via `V_Terrain`; wired into `Aircraft::step()` on the disturbance force path; `Aircraft::setTerrain()`, `contactForces()`, `weightOnWheels()` added; JSON + proto serialization throughout; `WheelUnitState`, `ContactForcesState`, `LandingGearState` proto messages added | `LandingGearTypes_test.cpp`, `SurfaceFriction_test.cpp`, `LandingGear_test.cpp`, `LandingGearTerrain_test.cpp` — 27 tests; `Aircraft_test.cpp` — 2 new tests; 388 total pass |
 | Sim-1 | **SimRunner — Execution Modes** — `ExecutionMode` enum (`Batch`, `RealTime`, `ScaledRealTime`); `RunnerConfig` struct (`dt_s` float — output step, adequate precision for timestep values; `duration_s` double — needed for long runs compared to accumulated sim time; `time_scale` float; `mode`); `SimRunner` class with `initialize()`, `start()`, `stop()`, `is_running()`, `elapsed_sim_time_s()`; Batch mode blocks caller; RealTime/ScaledRealTime spawn `std::thread`; `std::atomic<uint64_t> step_count_` for elapsed time; termination condition `sim_time_s > duration_s + time_initial_s` (direct time comparison — no precomputed step count); `dt_s` widened to `double` once at loop entry for all arithmetic; late-step policy: no compensation; design authority: [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md) | `SimRunner_test.cpp` — 10 tests |
+| PP-1 | **Post-processing visualization tools — first-pass TDD implementation** — `FlightLogReader` (CSV loading via `pd.read_csv`, JSON-encoded MCAP via `mcap.reader.make_reader`, per-source DataFrames keyed by filename stem / `channel.topic`); `ModeEventSeries` (step-channel transition parser, `from_dataframe()` classmethod, `name_map` parameter, initial value skipped); `TimeHistoryFigure` (Plotly multi-panel, `shared_xaxes=True`, secondary y-axis via `specs`, `Scattergl` above 50 000 points, `add_vline()` mode overlays, `load(frames)` + `build()` + `export_html()`); `RibbonTrail` (ZYX Euler rotation matrices, wing body vector `[0, half_width_m, 0]`, `Poly3DCollection` quads, RdBu_r roll colormap via `TwoSlopeNorm(±π/3)`, midpoint-roll quad color); `HudOverlay` (9 fixed-position `text2D` artists, fading mode-change banner, 60-frame countdown); `TrajectoryView` (ghost ribbon α=0.15, live ribbon last 200 quads, dual-source overlay, `FuncAnimation(blit=False)`); `conftest.py` Agg backend; 16 open questions documented in [`post_processing.md`](../architecture/post_processing.md) — resolved by item 1 | `test_log_reader.py` — 4 tests; `test_mode_events.py` — 5 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 5 tests; 20 tests total |
 
 ---
 
-## 1. Post-Processing — Visualization Tools
+## 1. Post-Processing — Open Question Resolution and Visualization Rework
 
-**Blocking dependencies:** None. Depends only on external Python libraries (all
-available). Does not depend on any logged channel schema or sensor implementation.
+**Blocking dependencies:** PP-1 (delivered — first-pass implementation). Items 4 and 8
+for the four deferred OQs (OQ-PP-1, 2, 3, 4).
 
-Implement the visualization modules from delivered item 26. Design authority:
-[`docs/architecture/post_processing.md`](../architecture/post_processing.md) §Dependency
-Status — Visualization Modules.
+Design authority: [`docs/architecture/post_processing.md`](../architecture/post_processing.md).
 
-All tools live under `python/tools/`. Implementation follows TDD.
+Resolve the 16 open questions from PP-1 and update the implementation to match. All
+design resolutions update `post_processing.md` before any code changes. Implementation
+follows TDD — each resolved OQ that changes observable behavior requires a test update
+before the production code change. OQ-PP-1 through OQ-PP-4 are future-feature questions
+with no current implementation impact; they are deferred as noted below.
 
-### Scope
+### Deferred Open Questions
 
-| Module | File | External dependencies |
+| OQ | Deferred to |
+| --- | --- |
+| OQ-PP-1 | No roadmap item assigned — live-update streaming is a separate future feature |
+| OQ-PP-2 | Item 9 (`TrajectoryView` terrain rendering requires pybind11 terrain bindings) |
+| OQ-PP-3 | Item 4 (Logged Channel Registry defines mode-ID logging policy) |
+| OQ-PP-4 | No roadmap item assigned — playback controls are a separate future feature |
+
+### Design Resolutions
+
+Each group below is a design decision. All decisions update `post_processing.md` before
+any code changes. The implementation steps in the next section depend on these resolutions
+and must not begin until the corresponding decisions are approved.
+
+#### FlightLogReader (OQ-PP-5, OQ-PP-6, OQ-PP-7, OQ-PP-8)
+
+- **OQ-PP-5** (MCAP message encoding): Determine the message encoding used by the C++
+  Logger by inspecting `LogSource` registration. Decide whether `load_mcap()` must handle
+  protobuf-encoded messages (via `mcap-protobuf-support` dynamic decoder) or JSON only.
+- **OQ-PP-6** (MCAP source name): Verify how the C++ Logger assigns channel/topic names
+  in MCAP output. Decide which MCAP field (`channel.topic`, `channel.metadata`, or schema
+  name) maps to the DataFrame key.
+- **OQ-PP-7** (CSV source name): Decide whether the source name is the filename stem
+  (current behavior) or is embedded in the CSV header. Update the `test_load_mcap_matches_csv`
+  round-trip test if the key changes.
+- **OQ-PP-8** (FlightLogReader statefulness): Decide whether `channel_names(source)`
+  queries an internal cache from the most recent `load_*()` call (current behavior, stateful)
+  or requires the caller to pass a DataFrame (stateless). Document the choice and its
+  implications for multi-session use.
+
+#### ModeEventSeries API (OQ-PP-9, OQ-PP-10)
+
+- **OQ-PP-9** (Initial value): Decide whether `from_dataframe()` emits the channel's
+  initial value as a `ModeEvent` before any transition has occurred, or only emits events
+  on state changes (current behavior). Update the `test_mode_events_from_step_channel`
+  test to match the decision.
+- **OQ-PP-10** (Name map location): Decide whether `name_map` belongs on `from_dataframe()`
+  (current behavior), on the `ModeEventSeries` constructor, or as a separate mapping step.
+  Update class signatures and tests to match.
+
+#### TimeHistoryFigure API (OQ-PP-11)
+
+- **OQ-PP-11** (load/build): Decide whether `load(frames)` and `build()` are part of the
+  public API (current behavior) or whether data is passed through `add_panel()` calls.
+  Update the class diagram and usage examples in `post_processing.md`.
+
+#### RibbonTrail Geometry (OQ-PP-12, OQ-PP-13, OQ-PP-14)
+
+- **OQ-PP-12** (Half-width parameter): Clarify whether `half_width_m` in `build()` is the
+  desired half-span length (so the formula $R[0, w, 0]$ gives the wing vector directly)
+  or the full span (divided by 2 internally). Rename the parameter and correct the formula
+  and docstring accordingly.
+- **OQ-PP-13** (Vertex winding): Decide on the quad vertex winding order and verify that
+  ribbon faces are visible from above and below in the `Poly3DCollection` renderer.
+  Document the chosen order and the reason.
+- **OQ-PP-14** (Quad face color): Decide whether quad face color is keyed to $\phi_i$,
+  $\phi_{i+1}$, or $(\phi_i + \phi_{i+1})/2$ (current behavior). Update `build()` and
+  the color test accordingly.
+
+#### TrajectoryView (OQ-PP-15)
+
+- **OQ-PP-15** (Line3D): Decide whether a per-mode-segment `Line3D` trajectory overlay
+  is in scope for this item or deferred. If deferred, it must depend on OQ-PP-3 (mode ID
+  logging policy, item 4) and be assigned to item 8 or a new item.
+
+#### Build Configuration (OQ-PP-16)
+
+- **OQ-PP-16** (Dependency group): Decide whether `matplotlib`, `pandas`, `plotly`, and
+  `mcap` belong in `[project] dependencies` or `[dependency-groups] dev` in
+  `python/pyproject.toml`. Update the file and `post_processing.md` to match.
+
+### Assumed Implementations in PP-1 Code
+
+Each entry below records the assumption made in PP-1, the file and function where the
+assumption is encoded, and what must change if the OQ resolves differently. This section
+is the primary reference for generating rework context when resolutions are approved.
+
+#### OQ-PP-5 — MCAP message encoding assumed to be JSON
+
+**Assumption:** The C++ Logger writes JSON-encoded MCAP messages.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `log_reader.py` — module docstring | States "Messages must use `message_encoding == 'json'`" |
+| `log_reader.py` — `load_mcap()` docstring | States "Only JSON-encoded messages are supported" |
+| `log_reader.py` — `_decode_message()` | Handles `encoding == "json"` → `json.loads()`; raises `NotImplementedError` for `"protobuf"` |
+| `test_log_reader.py` — `mcap_fixture` | Registers channels with `message_encoding="json"` |
+| `test_log_reader.py` — `mcap_and_csv_fixture` | Registers channel with `message_encoding="json"` |
+
+**If protobuf:** `_decode_message()` must handle `"protobuf"` encoding (via
+`mcap-protobuf-support` dynamic decoder). The test fixtures must write protobuf-encoded
+messages using the same schema the C++ Logger embeds. `load_mcap()` docstring updated.
+
+#### OQ-PP-6 — MCAP source name assumed to be `channel.topic`
+
+**Assumption:** The DataFrame key for each source equals `channel.topic` from the MCAP
+channel record.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `log_reader.py` — `load_mcap()` | `topic = channel.topic`; rows grouped and DataFrames keyed by `topic` |
+| `test_log_reader.py` — `mcap_fixture` | Registers `topic="aircraft"` and `topic="environment"`; test asserts `"aircraft" in frames` and `"environment" in frames` |
+| `test_log_reader.py` — `mcap_and_csv_fixture` | Registers `topic="aircraft"`; `load_mcap(mcap_path)["aircraft"]` |
+| `test_log_reader.py` — `test_load_mcap_multi_source` | Asserts specific string keys `"aircraft"` and `"environment"` |
+| `test_log_reader.py` — `test_load_mcap_matches_csv` | Indexes result by `"aircraft"` |
+
+**If different field:** Change `channel.topic` to the correct field (`channel.metadata`,
+schema name, or other) in `load_mcap()`. Update fixture channel registrations and all
+assertions on returned dict keys.
+
+#### OQ-PP-7 — CSV source name assumed to be the filename stem
+
+**Assumption:** The source name key for a CSV file is `Path(path).stem` (e.g.,
+`aircraft.csv` → `"aircraft"`).
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `log_reader.py` — `load_csv()` | `self._frames = {path.stem: df}` |
+| `test_log_reader.py` — `csv_fixture` | Writes to `tmp_path / "aircraft.csv"` |
+| `test_log_reader.py` — `test_load_csv_returns_dataframe` | Asserts `"aircraft" in frames` |
+| `test_log_reader.py` — `mcap_and_csv_fixture` | Writes to `tmp_path / "aircraft.csv"`; `load_csv(csv_path)["aircraft"]` |
+| `test_log_reader.py` — `test_load_mcap_matches_csv` | Indexes CSV result by `"aircraft"` |
+
+**If header-embedded:** `load_csv()` must read the source name from a designated header
+field rather than the filename. Fixture CSV files must include that header field. All
+assertions on `"aircraft"` key must match the header-provided name.
+
+#### OQ-PP-8 — FlightLogReader assumed to be stateful
+
+**Assumption:** `channel_names(source)` queries an internal cache (`self._frames`) populated
+by the most recent `load_csv()` or `load_mcap()` call.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `log_reader.py` — `__init__` | `self._frames: dict[str, pd.DataFrame] = {}` — instance cache |
+| `log_reader.py` — `load_csv()` | `self._frames = {path.stem: df}` — overwrites cache |
+| `log_reader.py` — `load_mcap()` | `self._frames = result` — overwrites cache |
+| `log_reader.py` — `channel_names()` | Raises `KeyError` if `source not in self._frames` |
+
+**If stateless:** `channel_names(source)` would accept a DataFrame directly rather than
+querying `self._frames`. The `self._frames` field and its assignment in `load_*()` would
+be removed. `channel_names()` signature changes from `channel_names(source: str)` to
+`channel_names(df: pd.DataFrame)`.
+
+#### OQ-PP-9 — Initial mode value assumed to not produce a ModeEvent
+
+**Assumption:** The first row of the mode channel sets the tracking baseline; only
+subsequent state changes emit `ModeEvent` objects.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `mode_overlay.py` — `from_dataframe()` | `if prev is None: prev = mode_id; continue` — skips first row |
+| `test_mode_events.py` — `test_mode_events_from_step_channel` | Comment "Three transitions only (initial value is not an event)"; `assert len(events.events) == 3` |
+
+**If initial value should emit:** Remove the `continue` in the `prev is None` branch and
+emit a `ModeEvent` for the first row. The test fixture has 3 transitions starting at t=1.0;
+if the initial value at t=0.0 (mode_id=0) is also emitted, `len(events.events)` becomes 4
+and the test must be updated to assert 4 events with `events.events[0].time_s == 0.0`.
+
+#### OQ-PP-10 — `name_map` assumed to be a parameter of `from_dataframe()`
+
+**Assumption:** The mode-name dictionary is passed to `from_dataframe()` as a keyword
+argument.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `mode_overlay.py` — `from_dataframe()` signature | `name_map: dict[int, str] \| None = None` parameter |
+| `test_mode_events.py` — `test_mode_names_mapped` | Calls `from_dataframe(..., name_map=name_map)` |
+| `test_mode_events.py` — `test_unmapped_id_falls_back_to_string` | Calls `from_dataframe(..., name_map={})` |
+
+**If constructor argument:** `name_map` moves to `ModeEventSeries.__init__()` and
+`from_dataframe()` loses it. All test call sites change from `from_dataframe(...,
+name_map=...)` to `ModeEventSeries(name_map=...).from_dataframe(...)` or equivalent.
+
+**If separate mapping step:** `from_dataframe()` produces events with integer `mode_name =
+str(mode_id)` always, and a separate `apply_name_map(events, name_map)` function is called
+post-construction. Tests for name mapping change to call the mapping function separately.
+
+#### OQ-PP-11 — `load()` and `build()` assumed to be public API
+
+**Assumption:** `TimeHistoryFigure` exposes `load(frames)` to supply source DataFrames
+and `build()` to return the Plotly `Figure` object; both are called explicitly in tests.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `time_history.py` — `load()` | Public method: `def load(self, frames: dict[str, pd.DataFrame]) -> None` |
+| `time_history.py` — `build()` | Public method: `def build(self) -> go.Figure` |
+| `time_history.py` — `show()` | Calls `self.build()` internally |
+| `time_history.py` — `export_html()` | Calls `self.build()` internally |
+| `test_time_history.py` — all 6 tests | Every test calls `fig.load(sample_frames)` before `fig.add_panel(...)` or `fig.build()` |
+
+**If data via `add_panel()`:** `load()` is removed; each `add_panel()` call receives a
+source name or DataFrame reference directly. `build()` may remain or be folded into
+`show()`/`export_html()`. All 6 tests must be rewritten.
+
+#### OQ-PP-12 — `half_width_m` assumed to mean the half-span (vector length)
+
+**Assumption:** `half_width_m` is the distance from the fuselage centerline to each
+wingtip (the half-span). The wing body vector is `[0, half_width_m, 0]` with no division
+by 2. The default of 5.0 m represents a 10 m total span.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `trajectory_view.py` — `RibbonTrail.build()` signature | `half_width_m: float = 5.0` |
+| `trajectory_view.py` — `RibbonTrail.build()` body | `wing_body = np.array([0.0, half_width_m, 0.0])` — no `/2` |
+| `test_ribbon_trail.py` — `test_ribbon_wings_level_horizontal` | `half_width_m=1.0`; asserts `v_upper_0 == [0, 1, 0]` and `v_lower_0 == [0, -1, 0]` — total span = 2 m |
+
+**If full-span parameter:** The formula becomes `wing_body = np.array([0.0, half_width_m / 2.0, 0.0])`.
+The parameter should be renamed (e.g., `wing_span_m`). The test with `half_width_m=1.0`
+would then produce `v_upper_0 == [0, 0.5, 0]` — the test assertion must change.
+
+#### OQ-PP-13 — Ribbon quad vertex winding order assumed
+
+**Assumption:** Quad vertices are ordered `[v_lower[i], v_upper[i], v_upper[i+1],
+v_lower[i+1]]`. This winding was chosen but not verified for face visibility from above
+and below in the `Poly3DCollection` renderer.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `trajectory_view.py` — `RibbonTrail.build()` | `quads[:, 0] = v_lower[:-1]`; `quads[:, 1] = v_upper[:-1]`; `quads[:, 2] = v_upper[1:]`; `quads[:, 3] = v_lower[1:]` |
+| `test_ribbon_trail.py` — `test_ribbon_wings_level_horizontal` | Comment documents the assumed layout: `# quad layout: [v_lower[i], v_upper[i], v_upper[i+1], v_lower[i+1]]` |
+
+**If winding changes:** Only the four `quads[:, N]` assignment lines change. No test
+currently verifies face visibility; a new test or a visual verification step would be
+needed.
+
+#### OQ-PP-14 — Quad face color assumed to be the midpoint roll
+
+**Assumption:** Each quad's face color is determined by the mean of the roll angles at
+its two bounding trajectory indices: `(roll_rad[i] + roll_rad[i+1]) / 2`.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `trajectory_view.py` — `RibbonTrail.build()` | `mid_roll = (roll_rad[:-1] + roll_rad[1:]) / 2.0` |
+| `trajectory_view.py` — `RibbonTrail.build()` | `self._colors = cmap(norm(mid_roll_clipped))` |
+| `test_ribbon_trail.py` — `test_ribbon_color_at_zero_roll_is_neutral` | Tests only the roll=0 case — neutral regardless of which endpoint is chosen |
+
+**If leading-edge index:** Replace `mid_roll` with `roll_rad[:-1]`. **If trailing-edge
+index:** Replace with `roll_rad[1:]`. No existing test distinguishes these three choices;
+a test with varying roll would be needed to verify the choice.
+
+#### OQ-PP-16 — Post-processing dependencies placed in `[project] dependencies`
+
+**Assumption:** `matplotlib`, `pandas`, `plotly`, and `mcap` are runtime dependencies,
+installed for all consumers.
+
+| Location | What encodes the assumption |
+| --- | --- |
+| `python/pyproject.toml` lines 16–19 | `"matplotlib>=3.8"`, `"pandas>=2.0"`, `"plotly>=5.18"`, `"mcap>=1.1"` in `[project] dependencies` |
+
+**If dev-only:** These four entries move to `[dependency-groups] dev`. No production code
+changes; only `pyproject.toml` changes.
+
+### Implementation Steps
+
+After design resolutions for each group are approved, update tests first, then
+implementation. Steps may be taken in any order within the constraint that tests precede
+production code.
+
+| Step | Scope | Resolves |
 | --- | --- | --- |
-| `FlightLogReader` | `python/tools/log_reader.py` | `mcap`, `pandas` |
-| `ModeEventSeries` | `python/tools/mode_overlay.py` | `pandas` |
-| `TimeHistoryFigure` | `python/tools/time_history.py` | `plotly` |
-| `RibbonTrail` | `python/tools/trajectory_view.py` | `numpy`, `matplotlib` |
-| `HudOverlay` | `python/tools/trajectory_view.py` | `matplotlib` |
-| `TrajectoryView` | `python/tools/trajectory_view.py` | `matplotlib` |
+| A | `pyproject.toml` — move dependencies to the resolved group | OQ-PP-16 |
+| B | `FlightLogReader` — MCAP encoding and source name; update `test_log_reader.py` | OQ-PP-5, 6, 7, 8 |
+| C | `ModeEventSeries` — initial value and name-map API; update `test_mode_events.py` | OQ-PP-9, 10 |
+| D | `TimeHistoryFigure` — load/build API; update `test_time_history.py` | OQ-PP-11 |
+| E | `RibbonTrail` — parameter naming, winding, and face color; update `test_ribbon_trail.py` | OQ-PP-12, 13, 14 |
+| F | `post_processing.md` — mark OQ-PP-5 through OQ-PP-16 resolved; update class diagrams and usage examples | All |
 
-The analysis modules (`AnomalyDetector`, `BehaviorVerifier`, `DataOverlay`) are deferred
-to item 8. Do not implement them in this item.
+### Tests
 
-### Tests — Visualization Tools
-
-`python/test/test_log_reader.py`, `test_mode_events.py`, `test_time_history.py`,
-`test_ribbon_trail.py`. No test may invoke `plt.show()`, `fig.show()`, or open a display.
-
-### Python Dependencies
-
-Add to `python/pyproject.toml`:
-
-```toml
-[dependency-groups]
-dev = [
-    "matplotlib>=3.8",
-    "pandas>=2.0",
-    "plotly>=5.18",
-    "mcap>=1.1",
-    "numpy>=1.26",
-]
-```
+All 20 existing tests across `test_log_reader.py`, `test_mode_events.py`,
+`test_time_history.py`, and `test_ribbon_trail.py` must pass after rework. New tests are
+added only where resolved OQs change observable behavior.
 
 ---
 
@@ -381,8 +634,8 @@ Implement in dependency order:
 
 ## 9. LandingGear — Python Bindings and Scenario Tests
 
-**Blocking dependencies:** LandingGear C++ (delivered, LG-1), item 1
-(visualization tools exist for animation).
+**Blocking dependencies:** LandingGear C++ (delivered, LG-1), PP-1 (delivered —
+visualization tools exist for animation). Item 1 (rework) is not required before item 9.
 
 Implement Steps G–H from the design authority document
 ([`docs/architecture/landing_gear.md`](../architecture/landing_gear.md)).

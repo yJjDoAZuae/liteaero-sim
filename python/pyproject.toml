@@ -13,6 +13,10 @@ dependencies = [
     "earthaccess>=0.8",
     "pyvista[all]>=0.44",
     "ipywidgets>=8.0",
+    "matplotlib>=3.8",
+    "pandas>=2.0",
+    "plotly>=5.18",
+    "mcap>=1.1",
 ]
 
 [dependency-groups]

@@ -234,8 +234,10 @@ classDiagram
     class TimeHistoryFigure {
         -_panels : list~Panel~
         -_mode_events : ModeEventSeries
+        +load(frames) void
         +add_panel(channels, title, y_label) Panel
         +set_mode_events(events) void
+        +build() Figure
         +show() void
         +export_html(path) void
     }
@@ -317,11 +319,16 @@ source format. Every DataFrame has `time_s` as a float64 index and channel names
 SI unit suffixes matching the Logger schema (e.g., `altitude_m`, `roll_rate_rad_s`).
 
 **MCAP reading:** Uses the `mcap` Python SDK (`mcap.reader.make_reader`). For each MCAP
-channel, decodes the embedded protobuf schema and deserializes messages into rows. All
-channels from a given `LogSource` are merged into one DataFrame per source name.
+channel, decodes messages into rows. All channels from a given `LogSource` are merged
+into one DataFrame per source name. See OQ-PP-5 (message encoding) and OQ-PP-6
+(source name mapping) — both are unresolved.
 
 **CSV reading:** Reads the CSV produced by `Logger::exportCsv()` directly with
-`pandas.read_csv`. Source name is derived from the filename.
+`pandas.read_csv`. See OQ-PP-7 (source name derivation).
+
+**State:** `channel_names(source)` requires knowing what was previously loaded.
+Whether the reader caches the last-loaded frames internally or requires a different
+API design is unresolved — see OQ-PP-8.
 
 **Multi-source MCAP:** A single MCAP file may contain multiple sources. `load_mcap`
 returns one DataFrame per source name registered in the file.
@@ -454,6 +461,15 @@ class ModeEvent:
 Mode names are mapped from a configurable `{int: str}` dictionary. `ModeEventSeries` is
 consumed by both `TimeHistoryFigure` and `TrajectoryView` to ensure consistent labeling.
 
+**Initial value:** Whether the channel's initial value is emitted as a `ModeEvent` (before
+any transition occurs) or whether only state changes are emitted is not specified here and
+is left as OQ-PP-9.
+
+**Name map location:** The design shows the mode-name dictionary as a property of
+`ModeEventSeries`, but it must be supplied at parse time. Whether it is passed to
+`from_dataframe()`, to the constructor, or stored as a class attribute is unresolved —
+see OQ-PP-10.
+
 ---
 
 ### `TimeHistoryFigure`
@@ -468,6 +484,7 @@ via Plotly's `shared_xaxes=True` layout option — no custom JavaScript is requi
 
 ```python
 fig = TimeHistoryFigure(title="Landing Scenario — Channel Review")
+fig.load(frames)   # dict[str, DataFrame] from FlightLogReader — see OQ-PP-11
 fig.add_panel(
     channels=["altitude_m", "altitude_agl_m"],
     title="Altitude",
@@ -483,6 +500,12 @@ fig.add_panel(
 fig.set_mode_events(mode_events)
 fig.export_html("output/landing_review.html")
 ```
+
+**`load()` and `build()`:** A `load(frames)` method supplies source DataFrames and a
+`build()` method returns the Plotly `Figure` object without opening a browser. Neither
+appears in the original class diagram. Whether these belong on the public interface or
+whether data should be passed to individual `add_panel()` calls is unresolved — see
+OQ-PP-11.
 
 **Mode event overlay:** At each `ModeEvent.time_s`, a vertical dashed line spans the
 full figure height. A text annotation above the line shows the mode name. Both are added
@@ -543,7 +566,10 @@ $$R_i = R_z(\psi_i)\, R_y(\theta_i)\, R_x(\phi_i)$$
 
 $$\mathbf{w}_i = R_i \begin{bmatrix} 0 \\ w/2 \\ 0 \end{bmatrix}$$
 
-where $w$ is the configurable ribbon half-width (default: aircraft wing span).
+where $w$ is described as the "configurable ribbon half-width (default: aircraft wing
+span)". This description is internally inconsistent: if $w$ is a half-width then dividing
+by 2 produces a quarter-width; if $w$ is the full wing span then $w/2$ is the half-span.
+See OQ-PP-12 for resolution.
 
 3. Ribbon edge vertices:
 
@@ -551,10 +577,12 @@ $$\mathbf{v}_{i}^{+} = \mathbf{p}_i + \mathbf{w}_i, \qquad
 \mathbf{v}_{i}^{-} = \mathbf{p}_i - \mathbf{w}_i$$
 
 4. Each ribbon quad spans $(\mathbf{v}_i^-, \mathbf{v}_i^+, \mathbf{v}_{i+1}^+, \mathbf{v}_{i+1}^-)$.
+   Vertex winding order within the quad is not specified — see OQ-PP-13.
 
 5. Face color maps roll angle $\phi_i$ through a diverging colormap (RdBu\_r, centered at
    $\phi = 0$, saturated at $\pm 60°$). A colorbar is placed at the right edge of the
-   3D axes.
+   3D axes. Each quad spans two trajectory indices ($i$ and $i+1$); which roll sample
+   governs the quad's color is not specified — see OQ-PP-14.
 
 The ribbon is built once as a `Poly3DCollection` before animation starts. During
 playback, the "ghost" ribbon shows the full pre-computed trail; a second shorter
@@ -562,7 +590,9 @@ collection (last $N_\text{trail}$ quads) is redrawn in full opacity as the live 
 
 **Mode segment coloring:** The trajectory `Line3D` is broken into per-mode segments,
 each drawn in a distinct color from the `tab10` palette. A legend identifies each mode
-by name.
+by name. This feature is not yet implemented; it depends on OQ-PP-3 (how mode IDs are
+available in the log) and OQ-PP-15 (whether the trajectory is drawn as a `Line3D`
+alongside the ribbon or only as the ribbon itself).
 
 #### Pre-computation
 
@@ -574,10 +604,10 @@ Pre-computation (runs once on load)
   ↓
   for i in 0..N:
       R_i = rotation_matrix(heading[i], pitch[i], roll[i])
-      w_i = R_i @ [0, half_width, 0]
+      w_i = R_i @ [0, half_width, 0]   ← half_width interpretation: see OQ-PP-12
       v_upper[i] = position[i] + w_i
       v_lower[i] = position[i] - w_i
-      ribbon_color[i] = colormap(roll[i])
+      ribbon_color[i] = colormap(roll[i])   ← per-vertex; quad color unspecified: see OQ-PP-14
 
 Animation loop (FuncAnimation, ≥ 20 fps)
   ↓
@@ -652,17 +682,17 @@ match their respective trajectory colors.
 
 All licenses are compatible with the project license preference (MIT → BSD → Apache).
 
-`plotly` and `mcap` are new additions. Add to `python/pyproject.toml`:
+`plotly` and `mcap` are new additions. Add to `python/pyproject.toml`. The appropriate
+dependency group (`[project] dependencies` vs `[dependency-groups] dev`) is unresolved
+— see OQ-PP-16. The minimum versions below reflect the versions verified during
+initial implementation:
 
 ```toml
-[dependency-groups]
-dev = [
-    "matplotlib>=3.8",
-    "pandas>=2.0",
-    "plotly>=5.18",
-    "mcap>=1.1",
-    "numpy>=1.26",
-]
+matplotlib>=3.8
+pandas>=2.0
+plotly>=5.18
+mcap>=1.1
+numpy>=1.26   # already present in [project] dependencies
 ```
 
 ---
@@ -751,5 +781,17 @@ operate on the returned figure or artist objects only. Matplotlib is configured 
 | --- | --- | --- |
 | OQ-PP-1 | Should `TimeHistoryFigure` support a live-update mode that tails an MCAP file being written by a running simulation? | Affects `FlightLogReader` streaming interface |
 | OQ-PP-2 | Is terrain mesh geometry available to `TrajectoryView` for rendering the ground surface under the trajectory? | Affects `TrajectoryView` scene setup |
-| OQ-PP-3 | Should mode IDs be embedded directly in the log schema as an enum channel, or inferred post-hoc from command transitions? | Affects `ModeEventSeries` data contract |
-| OQ-PP-4 | Should playback controls be implemented as matplotlib `Button` widgets or as a minimal Dash/Panel app for browser-based playback? | Affects `TrajectoryView` playback architecture |
+| OQ-PP-3 | Should mode IDs be embedded directly in the log schema as an enum channel, or inferred post-hoc from command transitions? | Affects `ModeEventSeries` data contract and trajectory mode-segment coloring |
+| OQ-PP-4 | Should playback controls be implemented as matplotlib `Button` widgets or as a minimal Dash/Panel app for browser-based playback? Playback controls are not yet implemented; space is reserved in the layout. | Affects `TrajectoryView` playback architecture |
+| OQ-PP-5 | What message encoding does the C++ Logger use in MCAP files — protobuf or JSON? The current `FlightLogReader` only handles JSON-encoded messages; protobuf decoding raises `NotImplementedError`. If protobuf, does the `mcap-protobuf-support` package's dynamic decoder (using the schema embedded in the file) satisfy the requirement, or is a generated stub required? | Affects `FlightLogReader.load_mcap()` implementation; must be resolved before `load_mcap` can read actual C++ Logger output |
+| OQ-PP-6 | How does the C++ Logger encode source names in MCAP? The current implementation uses `channel.topic` as the source name key. If the Logger registers multiple channels per topic, or uses a different field for the logical source name, the DataFrame grouping will be incorrect. | Affects `load_mcap()` source-name mapping; must be verified against the Logger implementation |
+| OQ-PP-7 | How should `load_csv()` derive the source name? The current implementation uses the filename stem (e.g., `aircraft.csv` → key `"aircraft"`). Should the source name be embedded in the CSV header row instead, so it is independent of how the file is named? | Affects `load_csv()` return value keys and the `test_load_mcap_matches_csv` round-trip test |
+| OQ-PP-8 | Should `FlightLogReader` be stateful (caching the last-loaded frames so `channel_names(source)` can look them up) or stateless (requiring the caller to pass a DataFrame to `channel_names`)? | Affects the class API; stateful design couples `channel_names()` to a preceding `load_*()` call |
+| OQ-PP-9 | Should `ModeEventSeries.from_dataframe()` emit the channel's initial value as a `ModeEvent` (before any transition has occurred), or only emit events on state changes? | Affects how many events are produced and whether time-history overlays show the starting mode |
+| OQ-PP-10 | Should the mode-name map be a parameter of `from_dataframe()`, a constructor argument of `ModeEventSeries`, or a separate mapping step applied after parsing? | Affects the `ModeEventSeries` and `from_dataframe()` signatures |
+| OQ-PP-11 | Should `TimeHistoryFigure` accept source DataFrames via a `load(frames)` method (current implementation), via individual `add_panel()` calls that reference sources by name, or some other mechanism? Should `build()` be part of the public interface, or should only `show()` and `export_html()` be exposed? | Affects the public API and testability |
+| OQ-PP-12 | The ribbon geometry formula $\mathbf{w}_i = R_i [0,\ w/2,\ 0]$ describes $w$ as "the configurable ribbon half-width (default: aircraft wing span)." This is internally inconsistent. Clarify: is the `build()` parameter the full wing span (so the formula gives the half-span vector) or the desired half-span (so the `/2` in the formula is erroneous)? | Affects the `RibbonTrail.build()` parameter name, default value, and all callers |
+| OQ-PP-13 | What vertex winding order should the ribbon quads use? The order affects backface culling behavior in matplotlib's `Poly3DCollection` renderer. | Affects whether ribbon faces are visible from above and below |
+| OQ-PP-14 | A ribbon quad spans trajectory indices $i$ and $i+1$. Which roll value governs the quad's face color — $\phi_i$, $\phi_{i+1}$, or the midpoint $(\phi_i + \phi_{i+1})/2$? | Affects visual continuity of the roll colormap across the ribbon |
+| OQ-PP-15 | Should the trajectory also be drawn as a `Line3D` (separate from the ribbon) with per-mode segment colors, or is the ribbon the only trajectory representation? The mode-segment `Line3D` described in §TrajectoryView is not yet implemented. | Affects `TrajectoryView` visual design and whether OQ-PP-3 must be resolved first |
+| OQ-PP-16 | Should `matplotlib`, `pandas`, `plotly`, and `mcap` be declared in `[project] dependencies` (installed for all users) or in `[dependency-groups] dev` (installed only for development workflows)? | Affects `pyproject.toml` structure and what a downstream consumer of the package gets |
