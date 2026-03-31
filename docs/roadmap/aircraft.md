@@ -79,15 +79,15 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `SurfaceFriction` | `include/landing_gear/SurfaceFriction.hpp` | ✅ Implemented |
 | `SurfaceFrictionUniform` | `include/landing_gear/SurfaceFrictionUniform.hpp` | ✅ Implemented (named constructors: pavement/grass/dirt/gravel, wet/dry) |
 | `LandingGear` | `include/landing_gear/LandingGear.hpp` | ✅ Implemented + serialization (JSON + proto); wired into `Aircraft::step()` |
-| `AeroModel` | `include/aerodynamics/AeroModel.hpp` | 🔲 Planned — abstract aero model interface; defined by item 7; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
-| `BodyAxisCoeffModel` | `include/aerodynamics/BodyAxisCoeffModel.hpp` | 🔲 Planned — body-axis stability derivative model; implements `AeroModel`; defined by item 6 + item 7; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
-| `PropulsionCouplingCoefficients` | TBD | 🔲 Planned — propulsion-aero coupling coefficient struct; defined by item 6; see [propulsion_coeff_estimator.md](../architecture/propulsion_coeff_estimator.md) |
-| `FlightLogReader` | `python/tools/log_reader.py` | 🔧 First pass — CSV + JSON-MCAP; design fully resolved (DR-1, DR-9); rework to per-field topic parsing + protobuf + stateful API pending (item 1) |
-| `ModeEventSeries` | `python/tools/mode_overlay.py` | 🔧 First pass — step-channel parser; design fully resolved (DR-2); API rework pending (item 1) |
-| `TimeHistoryFigure` | `python/tools/time_history.py` | 🔧 First pass — Plotly multi-panel; design fully resolved (DR-3); `figure()` accessor and internal `build()` rework pending (item 1) |
-| `RibbonTrail` | `python/tools/trajectory_view.py` | 🔧 First pass — ZYX ribbon geometry, matplotlib Poly3DCollection; design fully resolved (DR-8); Vispy mesh visual rewrite + time-based α fade + `wing_span_m` rename pending (item 1) |
-| `HudOverlay` | `python/tools/trajectory_view.py` | 🔧 First pass — 9 matplotlib `text2D` artists, fading banner; design fully resolved (DR-7, DR-8); Vispy `Text` visual rewrite pending (item 1) |
-| `TrajectoryView` | `python/tools/trajectory_view.py` | 🔧 First pass — matplotlib `FuncAnimation`, dual-source overlay; design fully resolved (DR-7 through DR-13); full Vispy + PySide6 + terrain rewrite pending (item 1) |
+| `AeroModel` | `include/aerodynamics/AeroModel.hpp` | 🔲 Planned — abstract aero model interface; defined by item 6; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
+| `BodyAxisCoeffModel` | `include/aerodynamics/BodyAxisCoeffModel.hpp` | 🔲 Planned — body-axis stability derivative model; implements `AeroModel`; defined by item 5 + item 6; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
+| `PropulsionCouplingCoefficients` | TBD | 🔲 Planned — propulsion-aero coupling coefficient struct; defined by item 5; see [propulsion_coeff_estimator.md](../architecture/propulsion_coeff_estimator.md) |
+| `FlightLogReader` | `python/tools/log_reader.py` | ✅ Reworked — per-field MCAP topic parsing (`source/field`), CSV `source_name` column, stateful `frames()` getter, `channel_names()` raises before load (DR-1, DR-9) |
+| `ModeEventSeries` | `python/tools/mode_overlay.py` | ✅ Reworked — initial value emitted as first event, `name_map` moved to constructor (DR-2) |
+| `TimeHistoryFigure` | `python/tools/time_history.py` | ✅ Reworked — `figure()` public accessor with caching, `_build()` internal (DR-3) |
+| `RibbonTrail` | `python/tools/trajectory_view.py` | ✅ Reworked — `wing_span_m` parameter, CCW winding, time-based α fade via `alpha_at()`, Vispy `MeshVisual` from `mesh()` (DR-8) |
+| `HudOverlay` | `python/tools/trajectory_view.py` | ✅ Reworked — Vispy `Text` visuals in 2D overlay view, α-fading mode banner (DR-7, DR-8) |
+| `TrajectoryView` | `python/tools/trajectory_view.py` | ✅ Reworked — `CameraMode` enum (FPV/TRAIL/GODS_EYE/LOCAL_TOP), Vispy `SceneCanvas` embedded in `QMainWindow`, `load_terrain()` via `pygltflib`, `set_terrain_saturation()`, headless `animate()` (DR-7 through DR-13) |
 | `AnomalyDetector` | `python/tools/anomaly.py` | 🔲 Planned |
 | `BehaviorVerifier` | `python/tools/behavior_verifier.py` | 🔲 Planned |
 | `DataOverlay` | `python/tools/data_overlay.py` | 🔲 Planned |
@@ -130,118 +130,11 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | Sim-1 | **SimRunner — Execution Modes** — `ExecutionMode` enum (`Batch`, `RealTime`, `ScaledRealTime`); `RunnerConfig` struct (`dt_s` float — output step, adequate precision for timestep values; `duration_s` double — needed for long runs compared to accumulated sim time; `time_scale` float; `mode`); `SimRunner` class with `initialize()`, `start()`, `stop()`, `is_running()`, `elapsed_sim_time_s()`; Batch mode blocks caller; RealTime/ScaledRealTime spawn `std::thread`; `std::atomic<uint64_t> step_count_` for elapsed time; termination condition `sim_time_s > duration_s + time_initial_s` (direct time comparison — no precomputed step count); `dt_s` widened to `double` once at loop entry for all arithmetic; late-step policy: no compensation; design authority: [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md) | `SimRunner_test.cpp` — 10 tests |
 | PP-1 | **Post-processing visualization tools — first-pass TDD implementation** — `FlightLogReader` (CSV loading via `pd.read_csv`, JSON-encoded MCAP via `mcap.reader.make_reader`, per-source DataFrames keyed by filename stem / `channel.topic`); `ModeEventSeries` (step-channel transition parser, `from_dataframe()` classmethod, `name_map` parameter, initial value skipped); `TimeHistoryFigure` (Plotly multi-panel, `shared_xaxes=True`, secondary y-axis via `specs`, `Scattergl` above 50 000 points, `add_vline()` mode overlays, `load(frames)` + `build()` + `export_html()`); `RibbonTrail` (ZYX Euler rotation matrices, wing body vector `[0, half_width_m, 0]`, `Poly3DCollection` quads, RdBu_r roll colormap via `TwoSlopeNorm(±π/3)`, midpoint-roll quad color); `HudOverlay` (9 fixed-position `text2D` artists, fading mode-change banner, 60-frame countdown); `TrajectoryView` (ghost ribbon α=0.15, live ribbon last 200 quads, dual-source overlay, `FuncAnimation(blit=False)`); `conftest.py` Agg backend; all design decisions subsequently resolved in dedicated design sessions; see DR-1 through DR-13 in [`post_processing.md`](../architecture/post_processing.md) | `test_log_reader.py` — 4 tests; `test_mode_events.py` — 5 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 5 tests; 20 tests total |
 | PP-D | **Post-processing tools design — full architecture and decision records** — resolved all 28 design questions across both visualization and analysis layers; selections: Vispy (OpenGL, DR-8) for 3D rendering; PySide6 Qt window (DR-7) for playback and camera controls; Panel + Plotly (DR-10) for live time history; pre-generated glTF terrain via `pygltflib` (DR-11); offline terrain ingestion pipeline (DR-12); `terrain_paths.py` shared path module with `data/terrain/<dataset>/source/` + `derived/` repository structure (DR-13); per-field MCAP topic convention `"source/field_name"` (DR-9); `FlightLogReader` stateful API (DR-1); `ModeEventSeries` constructor name-map (DR-2); `TimeHistoryFigure.figure()` accessor (DR-3); ring buffer polling via pybind11 (DR-5, DR-6); camera modes FPV/Trailing/God's-eye/Local-top defined (PP-F28–PP-F32); terrain saturation runtime API (DR-13 area); document restructured from open-question tracking format to settled architecture with Decision Records appendix | [`docs/architecture/post_processing.md`](../architecture/post_processing.md) |
+| PP-2 | **Post-processing visualization rework** (Tasks A–G, TDD) — `FlightLogReader`: per-field MCAP topic parsing (`"source/field_name"`), CSV `source_name` column, stateful `frames()` getter, `channel_names()` raises before load (DR-1, DR-9); `ModeEventSeries`: initial value emitted as first event, `name_map` moved to constructor (DR-2); `TimeHistoryFigure`: `figure()` public accessor with caching, `_build()` internal (DR-3); `RibbonTrail`: `wing_span_m` parameter, CCW quad winding, time-based α fade via `alpha_at()`, Vispy `MeshVisual` from `mesh()` (DR-8); `HudOverlay`: Vispy `Text` visuals in 2D overlay view, α-fading mode-change banner (DR-7, DR-8); `TrajectoryView`: `CameraMode` enum (FPV/TRAIL/GODS_EYE/LOCAL_TOP), Vispy `SceneCanvas` embedded in `QMainWindow`, `load_terrain()` via `pygltflib`, `set_terrain_saturation()`, headless `animate()` returns canvas (DR-7 through DR-13); `terrain_paths.py`: `get_terrain_data_root()`, `dataset_dir()`, `source_dir()`, `derived_dir()`, `las_terrain_dir()`, `gltf_path()`, `metadata_path()`; `vispy>=0.14`, `pyside6>=6.6`, `pygltflib`, `mcap-protobuf-support>=0.5` added to `pyproject.toml` | `test_log_reader.py` — 9 tests; `test_mode_events.py` — 6 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 9 tests; `test_terrain_paths.py` — 11 tests; `test_trajectory_view.py` — 14 tests; 55 tests total; full suite 150 pass |
 
 ---
 
-## 1. Post-Processing — Visualization Rework Implementation
-
-**Blocking dependencies:** PP-1 (delivered — first-pass implementation); PP-D (delivered — design complete, all decision records DR-1 through DR-13 settled).
-
-Design authority: [`docs/architecture/post_processing.md`](../architecture/post_processing.md).
-
-The post-processing design is complete. This item implements the full rework to bring all
-Python source files into conformance with the settled design. All implementation steps follow
-TDD — update or add failing tests before changing production code.
-
-### Implementation Tasks
-
-#### Task A — Dependency additions (`pyproject.toml`)
-
-Add the following new dependencies declared in the design:
-
-| Package | Version | Reason |
-| --- | --- | --- |
-| `vispy` | `≥ 0.14` | 3D trajectory canvas, ribbon trail, terrain mesh, HUD overlay (DR-8) |
-| `pyside6` | `≥ 6.6` | Playback and camera control widgets in Qt window (DR-7) |
-| `pygltflib` | latest stable | glTF/GLB terrain file reading (DR-11) |
-| `mcap-protobuf-support` | `≥ 1.0` | Protobuf message decoding from MCAP files (DR-9) |
-
-#### Task B — `FlightLogReader` (`log_reader.py`, `test_log_reader.py`)
-
-Implement the resolved design (DR-1, DR-9):
-
-- **Per-field MCAP topics:** each topic has the form `"source/field_name"`. Parse the prefix before `/` as the source name; merge all per-field channels for each source into one DataFrame on a common time index. Update `load_mcap()` and all test fixtures that register `channel.topic`.
-- **Protobuf decoding:** `_decode_message()` handles both `"json"` (current) and `"protobuf"` encodings via `mcap-protobuf-support`. Update fixture channel registrations to test both paths.
-- **CSV source name from header row:** source name is embedded in the CSV header, not derived from the filename stem. Update `load_csv()` and all CSV test fixtures.
-- **Stateful API (DR-1):** `load_*()` returns the frames dict as its value; add `frames()` getter; `channel_names()` raises if called before any `load_*()`. Update all tests that call these methods.
-
-#### Task C — `ModeEventSeries` (`mode_overlay.py`, `test_mode_events.py`)
-
-Implement the resolved design (DR-2):
-
-- **Initial value as first event:** `from_dataframe()` emits the channel's initial value as a `ModeEvent` at the first sample time. Remove the `if prev is None: continue` skip. Update `test_mode_events_from_step_channel` — fixture has 3 transitions starting at t=1.0; with initial value at t=0.0 emitted, assert 4 events.
-- **`name_map` as constructor argument:** move `name_map` from `from_dataframe()` parameter to `ModeEventSeries.__init__(events, name_map=None)`. `from_dataframe()` accepts `name_map` and passes it to the constructor. Update all test call sites.
-
-#### Task D — `TimeHistoryFigure` (`time_history.py`, `test_time_history.py`)
-
-Implement the resolved design (DR-3):
-
-- Make `build()` internal (rename to `_build()` or equivalent).
-- Add `figure()` public accessor: triggers build if needed, returns the Plotly `Figure`.
-- Keep `show()` and `export_html()` public. Both call `figure()` internally.
-- Update tests: replace direct `build()` calls with `figure()`.
-
-#### Task E — `RibbonTrail` (`trajectory_view.py`, `test_ribbon_trail.py`)
-
-Implement the resolved design (DR-8, ribbon geometry decisions):
-
-- **`wing_span_m` rename:** rename `half_width_m` → `wing_span_m`; change `wing_body = np.array([0.0, half_width_m, 0.0])` to `wing_body = np.array([0.0, wing_span_m / 2.0, 0.0])`. Update tests accordingly.
-- **CCW winding:** update quad assembly to `(v_lower[i], v_lower[i+1], v_upper[i+1], v_upper[i])` — CCW from outward face normal.
-- **Time-based α fade:** add `timestamps` parameter to `build()`; compute `τ_i = (t_current − t_mid_i) / trail_duration_s` per quad; store per-quad alpha `α_i = log(2 − τ_i) / log(2)` alongside color array; add `trail_duration_s` parameter.
-- **`show_edges` flag:** add optional edge lines per source; edge color is darkened face color; same τ-based fade.
-- **Vispy output:** change `collection()` → `mesh()` returning a Vispy `MeshVisual`. Remove `Poly3DCollection` dependency.
-
-#### Task F — `TrajectoryView` + `HudOverlay` (`trajectory_view.py`, `test_trajectory_view.py`)
-
-Implement the resolved design (DR-7, DR-8, DR-10 through DR-13):
-
-- **Qt + Vispy window:** rewrite as a `QMainWindow` (`PySide6`); Vispy `SceneCanvas` embedded as a `QWidget`. Layout: 3D canvas 85% height; playback/camera controls 8% height (`QHBoxLayout` with `QPushButton`, `QSlider`, `QRadioButton`).
-- **Four camera modes:** `CameraMode` enum (`FPV`, `TRAIL`, `GODS_EYE`, `LOCAL_TOP`); implement each per PP-F29–PP-F32; `set_camera_mode(mode)` at runtime.
-- **Terrain loading:** `load_terrain(path)` reads a `.glb` file via `pygltflib`; decodes mesh primitives to numpy arrays; renders as Vispy mesh visual; saturation controlled via `set_terrain_saturation(value)`.
-- **`HudOverlay`:** replace `ax.text2D()` artists with Vispy `Text` visuals at fixed canvas-coordinate positions; `update(frame_data)` sets text on each visual; mode-change banner uses α fade over 60 frames.
-- **Dual-source overlay:** both sources rendered as separate Vispy mesh visuals with distinct colors.
-- **Tests:** `animate()` / `build()` callable in headless test environment; use `vispy.use("offscreen")`; never call `show()`.
-
-#### Task G — `terrain_paths.py` (new file)
-
-Create `python/tools/terrain/terrain_paths.py` per DR-13:
-
-```python
-from pathlib import Path
-import os
-
-TERRAIN_DATA_ROOT: Path = Path(
-    os.environ.get("LITEAERO_TERRAIN_ROOT", "")
-) if os.environ.get("LITEAERO_TERRAIN_ROOT") else Path(__file__).parents[3] / "data" / "terrain"
-
-def dataset_dir(dataset_name: str) -> Path:
-    return TERRAIN_DATA_ROOT / dataset_name
-
-def source_dir(dataset_name: str) -> Path:
-    return dataset_dir(dataset_name) / "source"
-
-def derived_dir(dataset_name: str) -> Path:
-    return dataset_dir(dataset_name) / "derived"
-
-def las_terrain_dir(dataset_name: str) -> Path:
-    return derived_dir(dataset_name) / "las_terrain"
-
-def gltf_path(dataset_name: str) -> Path:
-    return derived_dir(dataset_name) / "gltf" / "terrain.glb"
-
-def metadata_path(dataset_name: str) -> Path:
-    return derived_dir(dataset_name) / "metadata.json"
-```
-
-Add `python/test/test_terrain_paths.py` with tests for: default path resolution is relative to project root; `LITEAERO_TERRAIN_ROOT` override replaces the default; all helper functions return paths under `TERRAIN_DATA_ROOT`.
-
-### Tests
-
-All tests in `test_log_reader.py`, `test_mode_events.py`, `test_time_history.py`, `test_ribbon_trail.py`, and `test_time_history.py` must pass after rework. New tests: `test_terrain_paths.py` (Task G) and `test_trajectory_view.py` (Task F). Vispy tests run with `vispy.use("offscreen")`.
-
----
-
-## 2. Manual Input — Joystick and Keyboard
+## 1. Manual Input — Joystick and Keyboard
 
 **Blocking dependencies:** None. `AircraftCommand` is implemented.
 
@@ -284,13 +177,13 @@ Add a platform-conditional dependency on SDL2 for `JoystickInput`.
 
 ---
 
-## 3. Sensor Models — Implementable Subset
+## 2. Sensor Models — Implementable Subset
 
 **Blocking dependencies:** None. `KinematicState` and `V_Terrain` are implemented.
 
 Implement the four sensor models whose only dependencies are already available. The
 remaining sensors (`SensorINS`, `SensorAA`, `SensorAAR`, `SensorForwardTerrainProfile`,
-`SensorTrackEstimator`) are deferred to item 12; they depend on LiteAero Flight
+`SensorTrackEstimator`) are deferred to item 11; they depend on LiteAero Flight
 components that are not yet designed.
 
 | Class | Depends on | Hardware modeled |
@@ -302,13 +195,13 @@ components that are not yet designed.
 
 Each sensor requires a design document before implementation. Implement in the order
 listed; `SensorLaserAlt` and `SensorRadAlt` outputs are required by the `AnomalyDetector`
-`AltitudeBelowTerrain` rule (item 8).
+`AltitudeBelowTerrain` rule (item 7).
 
 ---
 
-## 4. Logged Channel Registry — Design
+## 3. Logged Channel Registry — Design
 
-**Blocking dependencies:** SimRunner (delivered), LandingGear C++ (delivered), item 3
+**Blocking dependencies:** SimRunner (delivered), LandingGear C++ (delivered), item 2
 (sensor models subset). The registry must reflect the complete channel set produced by the
 simulation loop, including gear contact channels and sensor channels.
 
@@ -330,7 +223,7 @@ Design document (`docs/architecture/channel_registry.md`) specifying:
 
 ---
 
-## 5. Real Flight Log Format — Design
+## 4. Real Flight Log Format — Design
 
 **Blocking dependencies:** None. This is a standalone design decision.
 
@@ -344,7 +237,7 @@ Design document (`docs/architecture/flight_log_format.md`) covering:
 - What log format(s) real aircraft produce (e.g., ArduPilot DataFlash, MAVLink ULOG,
   custom CSV, or a configurable adapter).
 - Channel name mapping from the real-log format to the simulation channel naming
-  convention defined in item 4.
+  convention defined in item 3.
 - Policy for handling channels present in the real log but absent from the sim schema,
   and vice versa.
 - Whether a translation/adapter layer is implemented in `FlightLogReader` or as a
@@ -352,7 +245,7 @@ Design document (`docs/architecture/flight_log_format.md`) covering:
 
 ---
 
-## 6. Aerodynamic Coefficient Design Study
+## 5. Aerodynamic Coefficient Design Study
 
 **Blocking dependencies:** None. `AeroCoeffEstimator` is implemented.
 
@@ -365,7 +258,7 @@ Design authority documents:
 - Propulsion parameter estimation and propulsion-aero coupling:
   [`docs/architecture/propulsion_coeff_estimator.md`](../architecture/propulsion_coeff_estimator.md)
 
-Prerequisite for item 7 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Resolves OQ-16(c).
+Prerequisite for item 6 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Resolves OQ-16(c).
 
 ### Deliverables — Aerodynamic and Propulsion Coefficient Design Study
 
@@ -376,13 +269,13 @@ Prerequisite for item 7 (`Aircraft6DOF` and `BodyAxisCoeffModel`). Resolves OQ-1
 - `BodyAxisCoeffModel` and `PropulsionCouplingCoefficients` formats decided and documented.
 - Element registry updated (`AeroModel` named, `BodyAxisCoeffModel` and `PropulsionCoeffEstimator` formats defined).
 
-Must be complete before item 7 begins.
+Must be complete before item 6 begins.
 
 ---
 
-## 7. Aircraft6DOF — Design and Implementation
+## 6. Aircraft6DOF — Design and Implementation
 
-**Blocking dependencies:** Item 6 (aerodynamic coefficient design study).
+**Blocking dependencies:** Item 5 (aerodynamic coefficient design study).
 
 Full 6DOF aircraft dynamics model. Architecture placeholders are defined in
 [`docs/architecture/system/future/element_registry.md`](../architecture/system/future/element_registry.md).
@@ -393,7 +286,7 @@ Full 6DOF aircraft dynamics model. Architecture placeholders are defined in
   body frame; decouples the 6DOF integrator from the coefficient axis convention.
 - **`BodyAxisCoeffModel`** — implements `AeroModel` using body-axis stability derivatives
   (CX, CY, CZ, Cl, Cm, Cn) as functions of α, β, control surface deflections, and angular
-  rates. Coefficient model format defined by item 6.
+  rates. Coefficient model format defined by item 5.
 - **`Aircraft6DOF`** — full 6DOF dynamics; depends on `AeroModel` for forces and moments;
   accepts `SurfaceDeflectionCommand` (control surface deflection angles + per-motor
   throttle); produces `KinematicStateSnapshot`; used directly by ArduPilot and PX4
@@ -413,9 +306,9 @@ proto serialization and round-trip tests. `Aircraft6DOF` and `Aircraft` must bot
 
 ---
 
-## 8. Post-Processing — Analysis Tools Design Harmonization and Implementation
+## 7. Post-Processing — Analysis Tools Design Harmonization and Implementation
 
-**Blocking dependencies:** Item 4 (Logged Channel Registry), item 5 (Real Flight Log
+**Blocking dependencies:** Item 3 (Logged Channel Registry), item 4 (Real Flight Log
 Format), and LiteAero Flight command channel schema (cross-repo dependency — track in
 LiteAero Flight roadmap).
 
@@ -430,8 +323,8 @@ channel schema into `BehaviorVerifier` criteria. It then implements those module
 Update `docs/architecture/post_processing.md` §Analysis Modules:
 
 - Replace all channel name references in `AnomalyDetector` rules with names from the
-  Logged Channel Registry (item 4).
-- Specify the `DataOverlay` format adapter for the real flight log format (item 5).
+  Logged Channel Registry (item 3).
+- Specify the `DataOverlay` format adapter for the real flight log format (item 4).
 - Define `BehaviorVerifier` command channel names from the LiteAero Flight command schema.
 - Define the Scenario Reference Data Format for `WaypointReached` and similar criteria.
 
@@ -441,9 +334,9 @@ Implement in dependency order:
 
 | Module | File | Blocked by |
 | --- | --- | --- |
-| `AnomalyDetector` + rule library | `python/tools/anomaly.py` | Item 4, sensor item 3 |
-| `DataOverlay` | `python/tools/data_overlay.py` | Item 5 |
-| `BehaviorVerifier` + criterion library | `python/tools/behavior_verifier.py` | Item 4, LiteAero Flight schema |
+| `AnomalyDetector` + rule library | `python/tools/anomaly.py` | Item 3, sensor item 2 |
+| `DataOverlay` | `python/tools/data_overlay.py` | Item 4 |
+| `BehaviorVerifier` + criterion library | `python/tools/behavior_verifier.py` | Item 3, LiteAero Flight schema |
 
 ### Tests — Analysis Tools
 
@@ -451,10 +344,10 @@ Implement in dependency order:
 
 ---
 
-## 9. LandingGear — Python Bindings and Scenario Tests
+## 8. LandingGear — Python Bindings and Scenario Tests
 
 **Blocking dependencies:** LandingGear C++ (delivered, LG-1), PP-1 (delivered —
-visualization tools exist for animation). Item 1 (rework) is not required before item 9.
+visualization tools exist for animation). PP-2 (rework) is delivered.
 
 Implement Steps G–H from the design authority document
 ([`docs/architecture/landing_gear.md`](../architecture/landing_gear.md)).
@@ -490,9 +383,9 @@ Add optional `liteaero_sim_py` pybind11 extension target controlled by
 
 ---
 
-## 10. External Interface Elements
+## 9. External Interface Elements
 
-**Blocking dependencies:** SimRunner (delivered) for all elements. Item 7 (Aircraft6DOF)
+**Blocking dependencies:** SimRunner (delivered) for all elements. Item 6 (Aircraft6DOF)
 for `PX4Interface`. `NavigationState` from LiteAero Flight for `QGroundControlLink`.
 
 Adapters that connect LiteAero Sim to external systems. All live in the Interface Layer.
@@ -500,7 +393,7 @@ Adapters that connect LiteAero Sim to external systems. All live in the Interfac
 | # | Element | Protocol | Depends on |
 | --- | --- | --- | --- |
 | LAS-ext-1 | `ArduPilotInterface` | ArduPilot SITL protocol | SimRunner (delivered); `Aircraft` or `Aircraft6DOF` |
-| LAS-ext-2 | `PX4Interface` | PX4 SITL bridge | SimRunner (delivered); `Aircraft6DOF` (item 7) |
+| LAS-ext-2 | `PX4Interface` | PX4 SITL bridge | SimRunner (delivered); `Aircraft6DOF` (item 6) |
 | LAS-ext-3 | `QGroundControlLink` | MAVLink over UDP | SimRunner (delivered); `NavigationState` (LiteAero Flight) |
 | LAS-ext-4 | `VisualizationLink` | UDP to Godot 4 GDExtension plugin at simulation rate | SimRunner (delivered); `SimulationFrame` (done) |
 
@@ -512,7 +405,7 @@ transport and axis convention are decided (see
 
 ---
 
-## 11. Sensor Models — Deferred Subset
+## 10. Sensor Models — Deferred Subset
 
 **Blocking dependencies:** LiteAero Flight components not yet designed (`NavigationFilter`
 for `SensorINS`; Guidance for `SensorForwardTerrainProfile`). `SensorAA`, `SensorAAR`,
@@ -531,7 +424,7 @@ Schedule when respective LiteAero Flight dependencies are available.
 
 ---
 
-## 12. Synthetic Perception Sensors — Proposed
+## 11. Synthetic Perception Sensors — Proposed
 
 **Blocking dependencies:** Design items needed for each sensor before implementation
 can begin. Schedule when prerequisite sensor and terrain models are stable.
@@ -560,6 +453,6 @@ The correct name is `Terrain`. This rename touches liteaero-flight (the abstract
 - All `.cpp` files that use the pointer type directly
 
 **Scope:** Cross-repository rename (liteaero-flight + liteaero-sim). Update the Current
-State table, delivered item 14, item LG-1 description, items 3 and 12 of this roadmap,
+State table, delivered item 14, item LG-1 description, items 2 and 11 of this roadmap,
 and all sensor design documents that reference the interface by name once the rename is
 complete.

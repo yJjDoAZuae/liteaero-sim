@@ -17,6 +17,10 @@ dependencies = [
     "pandas>=2.0",
     "plotly>=5.18",
     "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "vispy>=0.14",
+    "pyside6>=6.6",
+    "pygltflib>=1.16",
 ]
 
 [dependency-groups]

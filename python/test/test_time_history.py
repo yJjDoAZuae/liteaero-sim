@@ -42,7 +42,7 @@ class TestTimeHistoryFigure:
         fig = TimeHistoryFigure()
         fig.load(sample_frames)
         fig.add_panel(["altitude_m"], title="Altitude", y_label="m")
-        plotly_fig = fig.build()
+        plotly_fig = fig.figure()
         trace_names = [t.name for t in plotly_fig.data]
         assert "altitude_m" in trace_names
 
@@ -51,7 +51,7 @@ class TestTimeHistoryFigure:
         fig.load(sample_frames)
         fig.add_panel(["altitude_m"], title="Altitude", y_label="m")
         fig.add_panel(["roll_rad"], title="Roll", y_label="rad")
-        plotly_fig = fig.build()
+        plotly_fig = fig.figure()
         layout = plotly_fig.to_dict()["layout"]
         # make_subplots(shared_xaxes=True) links axes via 'matches'.
         # Plotly ≤5: xaxis2.matches = "x" (non-bottom points to bottom).
@@ -69,7 +69,7 @@ class TestTimeHistoryFigure:
         fig = TimeHistoryFigure()
         fig.load(sample_frames)
         fig.add_panel(["altitude_m", "airspeed_ias_m_s"], title="Multi", y_label="SI")
-        plotly_fig = fig.build()
+        plotly_fig = fig.figure()
         trace_names = [t.name for t in plotly_fig.data]
         assert "altitude_m" in trace_names
         assert "airspeed_ias_m_s" in trace_names
@@ -84,7 +84,7 @@ class TestTimeHistoryFigure:
             y2_channels=["roll_rad"],
             y2_label="rad",
         )
-        plotly_fig = fig.build()
+        plotly_fig = fig.figure()
         # Secondary y-axis traces have yaxis='y2'
         secondary_traces = [t for t in plotly_fig.data if getattr(t, "yaxis", None) == "y2"]
         assert len(secondary_traces) == 1
@@ -98,7 +98,7 @@ class TestTimeHistoryFigure:
         fig.load(sample_frames)
         fig.add_panel(["altitude_m"], title="Alt", y_label="m")
         fig.set_mode_events(events)
-        plotly_fig = fig.build()
+        plotly_fig = fig.figure()
         layout = plotly_fig.to_dict()["layout"]
         shapes = layout.get("shapes", [])
         assert any(s.get("x0") == pytest.approx(3.0) for s in shapes)

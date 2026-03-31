@@ -47,6 +47,7 @@ class TimeHistoryFigure:
         self._panels: list[_Panel] = []
         self._mode_events: ModeEventSeries | None = None
         self._data: dict[str, pd.DataFrame] = {}
+        self._figure: go.Figure | None = None
 
     # ------------------------------------------------------------------
     # Configuration
@@ -55,6 +56,7 @@ class TimeHistoryFigure:
     def load(self, frames: dict[str, pd.DataFrame]) -> None:
         """Supply source DataFrames keyed by source name."""
         self._data = frames
+        self._figure = None  # invalidate cached figure
 
     def add_panel(
         self,
@@ -78,12 +80,19 @@ class TimeHistoryFigure:
     def set_mode_events(self, events: ModeEventSeries) -> None:
         """Overlay mode transition markers on all panels."""
         self._mode_events = events
+        self._figure = None  # invalidate cached figure
 
     # ------------------------------------------------------------------
     # Build / export
     # ------------------------------------------------------------------
 
-    def build(self) -> go.Figure:
+    def figure(self) -> go.Figure:
+        """Return the Plotly figure, building it if necessary (cached)."""
+        if self._figure is None:
+            self._figure = self._build()
+        return self._figure
+
+    def _build(self) -> go.Figure:
         """Construct and return the Plotly figure.  Does not open a browser."""
         n = len(self._panels)
         if n == 0:
@@ -156,8 +165,8 @@ class TimeHistoryFigure:
 
     def show(self) -> None:
         """Open the figure in a browser."""
-        self.build().show()
+        self.figure().show()
 
     def export_html(self, path: str | Path) -> None:
         """Write a self-contained HTML file."""
-        self.build().write_html(str(path))
+        self.figure().write_html(str(path))
