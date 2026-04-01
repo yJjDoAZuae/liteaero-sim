@@ -109,15 +109,19 @@ mechanism used (see OQ-10, OQ-11).
 
 | Element | Responsibility | Ports — Inputs | Ports — Outputs |
 | --- | --- | --- | --- |
-| `SimRunner` | Execution loop; paces steps to wall clock (real-time / scaled) or runs free (batch); calls `Aircraft::step()` and environment steps in correct order | `RunnerConfig` | step counter, elapsed sim time |
+| `SimRunner` | Execution loop; paces steps to wall clock (real-time / scaled) or runs free (batch); calls `Aircraft::step()` and environment steps in correct order; optional `ManualInput` adapter injected via `setManualInput()`; echoes `ManualInputFrame` each tick via `lastManualInputFrame()` | `RunnerConfig`, optional `ManualInput*` | step counter, elapsed sim time, `ManualInputFrame` snapshot |
 
 ---
 
 ## External Interface Elements
 
-| Element | Responsibility | Protocol |
+| Element | Responsibility | Protocol / Notes |
 | --- | --- | --- |
-| `ManualInput` | Translates joystick / RC transmitter inputs to `AircraftCommand` | USB HID (SDL2 or platform API) |
+| `ManualInput` | Abstract base for all manual control adapters; returns `ManualInputFrame` (`AircraftCommand` + `InputAction` bitmask) from `read()` | — |
+| `KeyboardInput` | Integrating keyboard adapter; configurable key bindings and named action keys | SDL2 keyboard state |
+| `JoystickInput` | SDL2 joystick adapter; per-axis calibration, dead zone, trim; named action buttons; device selection by name or index; disconnect fallback | SDL2 joystick API (USB HID) |
+| `ScriptedInput` | Mutex-protected command slot; `push(AircraftCommand)` callable from Python via pybind11 | pybind11 in-process |
+| `joystick_verify` | Standalone C++ verification executable; SDL polling loop; streams `ManualInputFrame` to stdout (JSON lines or protobuf); joystick-only scope initially | stdout subprocess |
 | `QGroundControlLink` | Telemetry and mission planning interface to QGroundControl | MAVLink over UDP |
 | `ArduPilotInterface` | SITL/HITL interface to ArduPilot | ArduPilot SITL protocol / MAVLink |
 | `PX4Interface` | SITL/HITL interface to PX4 | PX4 SITL bridge / MAVLink |

@@ -10,6 +10,7 @@ flowchart TB
         direction LR
         CFG["Config Parser<br/>(unit conversion in)"]
         DISP["Display / Export<br/>(unit conversion out)"]
+        MI["ManualInput<br/>(KeyboardInput / JoystickInput / ScriptedInput)"]
     end
 
     subgraph AL["Application Layer"]
@@ -216,6 +217,13 @@ sequenceDiagram
 
     Session->>KinematicState: applyForces(forces_n, moments_nm, thrust_n)
 ```
+
+**Manual input path.** In the data flow above, `cmd` (`AircraftCommand`) originates
+from either the flight code (autopilot) or a `ManualInput` adapter injected into
+`SimRunner`. The two sources are mutually exclusive per run: the scenario selects one
+by calling `SimRunner::setManualInput()` (manual) or leaving it unset (autopilot or
+scripted). `ManualInput` classes are Interface Layer components — see
+[`manual_input.md`](manual_input.md).
 
 ---
 

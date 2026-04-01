@@ -16,6 +16,8 @@ execution mode model, threading contract, timing mechanism, and the interface be
 | UC-4 | Stop a running simulation from another thread | External interface, test | `stop()` sets atomic flag; loop exits within one timestep |
 | UC-5 | Query elapsed simulation time | Logger, status display | `elapsed_sim_time_s()` returns `step_count * dt_s` |
 | UC-6 | Query whether the runner is currently active | External interface, test | `is_running()` returns atomic flag |
+| UC-7 | Inject a manual input adapter | Scenario setup | `setManualInput(ManualInput*)` before `start()` |
+| UC-8 | Read the manual input frame from the most recent tick | Logger, HUD display | `lastManualInputFrame()` returns mutex-protected snapshot |
 
 ---
 
@@ -64,16 +66,25 @@ The runner is therefore responsible for the **wall-clock relationship** (pacing 
 ```cpp
 class SimRunner {
 public:
-    void   initialize(const RunnerConfig& config, Aircraft& aircraft);
-    void   start();
-    void   stop();
-    bool   is_running() const;
-    double elapsed_sim_time_s() const;
+    void             initialize(const RunnerConfig& config, Aircraft& aircraft);
+    void             start();
+    void             stop();
+    bool             is_running() const;
+    double           elapsed_sim_time_s() const;
+
+    // Inject a manual input adapter. nullptr (default) uses a neutral AircraftCommand
+    // on every tick.  Must not be called while a run is in progress.
+    void             setManualInput(ManualInput* input);
+
+    // Returns a mutex-protected snapshot of the ManualInputFrame produced on the most
+    // recent tick.  Returns a neutral frame when no adapter is set or before the first
+    // tick.  Safe to call from any thread.
+    ManualInputFrame lastManualInputFrame() const;
 };
 ```
 
-`SimRunner` holds a non-owning reference to `Aircraft`. The caller is responsible for
-keeping `Aircraft` alive for the duration of the run.
+`SimRunner` holds non-owning pointers to `Aircraft` and `ManualInput`. The caller is
+responsible for keeping both alive for the duration of the run.
 
 ---
 
@@ -146,17 +157,50 @@ The `Batch` mode has no timing mechanism; `sleep_until` is never called.
 ```cpp
 private:
     RunnerConfig            config_;
-    Aircraft*               aircraft_  = nullptr;
-    std::atomic<bool>       stop_flag_ {false};
-    std::atomic<bool>       running_   {false};
-    std::atomic<uint64_t>   step_count_{0};
+    Aircraft*               aircraft_     = nullptr;
+    ManualInput*            manual_input_ = nullptr;
+    std::atomic<bool>       stop_flag_    {false};
+    std::atomic<bool>       running_      {false};
+    std::atomic<uint64_t>   step_count_   {0};
     std::thread             worker_;
+
+    mutable std::mutex      frame_mutex_;
+    ManualInputFrame        last_frame_;   // guarded by frame_mutex_
 
     void runLoop();
 ```
 
 `runLoop()` contains the step-advance logic common to all modes and is called either
 directly (Batch) or from the worker thread.
+
+---
+
+## Manual Input Integration
+
+When a `ManualInput` adapter is injected via `setManualInput()`, the run loop calls it
+each tick before `Aircraft::step()`:
+
+```text
+runLoop() each tick:
+    if manual_input_ != nullptr:
+        SDL_PumpEvents()                    // flush OS event queue; caller owns SDL_Init
+        frame = manual_input_->read()
+    else:
+        frame = { neutral AircraftCommand, actions = 0 }
+    { frame_mutex_ lock }
+        last_frame_ = frame
+    aircraft_->step(sim_time_s, frame.command, environment_state)
+```
+
+**SDL ownership.** `SimRunner` calls `SDL_PumpEvents()` but does not call `SDL_Init()`
+or `SDL_Quit()`. The scenario code is responsible for the full SDL2 lifecycle before
+calling `start()` and after calling `stop()`. See the SDL2 Initialization Contract in
+[`manual_input.md`](manual_input.md).
+
+**Echo.** `lastManualInputFrame()` returns the `last_frame_` snapshot under
+`frame_mutex_`. This allows the scenario or application layer to read the ingested
+`ManualInputFrame` after each step and log it alongside other step outputs, without
+requiring `SimRunner` to hold a logger reference. See Open Questions.
 
 ---
 
@@ -195,6 +239,9 @@ target_link_libraries(liteaero_sim_runner
 ```
 
 `SimRunner` has no dependency on logging, serialization, or flight components.
+When a `ManualInput` adapter is injected, `SimRunner` gains a conditional SDL2 dependency
+(for `SDL_PumpEvents()`). The `liteaero_sim_runner` CMake target must link `SDL2::SDL2`
+when the manual input feature is included.
 
 ---
 
@@ -214,3 +261,56 @@ File: `test/SimRunner_test.cpp`
 | `Initialize_InvalidTimeScale_Throws` | `time_scale <= 0` causes `initialize()` to throw |
 | `IsRunning_FalseBeforeStart` | `is_running()` is false before `start()` |
 | `IsRunning_FalseAfterBatchCompletes` | `is_running()` is false after a `Batch` run completes |
+
+**Manual input tests** (additions to `test/SimRunner_test.cpp`):
+
+| Test | Pass criterion |
+| --- | --- |
+| `ManualInput_NullAdapter_UsesNeutralCommand` | `setManualInput(nullptr)` — `Aircraft::step()` receives neutral `AircraftCommand` every tick |
+| `ManualInput_InjectedAdapter_CommandPropagated` | Injected mock adapter returning a fixed command — `Aircraft::step()` receives that command; `lastManualInputFrame()` reflects it |
+| `ManualInput_LastFrame_ThreadSafe` | `lastManualInputFrame()` called from a second thread while `Batch` run executes — no data race (run under ThreadSanitizer) |
+| `ManualInput_NotSet_LastFrameIsNeutral` | `lastManualInputFrame()` before `start()` returns neutral frame |
+
+---
+
+## Open Questions
+
+### OQ-SR-1 — ManualInputFrame Echo Delivery
+
+`manual_input.md` requires that the `ManualInputFrame` ingested each tick is available
+to Python HUD display tools and post-processing. The current design exposes it via
+`lastManualInputFrame()`, which the scenario or application layer can poll after each
+step and log alongside other outputs. This keeps `SimRunner` free of a logger
+dependency.
+
+The question is whether a polling getter is sufficient or whether an active delivery
+mechanism is needed.
+
+| Option | Description | Tradeoff |
+| --- | --- | --- |
+| Getter (`lastManualInputFrame()`) | Caller reads after each tick. | Simple. Requires caller to poll every step. Suitable for batch scenarios where the caller drives the loop; less clean for real-time scenarios where the run loop is on a background thread. |
+| Injected callback | `setFrameCallback(std::function<void(const ManualInputFrame&)>)` called each tick from the run loop. | Active delivery; no polling. Adds callback invocation overhead. Callback runs on the sim thread — caller must be thread-safe. |
+| Logger dependency | `SimRunner` accepts a `Logger*` and logs `ManualInputFrame` directly. | Direct, no extra mechanism. Contradicts the design constraint that `SimRunner` has no logging dependency. |
+
+**Recommendation:** Getter for now. The batch and scripted use cases (which are the
+near-term use cases) work naturally with polling. If real-time HUD display proves to
+need active delivery, the callback option can be added without breaking the getter API.
+
+---
+
+### OQ-SR-2 — SDL2 Initialization Ownership
+
+When `SimRunner` calls `SDL_PumpEvents()` each tick, it assumes SDL has been
+initialized by the caller. In scenarios that use neither keyboard nor joystick input,
+SDL would never be initialized, and `SDL_PumpEvents()` would be a no-op or could
+behave unexpectedly.
+
+| Option | Description | Tradeoff |
+| --- | --- | --- |
+| Caller retains ownership (current design) | `SimRunner` calls `SDL_PumpEvents()` only when `manual_input_ != nullptr`. Caller initializes SDL before `start()`. | No SDL dependency in `SimRunner` when no adapter is set. Consistent with `manual_input.md` SDL contract. |
+| `SimRunner` conditionally initializes SDL | When `setManualInput()` is called with a non-null adapter, `SimRunner` calls `SDL_Init(SDL_INIT_JOYSTICK \| SDL_INIT_EVENTS)` in `start()` and `SDL_Quit()` in `stop()`. | Simpler for the caller. `SDL_Quit()` would be unsafe if other SDL subsystems are in use. |
+
+**Recommendation:** Caller retains ownership. Guard `SDL_PumpEvents()` behind
+`if (manual_input_ != nullptr)` so the call is never made in batch/scripted scenarios.
+This is consistent with `manual_input.md` and avoids `SimRunner` taking responsibility
+for a global subsystem.
