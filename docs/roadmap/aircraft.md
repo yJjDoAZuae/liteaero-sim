@@ -134,46 +134,128 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 
 ---
 
-## 1. Manual Input — Joystick and Keyboard
+## 1. Manual Input — Full Subsystem
 
-**Blocking dependencies:** None. `AircraftCommand` is implemented.
+**Design authority:** [`docs/architecture/manual_input.md`](../architecture/manual_input.md)
 
-Manual input adapters translate human control inputs (joystick axes, keyboard state) into
-an `AircraftCommand`. These live in the Interface Layer and have no physics logic.
+**Blocking dependencies:**
 
-### Deliverables — Manual Input
+- `AircraftCommand` — implemented.
+- SDL2 (`sdl/2.28.5`) — add to `conanfile.txt`.
+- pybind11 — project-wide dependency; add to `conanfile.txt` and
+  [`docs/dependencies/README.md`](../dependencies/README.md) before this item is authorized.
 
-- `KeyboardInput`: maps configurable key bindings to throttle, roll, pitch, yaw increments.
-  Operates at the simulation timestep rate.
-- `JoystickInput`: reads a raw joystick device (SDL2 or platform API) and maps axes and
-  buttons to the `AircraftCommand` fields. Applies a configurable dead zone and axis scaling.
+Manual input adapters translate human control inputs (joystick axes, keyboard state)
+into `ManualInputFrame` values containing an `AircraftCommand` and a bitmask of named
+`InputAction` flags. They live in the Interface Layer and have no physics logic.
 
-### Interface Sketch — Manual Input
+### Deliverables
 
-```cpp
-// include/input/ManualInput.hpp
-namespace liteaero::simulation {
+**C++ library (`liteaero-sim`):**
 
-class ManualInput {
-public:
-    virtual AircraftCommand read() = 0;   // non-blocking; returns latest command
-    virtual ~ManualInput() = default;
-};
+| Class / Type | File | Description |
+| --- | --- | --- |
+| `InputAction` enum, `ManualInputFrame` struct, `hasAction()` | `include/input/ManualInput.hpp` | Return type and action flags shared by all adapters |
+| `ManualInput` | `include/input/ManualInput.hpp` | Abstract base: `initialize()`, `reset()`, `read()` |
+| `KeyboardInputConfig`, `KeyboardInput` | `include/input/KeyboardInput.hpp` | Integrating keyboard adapter; configurable key bindings; named action keys (`SimReset`, `SimStart`); injected key-state provider for unit testing |
+| `JoystickInputConfig`, `JoystickInput`, `AxisMapping`, `JoystickDeviceInfo` | `include/input/JoystickInput.hpp` | SDL2 joystick adapter; device selection by name (`device_name_contains`) or index; per-axis calibration (`raw_min`/`raw_max`/`raw_trim`), dead zone, inversion, scale; named action buttons; `captureTrim()` / `ResetTrim`; disconnect fallback to neutral; `enumerateDevices()` static method |
+| `ScriptedInput` | `include/input/ScriptedInput.hpp` | Mutex-protected command slot; `push(AircraftCommand)` callable from Python via pybind11; `read()` returns last pushed frame |
 
-} // namespace liteaero::simulation
+**SimRunner extension** (modifies the existing `Sim-1` implementation):
+
+| Change | Description |
+| --- | --- |
+| `SimRunner::setManualInput(ManualInput*)` | Injects a manual input adapter; `nullptr` or not called → neutral command fallback. Design authority: [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md) must be updated before implementation. |
+| Run loop update | `SDL_PumpEvents()` called before `ManualInput::read()` each tick. |
+| Output echo | `ManualInputFrame` from `read()` included in every output tick. Required by HUD display and post-processing use cases. |
+
+**Python bindings (pybind11):**
+
+| Export | Description |
+| --- | --- |
+| `AircraftCommand` | Struct exposed to Python for `ScriptedInput::push()` |
+| `ScriptedInput::push()` | Allows Python scripts to drive sim inputs |
+| `JoystickInput::enumerateDevices()` | Returns device list for Python scenario setup and notebook configuration |
+
+**Standalone tool:**
+
+| File | Description |
+| --- | --- |
+| `src/tools/joystick_verify.cpp` | C++ executable; SDL polling loop; streams `ManualInputFrame` to stdout as JSON lines (default) or protobuf (flag); prints device table at startup; joystick-only scope initially |
+
+**Verification notebook:**
+
+| File | Description |
+| --- | --- |
+| `python/manual_input_demo.ipynb` | Launches `joystick_verify` subprocess; reads JSON stream; PySide6 + matplotlib window with 2D command boxes (row 1) and 4 horizontal bar gauges (row 2); 20 Hz `QTimer` |
+
+### Tests
+
+**`test/KeyboardInput_test.cpp`** (10 tests):
+
+| # | Test |
+| --- | --- |
+| 1 | No keys pressed → `n_z = neutral_nz_g`, `throttle = idle_throttle_nd`, others zero |
+| 2 | Pitch-up key held N steps → `n_z` increases by `nz_rate × N × dt_s` |
+| 3 | `n_z` clamps at `max_nz_g` |
+| 4 | `n_z` clamps at `min_nz_g` |
+| 5 | Throttle ramps up, clamps at 1.0 |
+| 6 | Throttle ramps down, clamps at 0.0 |
+| 7 | Center key → all axes snap to neutral instantly |
+| 8 | `reset()` → neutral command |
+| 9 | `initialize()` applies non-default rates and limits |
+| 10 | `initialize()` with missing required field → `std::invalid_argument` |
+
+**`test/JoystickInput_test.cpp`** (15 tests):
+
+| # | Test |
+| --- | --- |
+| 1 | Axis at center → output = `center_output` |
+| 2 | Axis at dead zone boundary → output = `center_output` |
+| 3 | Axis just beyond dead zone → non-zero output (continuity) |
+| 4 | Axis at full deflection → output = `center_output + scale` |
+| 5 | Axis at full negative deflection → correct output (SDL asymmetric min handled) |
+| 6 | Inverted axis → negated normalized output |
+| 7 | `n_z` clamps at `max_nz_g` |
+| 8 | `n_z = 1.0 g` at stick center |
+| 9 | `reset()` returns neutral command |
+| 10 | `initialize()` applies non-default dead zone |
+| 11 | `initialize()` rejects `dead_zone_nd ≥ 1.0` → `std::invalid_argument` |
+| 12 | `raw_min`/`raw_max` sub-range: raw at `raw_max` → normalized +1 |
+| 13 | Out-of-range raw clamped to `[raw_min, raw_max]` |
+| 14 | `isConnected()` true for injected-provider instance |
+| 15 | Simulated disconnect → `read()` returns neutral command |
+
+**`test/ScriptedInput_test.cpp`** (4 tests):
+
+| # | Test |
+| --- | --- |
+| 1 | `push()` → `read()` returns the pushed command |
+| 2 | `reset()` → neutral command |
+| 3 | `initialize()` accepts empty JSON config |
+| 4 | `push()` from thread A + `read()` from thread B → no data race (run under ThreadSanitizer) |
+
+### CMake Additions
+
+```cmake
+find_package(SDL2 REQUIRED)
+find_package(pybind11 REQUIRED)
+
+target_sources(liteaero-sim PRIVATE
+    src/input/KeyboardInput.cpp
+    src/input/JoystickInput.cpp
+    src/input/ScriptedInput.cpp
+)
+target_link_libraries(liteaero-sim PRIVATE SDL2::SDL2)
+
+add_executable(joystick_verify src/tools/joystick_verify.cpp)
+target_link_libraries(joystick_verify PRIVATE liteaero-sim SDL2::SDL2)
+
+pybind11_add_module(liteaero_py src/python/bindings.cpp)
+target_link_libraries(liteaero_py PRIVATE liteaero-sim)
 ```
 
-### Tests — Manual Input
-
-- `KeyboardInput` with no keys pressed returns zero lateral/directional commands and
-  configured idle throttle.
-- `JoystickInput` axis value at dead-zone boundary maps to zero output.
-- Axis scaling: full-deflection axis value maps to the configured maximum command.
-
-### CMake — Manual Input
-
-Add `src/input/KeyboardInput.cpp` and `src/input/JoystickInput.cpp` to `liteaero-sim`.
-Add a platform-conditional dependency on SDL2 for `JoystickInput`.
+`conanfile.txt` additions: `sdl/2.28.5`, `pybind11/2.11.1` (or latest stable in ConanCenter).
 
 ---
 
