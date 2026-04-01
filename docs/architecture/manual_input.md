@@ -36,12 +36,18 @@ flowchart TD
         OP["Operator (human at keyboard or joystick)"]
     end
 
+    subgraph Actors2
+        PY["Python Script / Notebook"]
+    end
+
     subgraph UC["Use Cases"]
-        UC1["UC-MI1  Produce AircraftCommand\nfrom current device state"]
+        UC1["UC-MI1  Produce ManualInputFrame\nfrom current device state"]
         UC2["UC-MI2  Initialize from JSON config\n(bindings, scaling, dead zone)"]
         UC3["UC-MI3  Reset command state\nto neutral"]
         UC4["UC-MI4  Center all axes\n(operator action)"]
         UC5["UC-MI5  Open/close physical device\n(joystick only)"]
+        UC6["UC-MI6  Push AircraftCommand\nfrom Python (ScriptedInput)"]
+        UC7["UC-MI7  Standalone joystick\nverification"]
     end
 
     OP  -->|physical input| UC1
@@ -50,15 +56,21 @@ flowchart TD
     SC  --> UC3
     OP  -->|center key / button| UC4
     SC  --> UC5
+    PY  -->|pybind11| UC6
+    SL  --> UC6
+    OP  --> UC7
+    SC  --> UC7
 ```
 
 | ID | Use Case | Primary Actor | Mechanism |
 | --- | --- | --- | --- |
-| UC-MI1 | Produce `AircraftCommand` from current device state | Simulation loop | `ManualInput::read()` — non-blocking, returns latest command |
+| UC-MI1 | Produce `ManualInputFrame` from current device state | Simulation loop | `ManualInput::read()` — non-blocking, returns `ManualInputFrame` |
 | UC-MI2 | Initialize from JSON config | Scenario / setup | `initialize(config)` on the concrete subclass |
 | UC-MI3 | Reset command state to neutral | Scenario, test | `reset()` |
 | UC-MI4 | Center all axes | Operator (keyboard key or joystick button) | Handled internally by `read()` when the center binding is active |
 | UC-MI5 | Open / close physical joystick device | Scenario, RAII | `JoystickInput` constructor / destructor |
+| UC-MI6 | Push `AircraftCommand` from Python | Python script / test | `ScriptedInput::push()` via pybind11 binding |
+| UC-MI7 | Standalone joystick verification | Operator, scenario setup | `joystick_verify` C++ executable |
 
 ---
 
@@ -69,12 +81,14 @@ Interface Layer
     liteaero::simulation::ManualInput       (abstract)
     liteaero::simulation::KeyboardInput     (concrete)
     liteaero::simulation::JoystickInput     (concrete)
+    liteaero::simulation::ScriptedInput     (concrete)
 ```
 
-All three classes live in the `liteaero::simulation` namespace, under
+All four classes live in the `liteaero::simulation` namespace, under
 `include/input/` and `src/input/`. They depend on `AircraftCommand` from the
-Domain Layer (via `include/Aircraft.hpp`) and on SDL2 for device access.
-They do not depend on any other Domain Layer class.
+Domain Layer (via `include/Aircraft.hpp`). `KeyboardInput` and `JoystickInput`
+depend on SDL2 for device access. `ScriptedInput` has no device dependency.
+None of the four depend on any other Domain Layer class.
 
 ---
 
@@ -231,8 +245,8 @@ public:
     // Read current keyboard state and advance the integrated command.
     // dt_s — simulation timestep in seconds; used to scale increment rates.
     // In production: caller must have called SDL_PumpEvents() before read().
-    AircraftCommand read() override;
-    AircraftCommand read(float dt_s);
+    ManualInputFrame read() override;
+    ManualInputFrame read(float dt_s);
 
     // Replace the key-state provider (e.g., swap in a mock after construction).
     void setKeyStateProvider(KeyStateProvider provider);
@@ -356,12 +370,10 @@ struct JoystickDeviceInfo {
 };
 ```
 
-**In the verification notebook.** The run cell calls the pygame equivalent
-(`pygame.joystick.get_count()` / `pygame.joystick.Joystick(i).get_name()`) at startup
-and prints a table of available devices with their axis counts, so the user can
-confirm the correct device index or set a name filter before the window opens. A
-`device_name_contains` parameter in the notebook configuration cell selects the device
-by name using the same substring-match logic.
+**In the verification notebook.** The `joystick_verify` executable prints a device
+enumeration table to stdout before the polling loop begins. The notebook setup cell
+reads and displays this table so the user can confirm the correct device or set a
+`device_name_contains` filter before the display window opens.
 
 ```cpp
 // include/input/JoystickInput.hpp
@@ -650,6 +662,112 @@ resetting timing state. This is the same pattern as `Aircraft::setTerrain()`.
 [`sim_runner.md`](sim_runner.md) must document `setManualInput()` before `SimRunner`
 implementation begins.
 
+**Sim output echo.** `SimRunner` must include the full `ManualInputFrame` returned by
+`read()` in every output tick. This is a hard requirement: Python HUD display tools,
+live visualization overlays, and post-processed replay all access manual input data
+through the sim's output stream or log — not through the input layer directly. The
+echo ensures the display reflects what the sim actually ingested, including any
+fallback-to-neutral behavior from a disconnected device. The specifics of the output
+mechanism are a `SimRunner` design responsibility; the requirement is that the full
+`ManualInputFrame` (both `command` and `actions`) is present in every tick's output.
+
+---
+
+## Python Integration Architecture
+
+Manual input functionality is exposed to Python through three patterns. No manual
+input logic is reimplemented in Python — the C++ classes are the single implementation.
+
+### Pattern 1: ScriptedInput — Python as Command Source
+
+`ScriptedInput` is a `ManualInput` subclass for use cases where Python generates
+`AircraftCommand` values directly: scripted test scenarios, automated maneuvers, and
+replay. The sim loop calls `read()` on it in the normal way; Python pushes commands
+via a pybind11-exposed method. `SimRunner` requires no special case — `ScriptedInput`
+is just another `ManualInput`.
+
+```cpp
+// include/input/ScriptedInput.hpp
+namespace liteaero::simulation {
+
+class ScriptedInput final : public ManualInput {
+public:
+    void             initialize(const nlohmann::json& config) override;  // minimal
+    void             reset() override;
+    ManualInputFrame read() override;  // returns the last pushed command
+
+    // Called from Python (via pybind11) to set the next command.
+    // Thread-safe: mutex-protected slot; push() locks and writes,
+    // read() locks and copies.  Safe to call from the Python thread
+    // while read() is called from the simulation thread.
+    void push(const AircraftCommand& command);
+
+private:
+    std::mutex       mutex_;
+    ManualInputFrame frame_;
+};
+
+} // namespace liteaero::simulation
+```
+
+Python usage:
+
+```python
+scripted = ScriptedInput()
+runner.setManualInput(scripted)
+
+# push commands at any point during the run
+scripted.push(AircraftCommand(n_z=2.0, throttle_nd=0.8, ...))
+```
+
+### Pattern 2: Sim Output Echo for Display
+
+When a physical device drives the sim, Python display tools access commands through
+the sim's output, not through the input layer. See
+[Integration with SimRunner](#integration-with-simrunner) for the echo requirement.
+This ensures the display reflects what the sim actually ingested.
+
+### Pattern 3: Standalone Verification Executable
+
+A dedicated C++ executable (`joystick_verify`) constructs `JoystickInput`, runs a
+polling loop, and streams `ManualInputFrame` values to stdout. It requires no aircraft
+model or simulation components. The verification notebook launches it as a subprocess
+and reads the stream for display:
+
+```
+joystick_verify → stdout → Python subprocess.Popen → notebook display
+```
+
+SDL lifecycle, device opening, and event pumping are managed entirely within
+`joystick_verify`. The notebook has no SDL dependency.
+
+**Output formats.** `joystick_verify` supports two output formats, selected by a
+command-line flag:
+
+- **JSON lines** (default) — one JSON object per line; human-readable, easy to parse
+  with `json.loads()`, and the natural format for the notebook display use case.
+- **Protobuf** — length-prefixed binary frames; compact and schema-enforced, suitable
+  for integration with log infrastructure.
+
+Both formats serialize the same `ManualInputFrame` fields using the project's standard
+`serializeJson()` / `serializeProto()` methods.
+
+**Scope.** The initial implementation covers joystick input only. A future app-mode
+tool (separate executable with its own window and keyboard focus) will extend
+verification to `KeyboardInput`.
+
+### Device Enumeration from Python
+
+`JoystickInput::enumerateDevices()` is exposed via the pybind11 binding module,
+allowing Python scenario setup code and notebook configuration cells to list
+available devices before constructing a `JoystickInput` or launching `joystick_verify`.
+
+### No Python Reimplementation
+
+Axis mapping, dead zone, calibration, trim, and command limiting logic live once in
+C++. Python display code receives processed `ManualInputFrame` values and renders
+them. The `AxisMapping` pipeline is never reimplemented in Python.
+
 ---
 
 ## SDL2 Initialization Contract
@@ -721,6 +839,13 @@ sdl/2.28.5
 SDL2 is available in ConanCenter. It is a Conan-managed dependency using the standard
 pattern. On Linux this provides `libSDL2-dev`-equivalent headers and libraries. On
 Windows it provides SDL2.dll and import libs.
+
+**pybind11.** pybind11 is a project-wide dependency used for all Python bindings
+across the codebase, not specific to manual input. It must be declared in
+`conanfile.txt` and the dependency registry ([docs/dependencies/README.md](../dependencies/README.md))
+at the project level before any binding module is built. The manual input binding
+module exposes `ScriptedInput::push()`, `AircraftCommand`, and
+`JoystickInput::enumerateDevices()`.
 
 The CMake integration adds `src/input/KeyboardInput.cpp` and
 `src/input/JoystickInput.cpp` to the `liteaero-sim` library target:
@@ -810,7 +935,7 @@ verifying axis assignments, dead zones, calibration limits, and keyboard binding
 | --- | --- |
 | `PySide6` | Qt window, event loop, `QTimer`, keyboard capture |
 | `matplotlib` (with `FigureCanvasQTAgg`) | All plot rendering, embedded in the Qt window |
-| `pygame` | Joystick enumeration and axis polling (SDL2 wrapper) |
+| `subprocess` (stdlib) | Launch `joystick_verify` and read its stdout stream |
 
 ### Window Layout
 
@@ -889,55 +1014,37 @@ fractional deflection `|value − neutral| / (limit − neutral)`.
 
 ### Input Handling
 
-**Keyboard.** Qt `keyPressEvent` and `keyReleaseEvent` methods maintain a set of
-currently held keys. A `KeyboardState` object integrates the command at each timer
-tick using the same integrating model as `KeyboardInput` (rate × dt). Default key
-bindings mirror `KeyboardInputConfig` defaults. Spacebar centers all axes.
+**Command stream.** The notebook launches `joystick_verify` as a subprocess.
+`joystick_verify` handles SDL initialization, device opening, `JoystickInput::read()`,
+and `KeyboardInput::read()` internally and streams `ManualInputFrame` values to stdout
+as JSON lines. Each timer tick reads the latest available line from the subprocess
+stdout and updates the display.
 
-**Joystick.** pygame is initialized once at startup. The first detected joystick
-(`pygame.joystick.Joystick(0)`) is opened. Each timer tick calls `pygame.event.pump()`
-to flush the SDL event queue, then reads raw axis values via `get_axis()`. An
-`AxisMapping` dataclass (Python equivalent of the C++ struct) applies calibration,
-inversion, and dead zone using the same formulas documented under
-[Dead Zone and Axis Scaling](#dead-zone-and-axis-scaling). If a `JOYDEVICEREMOVED`
-event is detected, the joystick is marked disconnected and all channels revert to
-neutral, allowing keyboard input to take over.
+**Device selection.** `joystick_verify` prints a device enumeration table to stdout
+before the polling loop begins. The notebook setup cell reads and displays this table,
+allowing the user to confirm the correct device or set a `device_name_contains` filter
+before the display window opens.
 
-**Source priority.** When a joystick is connected and returning non-neutral values,
-it is the active source. When the joystick is disconnected or absent at startup,
-keyboard input is the active source. The status bar at the bottom of the window shows
-the current active source ("Joystick" or "Keyboard") and the joystick connection state.
+**Source priority and disconnect handling.** Source priority and disconnect fallback
+are handled inside `joystick_verify` using the same C++ logic as the production path.
+The notebook renders whatever frame the executable streams — it does not implement
+any input logic.
+
+**Status bar.** The status bar at the bottom of the window shows the active source
+and joystick connection state as reported in the `joystick_verify` output stream.
 
 ### Update Loop
 
 A `QTimer` fires at 20 Hz (50 ms period). Each tick:
 
-1. `pygame.event.pump()` — flush SDL event queue.
-2. Check for joystick disconnect; revert to neutral if detected.
-3. Read joystick axes or keyboard state (depending on active source).
-4. Apply axis mapping, dead zone, and command limits.
-5. Redraw both 2D box bugs (update scatter data) and all 4 bar gauges.
-6. `canvas.draw_idle()` — trigger a single matplotlib redraw.
+1. Read all available JSON lines from the `joystick_verify` subprocess stdout
+   (non-blocking). Take the most recent complete frame; discard older frames if
+   multiple arrived since the last tick.
+2. Redraw both 2D box bugs (update scatter data) and all 4 bar gauges.
+3. `canvas.draw_idle()` — trigger a single matplotlib redraw.
 
-The timer is started after the window is shown. It is stopped when the window is
-closed.
-
-### Axis Mapping in Python
-
-Because `pygame.get_axis()` returns a float in [−1, +1] (already normalized by SDL),
-the Python `AxisMapping` dataclass uses `float` for `raw_min` and `raw_max` rather
-than `int16_t`. The calibration formula is otherwise identical to the C++ version:
-
-```python
-mid        = (mapping.raw_min + mapping.raw_max) / 2.0
-half_range = (mapping.raw_max - mapping.raw_min) / 2.0
-r          = (raw - mid) / half_range          # clamp to [-1, +1]
-```
-
-Default `raw_min = −1.0`, `raw_max = 1.0` makes the calibration step a no-op for
-devices that already fill the full pygame range. For a transmitter whose throttle
-channel only spans [−0.6, +0.6] in pygame units, set `raw_min = −0.6`,
-`raw_max = 0.6`.
+The timer is started after `joystick_verify` has printed the device enumeration table
+and the display window is shown. The subprocess is terminated when the window is closed.
 
 ---
 
@@ -945,12 +1052,16 @@ channel only spans [−0.6, +0.6] in pygame units, set `raw_min = −0.6`,
 
 | File | Purpose |
 | --- | --- |
-| `include/input/ManualInput.hpp` | Abstract interface |
+| `include/input/ManualInput.hpp` | Abstract interface, `ManualInputFrame`, `InputAction` |
 | `include/input/KeyboardInput.hpp` | `KeyboardInput` class and `KeyboardInputConfig` struct |
 | `include/input/JoystickInput.hpp` | `JoystickInput` class, `JoystickInputConfig` struct, `AxisMapping` struct |
+| `include/input/ScriptedInput.hpp` | `ScriptedInput` class — Python-pushable `ManualInput` subclass |
 | `src/input/KeyboardInput.cpp` | Implementation |
 | `src/input/JoystickInput.cpp` | Implementation |
+| `src/input/ScriptedInput.cpp` | Implementation |
+| `src/tools/joystick_verify.cpp` | Standalone verification executable — SDL polling loop, JSON lines to stdout |
 | `test/KeyboardInput_test.cpp` | Unit tests (10 tests) |
 | `test/JoystickInput_test.cpp` | Unit tests (15 tests) |
-| `python/manual_input_demo.ipynb` | Verification notebook — live GUI display of command channels |
+| `test/ScriptedInput_test.cpp` | Unit tests |
+| `python/manual_input_demo.ipynb` | Verification notebook — launches `joystick_verify`, displays command channels |
 
