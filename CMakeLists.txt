@@ -25,6 +25,20 @@ add_compile_definitions(_USE_MATH_DEFINES)
 # are not affected by SDL2main's WinMain redirect.
 add_compile_definitions(SDL_MAIN_HANDLED)
 
+# On MinGW, link the GCC and C++ runtimes statically so executables do not depend
+# on libgcc_s_seh-1.dll or libstdc++-6.dll being on PATH at runtime.
+# winpthread is also linked statically (-Wl,-Bstatic,-lwinpthread,-Bdynamic) so
+# nanosleep64 and other symbols introduced in newer winpthread versions are
+# embedded in each binary rather than resolved from whatever libwinpthread-1.dll
+# Windows finds on PATH.
+if(MINGW)
+    add_link_options(
+        -static-libgcc
+        -static-libstdc++
+        -Wl,-Bstatic,-lwinpthread,-Bdynamic
+    )
+endif()
+
 # Enable CTest at the project root so all subdirectories are registered
 enable_testing()
 

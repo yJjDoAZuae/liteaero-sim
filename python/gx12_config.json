@@ -1,0 +1,38 @@
+{
+    "device_name_contains": "GX12",
+
+    "dead_zone_nd": 0.05,
+
+    "nz_axis": {
+        "sdl_axis_index": 1,
+        "center_output": 1.0,
+        "scale": 3.0,
+        "inverted": true
+    },
+    "ny_axis": {
+        "sdl_axis_index": 3,
+        "center_output": 0.0,
+        "scale": 1.0,
+        "inverted": false
+    },
+    "roll_axis": {
+        "sdl_axis_index": 0,
+        "center_output": 0.0,
+        "scale": 1.5708,
+        "inverted": false
+    },
+    "throttle_axis": {
+        "sdl_axis_index": 2,
+        "center_output": 0.5,
+        "scale": 0.5,
+        "inverted": false
+    },
+
+    "min_throttle_nd": 0.0,
+    "idle_throttle_nd": 0.05,
+
+    "min_nz_g": -2.0,
+    "max_nz_g": 4.0,
+    "max_ny_g": 2.0,
+    "max_roll_rate_rad_s": 1.5708
+}
