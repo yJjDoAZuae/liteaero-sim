@@ -914,32 +914,152 @@ raw SDL axis to `AircraftCommand` has correct sign and scale for the reference d
 
 ---
 
-## Verification Notebook — `manual_input_demo.ipynb`
+## Manual Input Monitor
 
-The verification notebook provides a live GUI display of the current `AircraftCommand`
-values without involving any aircraft simulation. It serves as a stand-alone tool for
-verifying axis assignments, dead zones, calibration limits, and keyboard bindings.
+The manual input monitor provides a live display of the current `AircraftCommand`
+values without involving any aircraft simulation. It is the primary tool for verifying
+axis assignments, dead zones, calibration limits, and keyboard bindings.
+
+Two forms are provided, both backed by the same library module:
+
+| Form | File | Launch |
+| --- | --- | --- |
+| Standalone app | `python/tools/manual_input_monitor.py` | `python tools/manual_input_monitor.py` |
+| Verification notebook | `python/manual_input_demo.ipynb` | JupyterLab cell |
 
 ### Purpose and Scope
 
 - Enumerate attached joystick devices and their axis counts.
-- Display the four command channels (`n_z`, `n_y`, `rollRate`, `throttle`) in real time.
-- Accept input from the keyboard (via Qt events) and from the first attached joystick
-  (via pygame / SDL2). Keyboard input takes over automatically if the joystick is
-  disconnected.
+- Display the four command channels (`n_z`, `n_y`, `roll_rate`, `throttle`) in real time.
 - No `Aircraft` object, no simulation loop, no domain physics. Input only.
+- All input logic (SDL initialization, axis pipeline, dead zone, calibration, keyboard
+  fallback) runs in C++ inside `joystick_verify`. The monitor renders whatever frames
+  the executable streams — it does not implement any input logic.
 
-### Python Dependencies
+---
+
+### Shared Library — `tools/manual_input_monitor.py`
+
+`manual_input_monitor.py` is both a standalone entry point (`__main__`) and an
+importable library. All display logic lives here; neither the Qt app nor the notebook
+duplicates it.
+
+#### `InputMonitorConfig`
+
+A dataclass holding all configurable parameters:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `joystick_verify` | `Path` | `../build/tools/joystick_verify.exe` | Path to the C++ executable |
+| `device_name` | `str` | `""` | Substring match for device name; empty means use `device_index` |
+| `device_index` | `int` | `0` | Device index (used when `device_name` is empty) |
+| `config_file` | `str` | `""` | Optional JSON config path passed to `joystick_verify` |
+| `rate_hz` | `float` | `50.0` | Polling rate in Hz |
+| `idle_throttle_nd` | `float` | `0.05` | Throttle neutral position |
+| `min_nz_g` | `float` | `−2.0` | n_z display minimum |
+| `max_nz_g` | `float` | `4.0` | n_z display maximum |
+| `max_ny_g` | `float` | `2.0` | n_y display maximum (symmetric) |
+| `max_roll_rate_rad_s` | `float` | `π/2` | Roll rate display maximum |
+
+#### `enumerate_devices(config) → list[dict]`
+
+Launches `joystick_verify` briefly, reads the DEVICE lines before the READY sentinel,
+terminates the process, and returns a list of `{"index": int, "axes": int, "name": str}`
+dicts. Used by both the standalone app and the notebook device-enumeration cell.
+
+#### `build_args(config) → list[str]`
+
+Constructs the `joystick_verify` command-line argument list from an `InputMonitorConfig`.
+
+#### `stdout_reader(proc, q, ready) → None`
+
+Background daemon thread target. Reads lines from `proc.stdout`, sets `ready` on the
+READY sentinel, and puts all subsequent JSON-frame lines into queue `q`.
+
+#### `draw_gauge(ax, value, v_min, v_max, v_neutral, label, unit) → None`
+
+Draws one horizontal bar gauge on `ax`. The bar extends from `v_neutral` to `value`.
+Color transitions from blue (deflection < 25 %) → orange (25–75 %) → red (> 75 %).
+
+#### `InputMonitorFigure`
+
+Pure-matplotlib display class. Has no dependency on Qt or ipympl. Owns the
+`matplotlib.figure.Figure`, the six subplot axes, and the two scatter artists.
+
+| Method | Description |
+| --- | --- |
+| `__init__(config)` | Creates the figure and axes; initializes the two 2D box plots. |
+| `redraw(frame)` | Updates scatter positions and redraws all four gauges from a frame dict. |
+| `figure` | Property — the underlying `Figure` object. |
+
+`redraw()` calls `canvas.draw_idle()` if a canvas is attached; callers that manage their
+own event loop (Qt, ipympl) may call it without additional coordination.
+
+---
+
+### Standalone App
+
+`InputMonitorWindow` is a `QMainWindow` that wraps `InputMonitorFigure` using
+`FigureCanvasQTAgg`. It owns the `joystick_verify` subprocess and the background reader
+thread. A `QTimer` fires at 20 Hz to drain the frame queue and call
+`InputMonitorFigure.redraw()`. The subprocess is terminated in `closeEvent`.
+
+`main()` uses `argparse` to expose all `InputMonitorConfig` fields as command-line
+flags. Default values come from `InputMonitorConfig` field defaults.
+
+**Launch:**
+
+```bash
+python tools/manual_input_monitor.py
+python tools/manual_input_monitor.py --device-name "Logitech"
+python tools/manual_input_monitor.py --device-index 1 --rate-hz 100
+python tools/manual_input_monitor.py --config path/to/joystick_config.json
+```
+
+#### Python Dependencies — Standalone App
 
 | Library | Role |
 | --- | --- |
-| `PySide6` | Qt window, event loop, `QTimer`, keyboard capture |
-| `matplotlib` (with `FigureCanvasQTAgg`) | All plot rendering, embedded in the Qt window |
-| `subprocess` (stdlib) | Launch `joystick_verify` and read its stdout stream |
+| `PySide6` | Qt window, event loop, `QTimer` |
+| `matplotlib` (with `FigureCanvasQTAgg`) | All plot rendering, embedded in Qt window |
+| `subprocess`, `threading`, `queue` (stdlib) | Subprocess management and frame reader thread |
 
-### Window Layout
+---
 
-The window contains two rows of matplotlib axes:
+### Verification Notebook — `manual_input_demo.ipynb`
+
+The notebook imports `InputMonitorConfig`, `enumerate_devices`, `build_args`,
+`stdout_reader`, and `InputMonitorFigure` from `tools.manual_input_monitor`. No display
+logic is implemented in the notebook itself.
+
+**Structure:**
+
+1. **Imports cell** — standard library imports plus `from tools.manual_input_monitor import ...`
+2. **Configuration cell** — construct `InputMonitorConfig`; edit before running.
+3. **Device enumeration cell** — calls `enumerate_devices(config)` and prints the device
+   table. Adjust `config.device_name` or `config.device_index` before opening the display.
+4. **Display cell** — runs the live monitor inline in the cell output.
+
+The display cell uses the `widget` matplotlib backend (`%matplotlib widget`, provided by
+`ipympl`) so the figure renders as an interactive widget inside the cell output area.
+A `FuncAnimation` at 20 Hz (50 ms interval, `blit=False`) calls `InputMonitorFigure.redraw()`
+on each tick after draining the frame queue. A background daemon thread runs
+`stdout_reader`. The `joystick_verify` subprocess is started when the animation begins
+and terminated when the cell is interrupted or the kernel is stopped.
+
+#### Python Dependencies — Notebook
+
+| Library | Role |
+| --- | --- |
+| `ipympl` | `%matplotlib widget` backend — renders figures inline as Jupyter widgets |
+| `matplotlib` | Plot rendering via `InputMonitorFigure` |
+| `subprocess`, `threading`, `queue` (stdlib) | Subprocess and frame reader (via library) |
+
+---
+
+### Display Layout
+
+Both forms use the same layout, implemented in `InputMonitorFigure`:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -954,17 +1074,15 @@ The window contains two rows of matplotlib axes:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Row 1 uses two equal-width subplot axes (`subplot(2, 2, 1)` and `subplot(2, 2, 2)`).
-Row 2 uses four equal-width subplot axes arranged side by side (`subplot(2, 4, 5–8)`,
-or equivalently a `GridSpec` with two rows of different column counts). The aspect
-ratio of the row-2 gauges is unconstrained (wide, short).
+`GridSpec(2, 4)`: row 1 uses columns 0–1 and 2–3 (each spanning two columns); row 2
+uses four individual columns. The aspect ratio of the row-2 gauges is unconstrained.
 
 ### Left 2D Box — Throttle / n_y
 
 | Property | Value |
 | --- | --- |
 | Title | "Throttle / n_y" |
-| X axis | n_y (lateral load factor), range [−2, +2] g, positive **right** |
+| X axis | n_y (lateral load factor), range [−`max_ny_g`, +`max_ny_g`] g, positive **right** |
 | Y axis | Throttle, range [0, 1], positive **up** (standard matplotlib direction) |
 | X crosshair | Vertical line at x = 0 (n_y neutral) |
 | Y crosshair | Horizontal line at y = `idle_throttle_nd` (throttle neutral, default 0.05) |
@@ -980,71 +1098,58 @@ throttle increases are conventionally displayed as moving the lever forward/up.
 | --- | --- |
 | Title | "n_z / Roll Rate" |
 | X axis | Roll rate, range [−90, +90] °/s, positive **right** |
-| Y axis | n_z (normal load factor), range [−2, +4] g, positive **down** |
+| Y axis | n_z (normal load factor), range [`min_nz_g`, `max_nz_g`] g, positive **down** |
 | X crosshair | Vertical line at x = 0 (roll rate neutral) |
 | Y crosshair | Horizontal line at y = 1.0 g (n_z neutral, straight-and-level) |
 | Bug | Single scatter dot at `(roll_rate_current_deg_s, nz_current)` |
 | Bug at neutral | Dot plots at center: (0, 1 g) |
 
 "Positive down" means the matplotlib Y axis is **inverted** (`ax.invert_yaxis()`).
-With inversion, increasing n_z moves the bug downward on screen, which matches the
-pilot's intuitive feel: pulling back (increasing load factor) moves the feel-point
-downward. The Y limits are set as `ax.set_ylim(-2, 4)` **before** inversion so that
-−2 g appears at the bottom and 4 g at the top of the inverted axis.
-
-The crosshair at y = 1 g falls at the vertical midpoint when the configured
-`max_nz_g = 4` and `min_nz_g = −2` (range of 6 g, neutral at 1 g ≈ midpoint at
-(1 − (−2)) / (4 − (−2)) = 0.5).
+The Y limits are set as `ax.set_ylim(min_nz_g, max_nz_g)` **before** inversion so that
+`min_nz_g` appears at the bottom and `max_nz_g` at the top of the inverted axis.
 
 ### Horizontal Bar Gauges (Row 2)
 
-Four gauges, one per command channel. Each gauge is a horizontal bar chart on its own
-subplot axis:
-
 | Gauge | Range | Neutral mark | Units displayed |
 | --- | --- | --- | --- |
-| n_z | [−2, +4] g | 1.0 g | g |
-| n_y | [−2, +2] g | 0.0 g | g |
+| n_z | [`min_nz_g`, `max_nz_g`] g | 1.0 g | g |
+| n_y | [−`max_ny_g`, +`max_ny_g`] g | 0.0 g | g |
 | Roll rate | [−90, +90] °/s | 0.0 °/s | °/s |
-| Throttle | [0, 100] % | 5 % (idle) | % |
+| Throttle | [0, 100] % | `idle_throttle_nd` × 100 % | % |
 
-The bar is drawn from the neutral mark to the current value. Bar color transitions from
-blue (near neutral) to orange (moderate deflection) to red (near limit), using the
-fractional deflection `|value − neutral| / (limit − neutral)`.
+The bar extends from the neutral mark to the current value. Color transitions from
+blue (deflection < 25 %) → orange (25–75 %) → red (> 75 %), where deflection is
+`|value − neutral| / (half_span)`.
 
 ### Input Handling
 
-**Command stream.** The notebook launches `joystick_verify` as a subprocess.
 `joystick_verify` handles SDL initialization, device opening, `JoystickInput::read()`,
 and `KeyboardInput::read()` internally and streams `ManualInputFrame` values to stdout
-as JSON lines. Each timer tick reads the latest available line from the subprocess
-stdout and updates the display.
+as JSON lines. The monitor renders whatever frames the executable streams — it does not
+implement any input logic.
 
-**Device selection.** `joystick_verify` prints a device enumeration table to stdout
-before the polling loop begins. The notebook setup cell reads and displays this table,
-allowing the user to confirm the correct device or set a `device_name_contains` filter
-before the display window opens.
+`joystick_verify` prints a DEVICE line per detected device followed by a READY sentinel
+before beginning the polling loop. `enumerate_devices()` reads the DEVICE lines;
+`stdout_reader()` sets the ready event on READY and enqueues all subsequent JSON lines.
 
-**Source priority and disconnect handling.** Source priority and disconnect fallback
-are handled inside `joystick_verify` using the same C++ logic as the production path.
-The notebook renders whatever frame the executable streams — it does not implement
-any input logic.
-
-**Status bar.** The status bar at the bottom of the window shows the active source
-and joystick connection state as reported in the `joystick_verify` output stream.
+Source priority and disconnect fallback are handled inside `joystick_verify` using the
+same C++ logic as the production path.
 
 ### Update Loop
 
-A `QTimer` fires at 20 Hz (50 ms period). Each tick:
+Both forms run at 20 Hz (50 ms period). Each tick:
 
-1. Read all available JSON lines from the `joystick_verify` subprocess stdout
-   (non-blocking). Take the most recent complete frame; discard older frames if
-   multiple arrived since the last tick.
-2. Redraw both 2D box bugs (update scatter data) and all 4 bar gauges.
-3. `canvas.draw_idle()` — trigger a single matplotlib redraw.
+1. Drain all available JSON lines from the frame queue (non-blocking). Take the most
+   recent complete frame; discard older frames if multiple arrived since the last tick.
+2. Call `InputMonitorFigure.redraw(frame)` — updates scatter positions and redraws all
+   four gauges.
+3. `canvas.draw_idle()` triggers a single matplotlib redraw.
 
-The timer is started after `joystick_verify` has printed the device enumeration table
-and the display window is shown. The subprocess is terminated when the window is closed.
+**Standalone app:** driven by `QTimer(50 ms)` inside `InputMonitorWindow`.
+
+**Notebook:** driven by `FuncAnimation(fig, func, interval=50, blit=False)`. The
+animation object must be assigned to a variable in the cell to prevent garbage
+collection from stopping the animation.
 
 ---
 
@@ -1059,11 +1164,12 @@ and the display window is shown. The subprocess is terminated when the window is
 | `src/input/KeyboardInput.cpp` | Implementation |
 | `src/input/JoystickInput.cpp` | Implementation |
 | `src/input/ScriptedInput.cpp` | Implementation |
-| `tools/joystick_verify.cpp` | Standalone verification executable — SDL polling loop, JSON lines to stdout |
+| `tools/joystick_verify.cpp` | Standalone verification executable — SDL polling loop, JSON lines + `--proto` output; DEVICE/READY protocol |
 | `test/KeyboardInput_test.cpp` | Unit tests (10 tests) |
 | `test/JoystickInput_test.cpp` | Unit tests (15 tests) |
 | `test/ScriptedInput_test.cpp` | Unit tests |
-| `python/manual_input_demo.ipynb` | Verification notebook — launches `joystick_verify`, displays command channels |
+| `python/tools/manual_input_monitor.py` | Shared library (`InputMonitorConfig`, `enumerate_devices`, `build_args`, `stdout_reader`, `draw_gauge`, `InputMonitorFigure`) + standalone Qt app (`InputMonitorWindow`, `main()`) |
+| `python/manual_input_demo.ipynb` | Verification notebook — imports library, displays command channels inline via ipympl |
 
 ---
 

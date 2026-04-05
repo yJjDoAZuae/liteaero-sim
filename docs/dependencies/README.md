@@ -43,6 +43,8 @@ Declared in `python/pyproject.toml`. Python version pinned in `python/.python-ve
 | earthaccess | MIT | NASA EarthData download |
 | pyvista | MIT | 3D visualization |
 | ipywidgets | BSD-3-Clause | Jupyter widget support |
+| ipympl | BSD-3-Clause | `%matplotlib widget` backend — interactive matplotlib figures in Jupyter cells |
+| pyside6 | LGPL-3.0 | Qt window, event loop, `QTimer` — standalone GUI apps only; dynamically linked |
 | pytest | MIT | Unit testing |
 | pytest-cov | MIT | Coverage reporting |
 | mypy | MIT | Static type checking |

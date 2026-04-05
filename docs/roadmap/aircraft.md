@@ -94,7 +94,8 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `ScriptedInput` | `include/input/ScriptedInput.hpp` | ✅ Implemented — mutex-protected command slot; `push()` callable from Python via pybind11 |
 | `joystick_verify` | `tools/joystick_verify.cpp` | ✅ Implemented — SDL polling loop; JSON lines + `--proto` output; DEVICE/READY protocol |
 | `liteaero_sim_py` | `src/python/` | ✅ Implemented — pybind11 module; `AircraftCommand`, `ScriptedInput`, `JoystickInput.enumerate_devices()` |
-| `manual_input_demo.ipynb` | `python/manual_input_demo.ipynb` | ✅ Implemented — subprocess-based verification notebook; PySide6 + matplotlib display |
+| `manual_input_monitor.py` | `python/tools/manual_input_monitor.py` | 🔲 Planned — shared library + standalone Qt app; `InputMonitorConfig`, `InputMonitorFigure`, `InputMonitorWindow`, `main()` |
+| `manual_input_demo.ipynb` | `python/manual_input_demo.ipynb` | 🔲 Planned — thin notebook importing library; ipympl inline display |
 | `AnomalyDetector` | `python/tools/anomaly.py` | 🔲 Planned |
 | `BehaviorVerifier` | `python/tools/behavior_verifier.py` | 🔲 Planned |
 | `DataOverlay` | `python/tools/data_overlay.py` | 🔲 Planned |
