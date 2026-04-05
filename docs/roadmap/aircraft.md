@@ -143,6 +143,143 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 
 ---
 
+## SB-1. Aircraft and SimRunner — Python Bindings
+
+**Blocking dependencies:** None. `Aircraft`, `SimRunner`, and the `liteaero_sim_py`
+pybind11 module infrastructure (introduced by MI-1) are all implemented.
+
+Extend `src/python/bindings.cpp` and add `src/python/bind_aircraft.cpp` and
+`src/python/bind_runner.cpp` to expose the simulation core to Python. The
+`liteaero_sim_py` module is the only public Python interface — no Python re-implementation
+of C++ logic is added. Design authority:
+[`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) — update the
+Aircraft and SimRunner section before beginning implementation.
+
+### Scope — Aircraft and SimRunner Bindings
+
+| C++ type / function | Python exposure | Purpose |
+| --- | --- | --- |
+| `KinematicState` | Read-only class: `position_m`, `velocity_m_s`, `heading_rad`, `pitch_rad`, `roll_rad`, `alpha_rad`, `beta_rad`, `airspeed_m_s` | Inspect simulation state from Python scenario scripts and notebooks |
+| `AircraftConfig` | Load from JSON string or file path | Configure `Aircraft` from Python |
+| `Aircraft::initialize(config)` | Instance method | Construct and configure the simulation plant from Python |
+| `Aircraft::reset()` | Instance method | Reset to initial conditions |
+| `Aircraft::step(cmd, dt_s)` | Instance method | Advance simulation by one timestep |
+| `Aircraft::state()` | Instance method returning `KinematicState` | Read current kinematic state |
+| `RunnerConfig` | Class with `dt_s`, `duration_s`, `time_scale`, `mode` fields | Configure `SimRunner` from Python |
+| `SimRunner::initialize(aircraft, input, config)` | Instance method | Wire aircraft, input source, and config |
+| `SimRunner::start()` / `stop()` / `is_running()` | Instance methods | Start and stop RealTime or ScaledRealTime runs |
+| `SimRunner::elapsed_sim_time_s()` | Instance method | Query simulation clock |
+
+### Tests — Aircraft and SimRunner Bindings
+
+`python/test/test_aircraft_bindings.py` — import, initialize, step, state accessor, reset.
+`python/test/test_runner_bindings.py` — initialize, start/stop, elapsed time, is_running.
+
+---
+
+## SB-2. SimRunner Live Ring Buffer (DR-5 / DR-6)
+
+**Blocking dependencies:** SB-1 (bindings infrastructure). Design decisions recorded in
+[`docs/architecture/post_processing.md`](../architecture/post_processing.md) §DR-5 and
+§DR-6.
+
+Design and implement the C++ ring buffer and channel registry, then expose the subscriber
+API to Python via pybind11. This is the live data feed that enables `LiveSimView` (LS-1)
+and `LiveTimeHistoryFigure` (PP-3) to consume real-time simulation output.
+
+### Deliverables — Ring Buffer Design Document
+
+Produce `docs/architecture/ring_buffer.md` as the first deliverable, covering:
+
+- `ChannelRegistry` — producer-driven channel registration (PP-F34); channel name, type,
+  and subscriber count; channels registered by `SimRunner` at initialization and when
+  subsystems start.
+- `SimBuffer<T>` — per-channel ring buffer; storage allocated when a subscriber attaches;
+  released when the last subscriber detaches (PP-F34, PP-F36).
+- `ChannelSubscriber` — RAII subscription token; drain API returns batches of
+  `(timestamp_s, value)` pairs since the last drain; late-join subscribers start with an
+  empty buffer (PP-F37).
+- `SimRunner` integration — `SimRunner` owns the `ChannelRegistry` and all `SimBuffer`
+  instances; writes to each channel's buffer in the simulation step loop.
+- Threading contract — `SimRunner` writes from the simulation thread; subscribers drain
+  from arbitrary threads; must be lock-free or fine-grained per channel.
+- pybind11 binding — `ChannelRegistry`, `ChannelSubscriber`, and drain method exposed via
+  `src/python/bind_ring_buffer.cpp`.
+- All open questions resolved before implementation begins.
+
+### Tests — Ring Buffer
+
+C++: `test/RingBuffer_test.cpp` — register, subscribe, write, drain, late-join,
+multi-subscriber, deallocation on last unsubscribe.
+
+Python: `python/test/test_ring_buffer_bindings.py` — subscribe, drain, no-backfill on
+late join.
+
+---
+
+## LS-1. Live Simulation Viewer
+
+**Blocking dependencies:** SB-1 (Aircraft and SimRunner Python bindings), SB-2 (ring
+buffer), PP-2 (delivered — `TrajectoryView` with trailing camera, ribbon, terrain, and HUD
+infrastructure), MI-1 (delivered — `JoystickInput`, `ScriptedInput`, `AircraftCommand`).
+
+Implements the minimum viable product live simulation: a 3D window displaying terrain,
+aircraft model, ribbon trail, and shadows, driven by the FBW joystick or scripted input
+channel, launchable from CLI or notebook. This is the first item where the full loop
+closes: C++ `SimRunner` drives `Aircraft` step-by-step in `RealTime` mode; the ring buffer
+delivers kinematic state to Python; `LiveSimView` renders it in real time; `JoystickInput`
+or `ScriptedInput` delivers commands at the FBW interface.
+
+### Deliverables — Live Simulation Viewer Design Document
+
+Produce `docs/architecture/live_sim_view.md` as the first deliverable, covering:
+
+- Class design: `LiveSimView` built on `TrajectoryView`'s rendering infrastructure;
+  `SimSession` wiring the run loop (`Aircraft`, `SimRunner`, input source, ring buffer
+  subscription); `LiveInputBridge` connecting `JoystickInput` / `ScriptedInput` commands
+  to `SimRunner::setManualInput()`.
+- Aircraft mesh asset: low-poly glTF mesh (< 500 triangles) stored in
+  `python/assets/aircraft_lp.glTF`. UV-mapped for solid diffuse color; no texture required
+  for MVP.
+- Shadow rendering: approach (shadow projection plane or Vispy shadow pass) decided and
+  documented.
+- Camera mode: `CameraMode.TRAIL` (trailing camera, PP-F30) as the default for live
+  simulation; other modes selectable at runtime.
+- Launch modes: standalone CLI (`python/tools/live_sim.py`) and notebook
+  (`python/live_sim_demo.ipynb`).
+- Threading model: `SimRunner` in `RealTime` mode on a background thread; ring buffer
+  drain on the Vispy render timer.
+- All open questions resolved before implementation begins.
+
+### Scope — Live Simulation Viewer
+
+- **`LiveSimView`** — `QMainWindow` wrapping a Vispy `SceneCanvas`; extends
+  `TrajectoryView` rendering to consume ring buffer frames instead of a log file; trailing
+  camera tracks the most recent kinematic state; ribbon trail updates live using existing
+  `RibbonTrail` infrastructure.
+- **Aircraft mesh** — low-poly glTF asset (`aircraft_lp.glTF`); loaded at startup via
+  `pygltflib`; rendered as a `MeshVisual` at the current aircraft position and attitude.
+- **Shadow** — simple shadow projection beneath the aircraft mesh.
+- **`SimSession`** — Python class: constructs `Aircraft` and `SimRunner` via SB-1
+  bindings, sets the manual input source, starts `SimRunner` in `RealTime` mode, exposes
+  the ring buffer subscription for `LiveSimView` to poll.
+- **CLI launcher** (`python/tools/live_sim.py`) — argparse; accepts
+  `--config <aircraft_config.json>`, `--terrain <path>`, `--joystick` / `--scripted`.
+- **Notebook** (`python/live_sim_demo.ipynb`) — thin notebook importing `SimSession` and
+  `LiveSimView`; renders in a Qt window (not inline) to avoid Vispy / ipympl widget
+  conflicts.
+- **LandingGear terrain interaction** — wired through item 7 (LandingGear Python
+  bindings); once item 7 is delivered, `SimSession` enables gear contact by injecting the
+  terrain into `Aircraft`. LS-1 does not block on item 7 — the simulation runs without
+  gear contact until item 7 is complete.
+
+### Tests — Live Simulation Viewer
+
+`python/test/test_live_sim_view.py` — headless offscreen canvas smoke test; `SimSession`
+initialize, start, stop; ring buffer drain integration; CLI argument parsing.
+
+---
+
 ## 1. Sensor Models — Implementable Subset
 
 **Blocking dependencies:** None. `KinematicState` and `V_Terrain` are implemented.
@@ -167,7 +304,7 @@ listed; `SensorLaserAlt` and `SensorRadAlt` outputs are required by the `Anomaly
 
 ## 2. Logged Channel Registry — Design
 
-**Blocking dependencies:** SimRunner (delivered), LandingGear C++ (delivered), item 2
+**Blocking dependencies:** SimRunner (delivered), LandingGear C++ (delivered), item 1
 (sensor models subset). The registry must reflect the complete channel set produced by the
 simulation loop, including gear contact channels and sensor channels.
 
@@ -420,3 +557,139 @@ The correct name is `Terrain`. This rename touches liteaero-flight (the abstract
 State table, delivered item 14, item LG-1 description, items 2 and 11 of this roadmap,
 and all sensor design documents that reference the interface by name once the rename is
 complete.
+
+---
+
+## Log-1. Logging Subsystem — Architecture Design
+
+**Blocking dependencies:** None. Resolves OQ-SR-3 in
+[`docs/architecture/sim_runner.md`](../architecture/sim_runner.md).
+
+Produces a formal design document specifying how all per-tick outputs from `SimRunner` are
+delivered to log consumers. The mechanism must handle kinematic state, air data, manual
+input frames, landing gear contact forces, and sensor outputs uniformly — partial solutions
+scoped to a single output type are explicitly prohibited by OQ-SR-3. This item is a
+prerequisite before any `Logger`-wired `SimRunner` can be implemented and before
+`AnomalyDetector` channel names can be finalized (item 6).
+
+### Deliverables — Logging Subsystem Architecture
+
+Design document (`docs/architecture/logging_subsystem.md`) specifying:
+
+- Delivery mechanism: push vs. pull; callback registration vs. ring buffer drain;
+  relationship to SB-2 (ring buffer) and the existing `Logger` / `LogSource`
+  infrastructure (delivered item 8).
+- All per-tick outputs that must be logged: `KinematicStateSnapshot`,
+  `EnvironmentState`, `AircraftState`, `ManualInputFrame`, `ContactForcesState`, and
+  sensor output structs.
+- Sampling policy: whether all channels share the `SimRunner` timestep or whether
+  decimation is applied per source.
+- Thread-safety contract: `SimRunner` writes from the simulation thread; consumers read
+  from arbitrary threads.
+- Integration with the Logged Channel Registry (item 2): how `Logger`-registered sources
+  map to registry channel names and how that naming vocabulary is kept consistent with the
+  SB-2 ring buffer channel names (see `post_processing.md` §DR-9).
+
+---
+
+## PP-3. LiveTimeHistoryFigure
+
+**Blocking dependencies:** SB-2 (ring buffer — live data source), Log-1 (logging
+subsystem design — channel names must be finalized before panel definitions can reference
+them). Design authority:
+[`docs/architecture/post_processing.md`](../architecture/post_processing.md)
+§`LiveTimeHistoryFigure` and §PP-F19–PP-F22.
+
+Implement `LiveTimeHistoryFigure`: a Panel + Plotly rolling time-history display that
+polls the ring buffer (SB-2) and renders the same panel layout as `TimeHistoryFigure` with
+a rolling time window anchored at the live edge (PP-F19–PP-F22). Panel definitions use the
+same arguments as `TimeHistoryFigure.add_panel` so that a single panel specification works
+for both live and post-processing views without modification (PP-F20). Includes user
+controls for time axis scroll/zoom and per-panel y-axis reset (PP-F21–PP-F22).
+
+### Tests — LiveTimeHistoryFigure
+
+`python/test/test_live_time_history.py` — subscribe, buffer drain, rolling window update,
+panel layout consistency with `TimeHistoryFigure`.
+
+---
+
+## PP-4. TrajectoryView Mode Segment Coloring
+
+**Blocking dependencies:** Item 2 (Logged Channel Registry — concrete mode channel name
+required); PP-2 (delivered). Design authority:
+[`docs/architecture/post_processing.md`](../architecture/post_processing.md) §Mode
+segment coloring.
+
+Extend `RibbonTrail` and `TrajectoryView` to color each trajectory segment according to
+the flight mode active at that timestep, using colors from the `tab10` palette with a
+legend. The mode channel name is taken from the Logged Channel Registry (item 2) so that
+the channel vocabulary is consistent with the ring buffer (DR-5/DR-6).
+
+### Tests — Mode Segment Coloring
+
+New tests in `test_ribbon_trail.py` — per-mode color assignment, legend entries, palette
+consistency with `tab10`.
+
+---
+
+## LG-2. Runway Geometry Extension (OQ-LG-3)
+
+**Blocking dependencies:** LG-1 (delivered). Design authority:
+[`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) §OQ-LG-3.
+
+Resolve and implement the runway geometry extension deferred at OQ-LG-3: a planar runway
+patch inset into `TerrainMesh`, or an analytical runway primitive added to `V_Terrain`,
+to support accurate runway contact geometry for takeoff and landing scenario tests.
+Resolution of the open question (planar inset vs. analytical primitive) is the first
+deliverable and must be documented in `landing_gear.md` before implementation begins.
+
+### Deliverables — Runway Geometry Extension
+
+- Resolve OQ-LG-3: document the decision in `landing_gear.md`.
+- Implement the chosen approach.
+- Implement the `takeoff_roll.ipynb` and `crab_landing_dynamics.ipynb` scenario tests
+  specified in `landing_gear.md` that require accurate runway surface geometry.
+
+---
+
+## Arch-1. `liteaero::` Namespace Migration
+
+**Blocking dependencies:** None — all target namespaces are already final. Design
+authority: [`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md)
+§Namespace adoption timing.
+
+Single-step migration of all LiteAero Sim code to the `liteaero::simulation` namespace;
+infrastructure types to `liteaero::control`, `liteaero::terrain`, and `liteaero::log` in
+liteaero-flight. Coordinated with the liteaero-flight repo split milestone. Per the
+architecture decision, this migration is executed as a single coordinated event — not
+incrementally — to avoid a prolonged half-migrated codebase.
+
+**Scope:** All public headers in `include/`; all implementation files in `src/`; all test
+files in `test/`. Proto field names are unaffected (proto field names are snake_case
+strings, not C++ identifiers). Update all documentation that references the old namespace
+form. This is a cross-repository item (liteaero-flight + liteaero-sim).
+
+---
+
+## Cfg-1. ParametricAircraftConfig — Proposed
+
+**Blocking dependencies:** Item 4 (Aerodynamic Coefficient Design Study) must be complete
+before this item can be scoped. Design authority:
+[`docs/architecture/aero_coeff_estimator.md`](../architecture/aero_coeff_estimator.md)
+§ParametricAircraftConfig.
+
+Design and implement `ParametricAircraftConfig` (Python dataclass) and
+`VspGeometryBuilder` for OpenVSP-driven geometry parameterization. Enables DOE coefficient
+sweeps (Latin Hypercube, 500–2000 samples) using `AeroCoeffEstimator`. Not in scope for
+the current design study — a dedicated design item precedes implementation.
+
+---
+
+## Path-1. PathSegmentTrochoid — Proposed
+
+**Blocking dependencies:** Design item needed before this item can be scoped.
+`PathSegmentTrochoid` is proposed in
+[`docs/architecture/overview.md`](../architecture/overview.md) as a planned path segment
+type. A design document specifying the interface, parameterization, and integration with
+the trajectory representation is required before implementation can begin.
