@@ -140,51 +140,8 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | PP-D | **Post-processing tools design — full architecture and decision records** — resolved all 28 design questions across both visualization and analysis layers; selections: Vispy (OpenGL, DR-8) for 3D rendering; PySide6 Qt window (DR-7) for playback and camera controls; Panel + Plotly (DR-10) for live time history; pre-generated glTF terrain via `pygltflib` (DR-11); offline terrain ingestion pipeline (DR-12); `terrain_paths.py` shared path module with `data/terrain/<dataset>/source/` + `derived/` repository structure (DR-13); per-field MCAP topic convention `"source/field_name"` (DR-9); `FlightLogReader` stateful API (DR-1); `ModeEventSeries` constructor name-map (DR-2); `TimeHistoryFigure.figure()` accessor (DR-3); ring buffer polling via pybind11 (DR-5, DR-6); camera modes FPV/Trailing/God's-eye/Local-top defined (PP-F28–PP-F32); terrain saturation runtime API (DR-13 area); document restructured from open-question tracking format to settled architecture with Decision Records appendix | [`docs/architecture/post_processing.md`](../architecture/post_processing.md) |
 | PP-2 | **Post-processing visualization rework** (Tasks A–G, TDD) — `FlightLogReader`: per-field MCAP topic parsing (`"source/field_name"`), CSV `source_name` column, stateful `frames()` getter, `channel_names()` raises before load (DR-1, DR-9); `ModeEventSeries`: initial value emitted as first event, `name_map` moved to constructor (DR-2); `TimeHistoryFigure`: `figure()` public accessor with caching, `_build()` internal (DR-3); `RibbonTrail`: `wing_span_m` parameter, CCW quad winding, time-based α fade via `alpha_at()`, Vispy `MeshVisual` from `mesh()` (DR-8); `HudOverlay`: Vispy `Text` visuals in 2D overlay view, α-fading mode-change banner (DR-7, DR-8); `TrajectoryView`: `CameraMode` enum (FPV/TRAIL/GODS_EYE/LOCAL_TOP), Vispy `SceneCanvas` embedded in `QMainWindow`, `load_terrain()` via `pygltflib`, `set_terrain_saturation()`, headless `animate()` returns canvas (DR-7 through DR-13); `terrain_paths.py`: `get_terrain_data_root()`, `dataset_dir()`, `source_dir()`, `derived_dir()`, `las_terrain_dir()`, `gltf_path()`, `metadata_path()`; `vispy>=0.14`, `pyside6>=6.6`, `pygltflib`, `mcap-protobuf-support>=0.5` added to `pyproject.toml` | `test_log_reader.py` — 9 tests; `test_mode_events.py` — 6 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 9 tests; `test_terrain_paths.py` — 11 tests; `test_trajectory_view.py` — 14 tests; 55 tests total; full suite 150 pass |
 | SB-1 | **Aircraft and SimRunner — Python Bindings** — `KinematicState` (read-only class; 14 scalar attributes: `time_s`, `latitude_rad`, `longitude_rad`, `altitude_m`, `velocity_north/east/down_mps`, `heading_rad`, `pitch_rad`, `roll_rad`, `alpha_rad`, `beta_rad`, `airspeed_m_s`, `roll_rate_rad_s`); `Aircraft` Python class (wraps `PyAircraft` — owns `Propulsion` + `Aircraft`, tracks simulation time; `__init__(config, dt_s=0.02)` accepts JSON string or file path; `"propulsion"` section selects `PropulsionJet`, `PropulsionEDF`, or `PropulsionProp`+`MotorElectric`/`MotorPiston` — absent section uses zero-thrust stub; `reset()`, `step(cmd, dt_s, rho_kgm3)`, `state()`); `RunnerConfig(dt_s, duration_s, time_scale, mode)` — mode accepted as string (`"batch"`, `"realtime"`, `"scaled_realtime"`); `SimRunner` — `initialize(config, aircraft)`, `start()` / `stop()` (GIL released), `is_running()`, `elapsed_sim_time_s()`; `py::keep_alive<1,3>` on `initialize()` prevents Aircraft GC; `bind_aircraft.cpp`, `bind_runner.cpp`, `py_aircraft_types.hpp` added to `src/python/`; design authority: [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) — Aircraft and SimRunner section | `test_aircraft_bindings.py` — 12 tests; `test_runner_bindings.py` — 13 tests; 25 tests total; full Python suite 211 passed, 1 skipped |
+| SB-2 | **SimRunner Live Ring Buffer** — `Sample` struct (`time_s`, `value`); `ChannelSubscriber` (RAII, per-subscriber circular buffer, `channel_name()`, `drain()` returns batches and resets, `write()` called under registry mutex; silent overflow drops oldest; `~ChannelSubscriber()` calls `registry_->unsubscribe()`); `ChannelRegistry` (`register_channel(name, sample_rate_hz, depth_s)` idempotent; `subscribe(name)` → `shared_ptr<ChannelSubscriber>` empty buffer / no backfill (PP-F37); `publish(name, time_s, value)` fan-out to all subscribers (PP-F36); `available_channels()`; registry-mutex → subscriber-mutex lock ordering prevents deadlock); `SimRunner` extended with `ChannelRegistry registry_` member and `channel_registry()` accessor; `initialize()` registers 14 kinematic channels at `1/dt_s` Hz, 60 s depth; `runLoop()` publishes all 14 after each `Aircraft::step()`; channel names `kinematic/time_s` … `kinematic/roll_rate_rad_s`; pybind11: `Sample`, `ChannelSubscriber`, `ChannelRegistry` bound in `bind_ring_buffer.cpp`; `channel_registry()` added to `SimRunner` binding in `bind_runner.cpp` (re-opening `py::class_<SimRunner>` raises "already defined" — method added in the original binding instead); design authority: [`docs/architecture/ring_buffer.md`](../architecture/ring_buffer.md) | C++: `RingBuffer_test.cpp` — 19 tests (registration, subscribe, write/drain, overflow, late-join, multi-subscriber, RAII, thread-safety); Python: `test_ring_buffer_bindings.py` — 13 tests; full C++ suite 440 pass; full Python suite 224 passed, 1 skipped |
 | MI-1 | **Manual Input — Full Subsystem** — `ManualInput` abstract base; `KeyboardInput` (integrating keyboard adapter, configurable scancodes, action keys, injected key-state provider); `JoystickInput` (SDL2 adapter, axis pipeline: calibration/trim/normalization/dead-zone/scale, per-axis `raw_min`/`raw_max`/`raw_trim`, inversion, disconnect fallback, `captureTrim()`, `enumerateDevices()`); `ScriptedInput` (mutex-protected slot, `push(AircraftCommand)`); `SimRunner::setManualInput()` / `lastManualInputFrame()` with `SDL_WasInit` guard; `joystick_verify` tool (DEVICE/READY protocol, JSON lines + `--proto` output, `ManualInputFrameProto`/`AircraftCommandProto` added to `liteaerosim.proto`); MinGW runtime linked statically + SDL2.dll deployed alongside executable at build time; `manual_input_monitor.py` shared library + standalone Qt app (`InputMonitorConfig`, `InputMonitorFigure`, `InputMonitorWindow`, `_subprocess_env()`; persistent gauge artists — no `ax.clear()` on update); `manual_input_demo.ipynb` thin notebook using ipympl + `FuncAnimation`; `gx12_config.json` Radiomaster GX12 axis mapping; `liteaero_sim_py` pybind11 module (`AircraftCommand`, `ScriptedInput`, `JoystickInput.enumerate_devices()`); SDL2 and pybind11 added to `conanfile.txt` and dependency registry; `ipympl>=0.9` added to `pyproject.toml`; design authority: [`docs/architecture/manual_input.md`](../architecture/manual_input.md), [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md), [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) | C++: `KeyboardInput_test.cpp` — 10 tests; `JoystickInput_test.cpp` — 15 tests; `ScriptedInput_test.cpp` — 4 tests; `SimRunner_test.cpp` — 4 new manual input tests; Python: `test_manual_input_bindings.py` — 7 tests; `test_manual_input_monitor.py` — 29 tests |
-
----
-
-~~SB-1 — delivered; see Delivered table.~~
-
----
-
-## SB-2. SimRunner Live Ring Buffer (DR-5 / DR-6)
-
-**Blocking dependencies:** SB-1 (bindings infrastructure). Design decisions recorded in
-[`docs/architecture/post_processing.md`](../architecture/post_processing.md) §DR-5 and
-§DR-6.
-
-Design and implement the C++ ring buffer and channel registry, then expose the subscriber
-API to Python via pybind11. This is the live data feed that enables `LiveSimView` (LS-1)
-and `LiveTimeHistoryFigure` (PP-3) to consume real-time simulation output.
-
-### Deliverables — Ring Buffer Design Document
-
-Produce `docs/architecture/ring_buffer.md` as the first deliverable, covering:
-
-- `ChannelRegistry` — producer-driven channel registration (PP-F34); channel name, type,
-  and subscriber count; channels registered by `SimRunner` at initialization and when
-  subsystems start.
-- `SimBuffer<T>` — per-channel ring buffer; storage allocated when a subscriber attaches;
-  released when the last subscriber detaches (PP-F34, PP-F36).
-- `ChannelSubscriber` — RAII subscription token; drain API returns batches of
-  `(timestamp_s, value)` pairs since the last drain; late-join subscribers start with an
-  empty buffer (PP-F37).
-- `SimRunner` integration — `SimRunner` owns the `ChannelRegistry` and all `SimBuffer`
-  instances; writes to each channel's buffer in the simulation step loop.
-- Threading contract — `SimRunner` writes from the simulation thread; subscribers drain
-  from arbitrary threads; must be lock-free or fine-grained per channel.
-- pybind11 binding — `ChannelRegistry`, `ChannelSubscriber`, and drain method exposed via
-  `src/python/bind_ring_buffer.cpp`.
-- All open questions resolved before implementation begins.
-
-### Tests — Ring Buffer
-
-C++: `test/RingBuffer_test.cpp` — register, subscribe, write, drain, late-join,
-multi-subscriber, deallocation on last unsubscribe.
-
-Python: `python/test/test_ring_buffer_bindings.py` — subscribe, drain, no-backfill on
-late join.
 
 ---
 

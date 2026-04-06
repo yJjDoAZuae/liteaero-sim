@@ -37,6 +37,25 @@ void SimRunner::initialize(const RunnerConfig& config, Aircraft& aircraft)
     aircraft_  = &aircraft;
     stop_flag_.store(false);
     step_count_.store(0);
+
+    // Register all kinematic state channels.  Idempotent — safe to call on
+    // re-initialize.  Depth: 60 s of history per subscriber.
+    const float sim_hz  = 1.0f / config.dt_s;
+    const float depth_s = 60.0f;
+    registry_.register_channel("kinematic/time_s",             sim_hz, depth_s);
+    registry_.register_channel("kinematic/latitude_rad",        sim_hz, depth_s);
+    registry_.register_channel("kinematic/longitude_rad",       sim_hz, depth_s);
+    registry_.register_channel("kinematic/altitude_m",          sim_hz, depth_s);
+    registry_.register_channel("kinematic/velocity_north_mps",  sim_hz, depth_s);
+    registry_.register_channel("kinematic/velocity_east_mps",   sim_hz, depth_s);
+    registry_.register_channel("kinematic/velocity_down_mps",   sim_hz, depth_s);
+    registry_.register_channel("kinematic/heading_rad",         sim_hz, depth_s);
+    registry_.register_channel("kinematic/pitch_rad",           sim_hz, depth_s);
+    registry_.register_channel("kinematic/roll_rad",            sim_hz, depth_s);
+    registry_.register_channel("kinematic/alpha_rad",           sim_hz, depth_s);
+    registry_.register_channel("kinematic/beta_rad",            sim_hz, depth_s);
+    registry_.register_channel("kinematic/airspeed_m_s",        sim_hz, depth_s);
+    registry_.register_channel("kinematic/roll_rate_rad_s",     sim_hz, depth_s);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +163,27 @@ void SimRunner::runLoop()
 
         aircraft_->step(sim_time_s, frame.command, wind_NED_mps, rho_kgm3);
         step_count_.store(k + 1);
+
+        // Publish kinematic state channels.  Each publish() is a no-op when no
+        // subscriber is attached for that channel (PP-F34).
+        {
+            const KinematicState& s = aircraft_->state();
+            const double t = s.time_sec();
+            registry_.publish("kinematic/time_s",             t, static_cast<float>(t));
+            registry_.publish("kinematic/latitude_rad",        t, static_cast<float>(s.positionDatum().latitudeGeodetic_rad()));
+            registry_.publish("kinematic/longitude_rad",       t, static_cast<float>(s.positionDatum().longitude_rad()));
+            registry_.publish("kinematic/altitude_m",          t, s.positionDatum().height_WGS84_m());
+            registry_.publish("kinematic/velocity_north_mps",  t, s.velocity_NED_mps()(0));
+            registry_.publish("kinematic/velocity_east_mps",   t, s.velocity_NED_mps()(1));
+            registry_.publish("kinematic/velocity_down_mps",   t, s.velocity_NED_mps()(2));
+            registry_.publish("kinematic/heading_rad",         t, s.heading());
+            registry_.publish("kinematic/pitch_rad",           t, s.pitch());
+            registry_.publish("kinematic/roll_rad",            t, s.roll());
+            registry_.publish("kinematic/alpha_rad",           t, s.alpha());
+            registry_.publish("kinematic/beta_rad",            t, s.beta());
+            registry_.publish("kinematic/airspeed_m_s",        t, s.velocity_Wind_mps()(0));
+            registry_.publish("kinematic/roll_rate_rad_s",     t, s.rollRate_Wind_rps());
+        }
 
         if (timed) {
             const auto t_target = t_start + std::chrono::duration_cast<Clock::duration>(

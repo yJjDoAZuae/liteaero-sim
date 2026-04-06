@@ -12,6 +12,7 @@ namespace py = pybind11;
 
 void bind_aircraft(py::module_& m);
 void bind_runner(py::module_& m);
+void bind_ring_buffer(py::module_& m);
 void bind_manual_input(py::module_& m);
 
 PYBIND11_MODULE(liteaero_sim_py, m)
@@ -19,7 +20,10 @@ PYBIND11_MODULE(liteaero_sim_py, m)
     m.doc() = "LiteAero Sim Python bindings";
     // Aircraft and KinematicState must be registered before runner and
     // manual input so that argument-type matching works correctly.
+    // bind_ring_buffer adds channel_registry() to the already-registered
+    // SimRunner type, so it must run after bind_runner.
     bind_aircraft(m);
     bind_runner(m);
+    bind_ring_buffer(m);
     bind_manual_input(m);
 }

@@ -2,6 +2,7 @@
 
 #include "Aircraft.hpp"
 #include "input/ManualInput.hpp"
+#include "runner/ChannelRegistry.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -41,6 +42,11 @@ public:
     // before the first tick.  Safe to call from any thread.
     ManualInputFrame lastManualInputFrame() const;
 
+    // Access the channel registry.  Subscribers attach here to receive real-time
+    // simulation output.  The registry is valid for the lifetime of this SimRunner.
+    ChannelRegistry&       channel_registry()       { return registry_; }
+    const ChannelRegistry& channel_registry() const { return registry_; }
+
 private:
     void runLoop();
 
@@ -54,6 +60,8 @@ private:
 
     mutable std::mutex    frame_mutex_;
     ManualInputFrame      last_frame_;   // guarded by frame_mutex_
+
+    ChannelRegistry       registry_;
 };
 
 }  // namespace liteaero::simulation

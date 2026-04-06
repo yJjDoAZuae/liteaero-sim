@@ -64,7 +64,8 @@ src/python/
     py_aircraft_types.hpp     — PyAircraft wrapper struct (shared by bind_aircraft and bind_runner)
     bind_manual_input.cpp     — AircraftCommand, ScriptedInput, JoystickInput
     bind_aircraft.cpp         — KinematicState, Aircraft (via PyAircraft wrapper)
-    bind_runner.cpp           — ExecutionMode, RunnerConfig, SimRunner
+    bind_runner.cpp           — ExecutionMode, RunnerConfig, SimRunner (including channel_registry())
+    bind_ring_buffer.cpp      — Sample, ChannelSubscriber, ChannelRegistry
     bind_landing_gear.cpp     — LandingGear, WheelUnit, StrutState, ContactForces
 ```
 
@@ -132,6 +133,65 @@ propulsion types directly — the wrapper selects the propulsion model from the
 | `SimRunner::stop()` | Instance method; releases the GIL | Request termination; blocks until the run loop exits |
 | `SimRunner::is_running()` | Instance method | `True` while the run loop is active |
 | `SimRunner::elapsed_sim_time_s()` | Instance method | Simulation time elapsed since `start()` |
+| `SimRunner::channel_registry()` | Instance method returning `ChannelRegistry&` (`reference_internal`) | Access the channel registry; reference is valid for the lifetime of the `SimRunner` |
+
+### Ring Buffer and Channel Registry
+
+Design authority: [`ring_buffer.md`](ring_buffer.md)
+
+The channel registry and subscriber API allow Python code to poll live simulation output
+without coupling to the run loop. `SimRunner` registers 14 kinematic channels at
+initialization and publishes to them after each `Aircraft::step()`.
+
+#### `Sample`
+
+| Attribute | Type | Description |
+| --- | --- | --- |
+| `time_s` | `float` | Simulation time at which this sample was produced (s) |
+| `value` | `float` | Channel value in SI units |
+
+`Sample` supports tuple unpacking (`time_s, value = sample`) and `repr()`.
+
+#### `ChannelSubscriber`
+
+| Method / property | Description |
+| --- | --- |
+| `channel_name` | Name of the subscribed channel |
+| `drain()` | Return all buffered samples as `list[tuple[float, float]]` and reset the buffer; returns `[]` if no new data |
+
+Subscribers are obtained via `ChannelRegistry.subscribe()`. Each subscriber maintains an
+independent circular buffer (capacity = `ceil(sample_rate_hz × depth_s)`, minimum 2);
+overflow silently drops the oldest sample. A late-joining subscriber starts with an empty
+buffer — there is no backfill (PP-F37). Destroying a subscriber automatically unregisters
+it from the channel.
+
+#### `ChannelRegistry`
+
+| Method | Description |
+| --- | --- |
+| `available_channels()` | Return a list of all registered channel names |
+| `subscribe(name)` | Subscribe to a registered channel; raises `KeyError` if the channel has not been registered |
+
+#### Kinematic channels registered by `SimRunner`
+
+All channels are registered at `1/dt_s` Hz with a 60 s buffer depth.
+
+| Channel name | Source field | Units |
+| --- | --- | --- |
+| `kinematic/time_s` | `time_sec()` | s |
+| `kinematic/latitude_rad` | `positionDatum().latitudeGeodetic_rad()` | rad |
+| `kinematic/longitude_rad` | `positionDatum().longitude_rad()` | rad |
+| `kinematic/altitude_m` | `positionDatum().height_WGS84_m()` | m |
+| `kinematic/velocity_north_mps` | `velocity_NED_mps()(0)` | m/s |
+| `kinematic/velocity_east_mps` | `velocity_NED_mps()(1)` | m/s |
+| `kinematic/velocity_down_mps` | `velocity_NED_mps()(2)` | m/s |
+| `kinematic/heading_rad` | `heading()` | rad |
+| `kinematic/pitch_rad` | `pitch()` | rad |
+| `kinematic/roll_rad` | `roll()` | rad |
+| `kinematic/alpha_rad` | `alpha()` | rad |
+| `kinematic/beta_rad` | `beta()` | rad |
+| `kinematic/airspeed_m_s` | `velocity_Wind_mps()(0)` | m/s |
+| `kinematic/roll_rate_rad_s` | `rollRate_Wind_rps()` | rad/s |
 
 ### Manual Input
 
@@ -176,6 +236,10 @@ objects. The following rules apply to all binding code in this module:
 - `LandingGear::step()` is not thread-safe with respect to concurrent Python access.
   Callers must not call it from Python while a `SimRunner` run is in progress with the
   same `LandingGear` instance.
+- `ChannelSubscriber::drain()` acquires only the subscriber mutex (not the registry
+  mutex). It is safe to call from any Python thread concurrently with `SimRunner`
+  publishing from the simulation thread. Lock ordering is registry → subscriber; `drain()`
+  only ever takes the subscriber lock, so no deadlock is possible.
 
 ---
 

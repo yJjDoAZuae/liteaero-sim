@@ -6,10 +6,15 @@
 // wrapper (the Python "Aircraft" class) and extracts the inner Aircraft& reference.
 // py::keep_alive<1, 3> ensures the Python Aircraft object is not garbage-collected
 // while the SimRunner instance is alive.
+//
+// channel_registry() is added here (not in bind_ring_buffer.cpp) to avoid a
+// double-registration error: pybind11 does not allow re-opening an already-bound
+// class type under a new py::class_<> declaration.
 
 #include <pybind11/pybind11.h>
 
 #include "py_aircraft_types.hpp"
+#include "runner/ChannelRegistry.hpp"
 #include "runner/SimRunner.hpp"
 
 namespace py = pybind11;
@@ -81,5 +86,12 @@ void bind_runner(py::module_& m)
              "True while the run loop is active.")
         .def("elapsed_sim_time_s",
              &SimRunner::elapsed_sim_time_s,
-             "Simulation time elapsed since start() (seconds).");
+             "Simulation time elapsed since start() (seconds).")
+        .def("channel_registry",
+             [](SimRunner& self) -> ChannelRegistry& {
+                 return self.channel_registry();
+             },
+             py::return_value_policy::reference_internal,
+             "Return a reference to the channel registry.  "
+             "The reference is valid for the lifetime of the SimRunner.");
 }
