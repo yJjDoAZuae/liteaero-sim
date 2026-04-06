@@ -61,7 +61,10 @@ the C++ it wraps:
 ```text
 src/python/
     bindings.cpp              — PYBIND11_MODULE entry point; calls bind_*() functions
+    py_aircraft_types.hpp     — PyAircraft wrapper struct (shared by bind_aircraft and bind_runner)
     bind_manual_input.cpp     — AircraftCommand, ScriptedInput, JoystickInput
+    bind_aircraft.cpp         — KinematicState, Aircraft (via PyAircraft wrapper)
+    bind_runner.cpp           — ExecutionMode, RunnerConfig, SimRunner
     bind_landing_gear.cpp     — LandingGear, WheelUnit, StrutState, ContactForces
 ```
 
@@ -78,6 +81,57 @@ files are modified when adding a new subsystem binding.
 ---
 
 ## Exported Surface
+
+### Aircraft and SimRunner
+
+Design authority: [`aircraft.md`](aircraft.md), [`sim_runner.md`](sim_runner.md)
+
+`Aircraft` is exposed through a Python-side `PyAircraft` wrapper (defined in
+`py_aircraft_types.hpp`) that owns both the `Propulsion` and the `Aircraft` objects and
+tracks simulation time for standalone `step()` calls. Python users never interact with
+propulsion types directly — the wrapper selects the propulsion model from the
+`"propulsion"` section of the JSON config.
+
+#### `PyAircraft` — Python class name `Aircraft`
+
+| C++ type / function | Python exposure | Purpose |
+| --- | --- | --- |
+| `KinematicState` | Read-only class with scalar attributes (see table below) | Inspect current simulation state from Python scripts and notebooks |
+| `PyAircraft(config, dt_s=0.02)` | Constructor taking a JSON string or file path and an optional timestep | Construct, configure, and initialize the simulation plant. If the config has a `"propulsion"` section with a `"type"` key (`"jet"`, `"edf"`, `"prop"`, `"none"`), the corresponding propulsion model is created and initialized from that section; if the section is absent, a zero-thrust stub is used |
+| `Aircraft::reset()` | Instance method | Reset to initial conditions; resets the internal simulation time to zero |
+| `Aircraft::step(cmd, dt_s=0.02, rho_kgm3=1.225)` | Instance method | Advance simulation by one timestep; time is tracked internally; wind is assumed zero |
+| `Aircraft::state()` | Instance method returning `KinematicState` | Read current kinematic state |
+
+#### `KinematicState` attributes
+
+| Attribute | C++ source | Units |
+| --- | --- | --- |
+| `time_s` | `time_sec()` | s |
+| `latitude_rad` | `positionDatum().latitudeGeodetic_rad()` | rad |
+| `longitude_rad` | `positionDatum().longitude_rad()` | rad |
+| `altitude_m` | `positionDatum().height_WGS84_m()` | m |
+| `velocity_north_mps` | `velocity_NED_mps()(0)` | m/s |
+| `velocity_east_mps` | `velocity_NED_mps()(1)` | m/s |
+| `velocity_down_mps` | `velocity_NED_mps()(2)` | m/s |
+| `heading_rad` | `heading()` | rad |
+| `pitch_rad` | `pitch()` | rad |
+| `roll_rad` | `roll()` | rad |
+| `alpha_rad` | `alpha()` | rad |
+| `beta_rad` | `beta()` | rad |
+| `airspeed_m_s` | `velocity_Wind_mps()(0)` — wind-axis forward speed | m/s |
+| `roll_rate_rad_s` | `rollRate_Wind_rps()` | rad/s |
+
+#### `RunnerConfig` and `SimRunner`
+
+| C++ type / function | Python exposure | Purpose |
+| --- | --- | --- |
+| `ExecutionMode` | `ExecutionMode.BATCH`, `ExecutionMode.REAL_TIME`, `ExecutionMode.SCALED_REAL_TIME` | Execution mode selector |
+| `RunnerConfig(dt_s, duration_s, time_scale, mode)` | Constructor; `mode` is a string: `"batch"`, `"realtime"`, `"scaled_realtime"` | Configure `SimRunner` from Python |
+| `SimRunner::initialize(config, aircraft)` | Instance method; `aircraft` is a Python `Aircraft` object | Wire the aircraft and config; `aircraft` is kept alive by the runner |
+| `SimRunner::start()` | Instance method; releases the GIL | Start the run loop; blocks in Batch mode; returns immediately in RealTime and ScaledRealTime |
+| `SimRunner::stop()` | Instance method; releases the GIL | Request termination; blocks until the run loop exits |
+| `SimRunner::is_running()` | Instance method | `True` while the run loop is active |
+| `SimRunner::elapsed_sim_time_s()` | Instance method | Simulation time elapsed since `start()` |
 
 ### Manual Input
 
@@ -112,6 +166,13 @@ objects. The following rules apply to all binding code in this module:
   simulation thread. No additional locking is required in the binding.
 - `JoystickInput::enumerateDevices()` calls SDL2 functions. SDL2 must have been
   initialized (`SDL_Init`) before this call. Callers are responsible for SDL lifecycle.
+- `SimRunner::start()` and `SimRunner::stop()` release the GIL. `start()` in Batch mode
+  blocks the caller; the GIL release allows other Python threads to run while the
+  simulation executes. In RealTime mode `start()` returns immediately after spawning the
+  worker thread.
+- `Aircraft::step()` is not thread-safe with respect to a concurrent `SimRunner` run. Do
+  not call `aircraft.step()` from Python while a `SimRunner` run is in progress with the
+  same `Aircraft` instance.
 - `LandingGear::step()` is not thread-safe with respect to concurrent Python access.
   Callers must not call it from Python while a `SimRunner` run is in progress with the
   same `LandingGear` instance.

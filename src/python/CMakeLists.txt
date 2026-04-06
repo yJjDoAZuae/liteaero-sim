@@ -14,6 +14,8 @@ find_package(pybind11 REQUIRED)
 
 pybind11_add_module(liteaero_sim_py
     bindings.cpp
+    bind_aircraft.cpp
+    bind_runner.cpp
     bind_manual_input.cpp
 )
 
