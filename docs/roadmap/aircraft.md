@@ -284,6 +284,52 @@ path.
 
 ---
 
+## TB-1. Terrain Build Tool
+
+**Blocking dependencies:** LS-1 (live simulation viewer delivered — establishes the
+Godot scene that consumes the terrain GLB).
+
+**Design authority:** [`docs/architecture/terrain_build.md`](../architecture/terrain_build.md).
+
+A single-function automation layer over the existing terrain ingestion tools
+(`python/tools/terrain/`). Given an aircraft configuration JSON path, derives all
+pipeline parameters — geographic center, bounding box, cruise speed, 10-minute radius,
+altitude-adaptive DEM resolution, download chunk count — and produces a complete terrain
+dataset (`.las_terrain` + `.glb`) without further user interaction.
+
+**Open questions that must be resolved before implementation:**
+
+- **OQ-TB-1** — Does `download.py` need a `resolution_deg` parameter, or should the
+  build tool always request at source native resolution and rely purely on tiling?
+  Altitude-adaptive resolution (design authority §Download Strategy) requires the
+  parameter. Without it, large-area aircraft classes (jet trainer) download 100× more
+  data than needed.
+- **OQ-TB-2** — Should the build tool write a `terrain_config.json` sidecar that the
+  Godot scene reads to set its `world_origin`? Without this, the developer must manually
+  edit the Godot scene after each terrain build.
+
+### Deliverables — Terrain Build Tool
+
+1. **`python/tools/terrain/download.py`** — add `resolution_deg: float | None = None`
+   keyword argument to `download_dem` and `download_imagery` (OQ-TB-1 must be resolved
+   first); update `_bbox_tag` to include resolution so cache entries at different
+   resolutions do not collide.
+2. **`python/tools/terrain/build_terrain.py`** — `build_terrain(aircraft_config_path, *,
+   name, radius_m, dem_source, imagery_source, force)` entry point as specified in
+   design authority §Entry Point.
+3. **`data/terrain/<name>/derived/metadata.json`** — provenance record written on
+   successful build; schema in design authority §Output Layout.
+
+### Tests — Terrain Build Tool
+
+- `python/test/test_build_terrain.py` — synthetic flat DEM (no network); mocked
+  `download_dem`/`download_imagery`; verifies parameter derivation from each of the
+  three aircraft config fixtures; verifies `metadata.json` content; verifies that
+  `force=True` removes cached files; verifies that zero-velocity config raises
+  `ValueError`.
+
+---
+
 ## 1. Sensor Models — Implementable Subset
 
 **Blocking dependencies:** None. `KinematicState` and `V_Terrain` are implemented.

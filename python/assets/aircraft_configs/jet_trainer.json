@@ -1,0 +1,60 @@
+{
+    "schema_version": 1,
+    "aircraft": {
+        "S_ref_m2": 15.8,
+        "cl_y_beta": -0.90,
+        "ar": 3.75,
+        "e": 0.82,
+        "cd0": 0.020,
+        "cmd_filter_substeps": 1,
+        "nz_wn_rad_s": 20.0,
+        "nz_zeta_nd": 0.7,
+        "ny_wn_rad_s": 20.0,
+        "ny_zeta_nd": 0.7,
+        "roll_rate_wn_rad_s": 40.0,
+        "roll_rate_zeta_nd": 0.7
+    },
+    "airframe": {
+        "g_max_nd": 7.33,
+        "g_min_nd": -3.0,
+        "tas_max_mps": 370.0,
+        "mach_max_nd": 1.30
+    },
+    "inertia": {
+        "mass_kg": 5500.0,
+        "Ixx_kgm2": 4200.0,
+        "Iyy_kgm2": 16400.0,
+        "Izz_kgm2": 19200.0
+    },
+    "lift_curve": {
+        "cl_alpha": 4.5,
+        "cl_max": 1.40,
+        "cl_min": -0.80,
+        "delta_alpha_stall": 0.209,
+        "delta_alpha_stall_neg": 0.209,
+        "cl_sep": 0.90,
+        "cl_sep_neg": -0.50
+    },
+    "propulsion": {
+        "type": "jet",
+        "thrust_sl_n": 26500.0,
+        "bypass_ratio": 0.3,
+        "inlet_area_m2": 0.18,
+        "idle_fraction": 0.05,
+        "spool_tau_s": 3.0,
+        "ab_thrust_sl_n": 0.0,
+        "ab_spool_tau_s": 1.0,
+        "dt_s": 0.02
+    },
+    "initial_state": {
+        "latitude_rad": 0.6094,
+        "longitude_rad": -2.0573,
+        "altitude_m": 3000.0,
+        "velocity_north_mps": 150.0,
+        "velocity_east_mps": 0.0,
+        "velocity_down_mps": 0.0,
+        "wind_north_mps": 0.0,
+        "wind_east_mps": 0.0,
+        "wind_down_mps": 0.0
+    }
+}

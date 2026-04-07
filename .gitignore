@@ -15,3 +15,6 @@ python/.mypy_cache/
 python/cache/
 python/.ipynb_checkpoints/
 python/**/.ipynb_checkpoints/
+# Godot — generated, not configuration-managed
+godot/.godot/
+godot/terrain/

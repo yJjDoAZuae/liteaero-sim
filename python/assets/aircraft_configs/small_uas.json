@@ -1,0 +1,61 @@
+{
+    "schema_version": 1,
+    "aircraft": {
+        "S_ref_m2": 0.60,
+        "cl_y_beta": -0.40,
+        "ar": 8.07,
+        "e": 0.85,
+        "cd0": 0.022,
+        "cmd_filter_substeps": 1,
+        "nz_wn_rad_s": 15.0,
+        "nz_zeta_nd": 0.7,
+        "ny_wn_rad_s": 15.0,
+        "ny_zeta_nd": 0.7,
+        "roll_rate_wn_rad_s": 30.0,
+        "roll_rate_zeta_nd": 0.7
+    },
+    "airframe": {
+        "g_max_nd": 4.0,
+        "g_min_nd": -2.0,
+        "tas_max_mps": 35.0,
+        "mach_max_nd": 0.10
+    },
+    "inertia": {
+        "mass_kg": 5.0,
+        "Ixx_kgm2": 0.08,
+        "Iyy_kgm2": 0.15,
+        "Izz_kgm2": 0.22
+    },
+    "lift_curve": {
+        "cl_alpha": 6.0,
+        "cl_max": 1.60,
+        "cl_min": -0.80,
+        "delta_alpha_stall": 0.175,
+        "delta_alpha_stall_neg": 0.175,
+        "cl_sep": 0.90,
+        "cl_sep_neg": -0.50
+    },
+    "propulsion": {
+        "type": "edf",
+        "thrust_sl_n": 60.0,
+        "fan_diameter_m": 0.10,
+        "inlet_area_m2": 0.008,
+        "idle_fraction": 0.10,
+        "rotor_tau_s": 0.08,
+        "supply_voltage_v": 22.2,
+        "fan_efficiency_nd": 0.72,
+        "esc_efficiency_nd": 0.95,
+        "dt_s": 0.02
+    },
+    "initial_state": {
+        "latitude_rad": 0.6064,
+        "longitude_rad": -2.1047,
+        "altitude_m": 100.0,
+        "velocity_north_mps": 20.0,
+        "velocity_east_mps": 0.0,
+        "velocity_down_mps": 0.0,
+        "wind_north_mps": 0.0,
+        "wind_east_mps": 0.0,
+        "wind_down_mps": 0.0
+    }
+}
