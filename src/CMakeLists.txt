@@ -46,6 +46,8 @@ target_link_libraries(liteaerosim
         trochoids
         liteaerosim_proto
         tinygltf_headers
+        # Winsock2 is required by UdpSimulationBroadcaster on Windows.
+        $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
 target_compile_features(liteaerosim PUBLIC cxx_std_17)

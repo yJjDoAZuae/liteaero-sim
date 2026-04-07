@@ -18,6 +18,7 @@ pybind11_add_module(liteaero_sim_py
     bind_runner.cpp
     bind_ring_buffer.cpp
     bind_manual_input.cpp
+    bind_broadcaster.cpp
 )
 
 target_link_libraries(liteaero_sim_py PRIVATE liteaerosim)

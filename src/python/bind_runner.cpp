@@ -13,6 +13,8 @@
 
 #include <pybind11/pybind11.h>
 
+#include "broadcaster/UdpSimulationBroadcaster.hpp"
+#include "input/ScriptedInput.hpp"
 #include "py_aircraft_types.hpp"
 #include "runner/ChannelRegistry.hpp"
 #include "runner/SimRunner.hpp"
@@ -93,5 +95,22 @@ void bind_runner(py::module_& m)
              },
              py::return_value_policy::reference_internal,
              "Return a reference to the channel registry.  "
-             "The reference is valid for the lifetime of the SimRunner.");
+             "The reference is valid for the lifetime of the SimRunner.")
+        .def("setManualInput",
+             [](SimRunner& self, ScriptedInput* input) {
+                 self.setManualInput(input);
+             },
+             py::arg("input"),
+             py::keep_alive<1, 2>(),
+             "Wire a ScriptedInput adapter.  Pass None to use neutral commands.  "
+             "Must be called before start().  The adapter is kept alive by the runner.")
+        .def("set_broadcaster",
+             [](SimRunner& self, UdpSimulationBroadcaster* broadcaster) {
+                 self.set_broadcaster(broadcaster);
+             },
+             py::arg("broadcaster"),
+             // Keep the broadcaster alive for the lifetime of this SimRunner.
+             py::keep_alive<1, 2>(),
+             "Wire a UdpSimulationBroadcaster.  Pass None to disable broadcasting.  "
+             "Must be called before start().  The broadcaster is kept alive by the runner.");
 }

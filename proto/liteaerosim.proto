@@ -332,6 +332,26 @@ message LandingGearState {
 }
 
 // ---------------------------------------------------------------------------
+// Live simulation broadcast — SimulationFrameProto (Step LS-1)
+// Extends TrajectoryFrame (fields 1–8) with velocity fields (9–11).
+// Sent as a UDP datagram by UdpSimulationBroadcaster after each SimRunner step.
+// ---------------------------------------------------------------------------
+
+message SimulationFrameProto {
+    double timestamp_s         = 1;
+    double latitude_rad        = 2;
+    double longitude_rad       = 3;
+    float  height_wgs84_m      = 4;
+    float  q_w                 = 5;  // body-to-NED attitude quaternion
+    float  q_x                 = 6;
+    float  q_y                 = 7;
+    float  q_z                 = 8;
+    float  velocity_north_mps  = 9;
+    float  velocity_east_mps   = 10;
+    float  velocity_down_mps   = 11;
+}
+
+// ---------------------------------------------------------------------------
 // Manual input — AircraftCommand and ManualInputFrame serialization
 // ---------------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 #include "runner/SimRunner.hpp"
+#include "SimulationFrame.hpp"
 
 #include <SDL2/SDL.h>
 #include <chrono>
@@ -108,6 +109,13 @@ void SimRunner::setManualInput(ManualInput* input)
 
 // ---------------------------------------------------------------------------
 
+void SimRunner::set_broadcaster(ISimulationBroadcaster* broadcaster)
+{
+    broadcaster_ = broadcaster;
+}
+
+// ---------------------------------------------------------------------------
+
 ManualInputFrame SimRunner::lastManualInputFrame() const
 {
     std::lock_guard<std::mutex> lock(frame_mutex_);
@@ -183,6 +191,24 @@ void SimRunner::runLoop()
             registry_.publish("kinematic/beta_rad",            t, s.beta());
             registry_.publish("kinematic/airspeed_m_s",        t, s.velocity_Wind_mps()(0));
             registry_.publish("kinematic/roll_rate_rad_s",     t, s.rollRate_Wind_rps());
+
+            // Broadcast live simulation frame if a broadcaster is wired.
+            if (broadcaster_ != nullptr) {
+                SimulationFrame frame{};
+                frame.timestamp_s        = t;
+                frame.latitude_rad       = s.positionDatum().latitudeGeodetic_rad();
+                frame.longitude_rad      = s.positionDatum().longitude_rad();
+                frame.height_wgs84_m     = s.positionDatum().height_WGS84_m();
+                const Eigen::Quaternionf q_nb = s.q_nb();
+                frame.q_w                = q_nb.w();
+                frame.q_x                = q_nb.x();
+                frame.q_y                = q_nb.y();
+                frame.q_z                = q_nb.z();
+                frame.velocity_north_mps = s.velocity_NED_mps()(0);
+                frame.velocity_east_mps  = s.velocity_NED_mps()(1);
+                frame.velocity_down_mps  = s.velocity_NED_mps()(2);
+                broadcaster_->broadcast(frame);
+            }
         }
 
         if (timed) {

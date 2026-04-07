@@ -46,3 +46,34 @@ if(WIN32)
         )
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# live_sim: real-time simulation launcher with UDP broadcast to Godot 4.
+# Design authority: docs/architecture/live_sim_view.md
+# ---------------------------------------------------------------------------
+add_executable(live_sim
+    ${CMAKE_CURRENT_SOURCE_DIR}/live_sim.cpp
+)
+target_link_libraries(live_sim
+    PRIVATE
+        liteaerosim
+        liteaerosim_proto
+        SDL2::SDL2
+        $<$<PLATFORM_ID:Windows>:ws2_32>
+)
+target_compile_features(live_sim PRIVATE cxx_std_17)
+
+# Force console subsystem so live_sim can write to stdout.
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_link_options(live_sim PRIVATE -mconsole)
+endif()
+
+# Deploy SDL2.dll alongside live_sim.exe on Windows.
+if(WIN32 AND _sdl2_dll AND EXISTS "${_sdl2_dll}")
+    add_custom_command(TARGET live_sim POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_sdl2_dll}"
+            $<TARGET_FILE_DIR:live_sim>
+        COMMENT "Deploying SDL2.dll alongside live_sim"
+    )
+endif()

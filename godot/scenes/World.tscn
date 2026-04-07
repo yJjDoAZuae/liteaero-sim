@@ -1,0 +1,25 @@
+[gd_scene load_steps=2 format=3 uid="uid://world_scene"]
+
+[ext_resource type="Script" path="res://addons/liteaero_sim/SimulationReceiver.gd" id="1_recv"]
+
+[node name="World" type="Node3D"]
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 0, 100, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="Vehicle" type="Node3D" parent="."]
+
+[node name="SimulationReceiver" type="Node3D" parent="Vehicle"]
+script = ExtResource("1_recv")
+broadcast_port = 14560
+
+[node name="AircraftMesh" type="MeshInstance3D" parent="Vehicle"]
+; Aircraft mesh loaded via drag-and-drop of python/assets/aircraft_lp.glb.
+; Axis correction: nose=+X body frame -> Godot -Z forward.
+; Apply rotation_degrees = Vector3(0, 90, 0) to this node in the Inspector.
+; See docs/architecture/live_sim_view.md OQ-LS-9 for details.
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.819152, 0.573576, 0, -0.573576, 0.819152, 0, 50, 150)

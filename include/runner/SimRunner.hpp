@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Aircraft.hpp"
+#include "broadcaster/ISimulationBroadcaster.hpp"
 #include "input/ManualInput.hpp"
 #include "runner/ChannelRegistry.hpp"
 
@@ -37,6 +38,11 @@ public:
     // adapter alive for the duration of the run.
     void setManualInput(ManualInput* input);
 
+    // Inject a simulation broadcaster.  nullptr (default) disables broadcasting.
+    // Must not be called while a run is in progress.  SimRunner does not take
+    // ownership; the broadcaster must outlive the run.
+    void set_broadcaster(ISimulationBroadcaster* broadcaster);
+
     // Returns a mutex-protected snapshot of the ManualInputFrame produced on
     // the most recent tick.  Returns a neutral frame when no adapter is set or
     // before the first tick.  Safe to call from any thread.
@@ -50,9 +56,10 @@ public:
 private:
     void runLoop();
 
-    RunnerConfig          config_;
-    Aircraft*             aircraft_     = nullptr;
-    ManualInput*          manual_input_ = nullptr;
+    RunnerConfig               config_;
+    Aircraft*                  aircraft_     = nullptr;
+    ManualInput*               manual_input_ = nullptr;
+    ISimulationBroadcaster*    broadcaster_  = nullptr;
     std::atomic<bool>     stop_flag_    {false};
     std::atomic<bool>     running_      {false};
     std::atomic<uint64_t> step_count_   {0};
