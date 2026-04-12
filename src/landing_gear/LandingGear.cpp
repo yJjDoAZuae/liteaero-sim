@@ -57,7 +57,7 @@ void LandingGear::reset() {
 // ---------------------------------------------------------------------------
 
 ContactForces LandingGear::step(const liteaero::nav::KinematicStateSnapshot& snap,
-                                 const liteaero::terrain::V_Terrain&          terrain,
+                                 const liteaero::terrain::Terrain&            terrain,
                                  float nose_wheel_angle_rad,
                                  float brake_left_nd,
                                  float brake_right_nd,

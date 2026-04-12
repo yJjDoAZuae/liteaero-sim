@@ -4,7 +4,7 @@
 #include <landing_gear/SurfaceFrictionUniform.hpp>
 #include <landing_gear/WheelUnit.hpp>
 #include <liteaero/nav/KinematicStateSnapshot.hpp>
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include <nlohmann/json.hpp>
 #include <cstdint>
 #include <vector>
@@ -32,7 +32,7 @@ public:
     //   brake_right_nd   — right-side brake demand [0, 1]
     //   outer_dt_s       — outer simulation timestep (s)
     ContactForces step(const liteaero::nav::KinematicStateSnapshot& snap,
-                       const liteaero::terrain::V_Terrain&          terrain,
+                       const liteaero::terrain::Terrain&            terrain,
                        float nose_wheel_angle_rad,
                        float brake_left_nd,
                        float brake_right_nd,

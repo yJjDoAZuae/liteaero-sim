@@ -2,7 +2,7 @@
 // Design authority: docs/architecture/landing_gear.md
 
 #include "landing_gear/LandingGear.hpp"
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include <liteaero/nav/KinematicStateSnapshot.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
@@ -14,7 +14,7 @@ using liteaero::nav::KinematicStateSnapshot;
 // Test helpers
 // ---------------------------------------------------------------------------
 
-class FlatTestTerrain : public liteaero::terrain::V_Terrain {
+class FlatTestTerrain : public liteaero::terrain::Terrain {
 public:
     explicit FlatTestTerrain(float elev_m = 0.0f) : elev_(elev_m) {}
     [[nodiscard]] float elevation_m(double, double) const override { return elev_; }

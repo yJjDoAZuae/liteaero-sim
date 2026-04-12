@@ -2,14 +2,14 @@
 // Design authority: docs/architecture/landing_gear.md
 
 #include "landing_gear/LandingGear.hpp"
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include <liteaero/nav/KinematicStateSnapshot.hpp>
 #include <gtest/gtest.h>
 
 using namespace liteaero::simulation;
 using liteaero::nav::KinematicStateSnapshot;
 
-class ElevatedTerrain : public liteaero::terrain::V_Terrain {
+class ElevatedTerrain : public liteaero::terrain::Terrain {
 public:
     explicit ElevatedTerrain(float elev_m) : elev_(elev_m) {}
     [[nodiscard]] float elevation_m(double, double) const override { return elev_; }

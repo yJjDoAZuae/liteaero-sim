@@ -1,4 +1,4 @@
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include <gtest/gtest.h>
 
 using namespace liteaero::terrain;

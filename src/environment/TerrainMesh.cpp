@@ -122,7 +122,7 @@ const TerrainCell* TerrainMesh::cellAt(double lat_rad, double lon_rad) const {
 }
 
 // ---------------------------------------------------------------------------
-// V_Terrain — elevation_m
+// Terrain — elevation_m
 // ---------------------------------------------------------------------------
 
 float TerrainMesh::elevation_m(double lat_rad, double lon_rad) const {

@@ -464,12 +464,13 @@ on a pre-opened socket. It does not block the simulation thread. Dropped datagra
 | `include/broadcaster/UdpSimulationBroadcaster.hpp` | UDP implementation header |
 | `src/broadcaster/UdpSimulationBroadcaster.cpp` | UDP implementation |
 | `test/SimulationBroadcaster_test.cpp` | C++ broadcaster tests |
-| `python/tools/live_sim_session.py` | `SimSession` |
-| `python/tools/live_sim.py` | CLI launcher |
+| `python/tools/live_sim_session.py` | `SimSession` — Python scripted/notebook launcher |
+| `python/tools/live_sim.py` | Python CLI launcher (scripted input only; no joystick) |
+| `tools/live_sim.cpp` | C++ joystick + terrain launcher; loads `TerrainMesh` from `las_terrain_path` in `terrain_config.json`; calls `aircraft.setTerrain()` |
 | `python/live_sim_demo.ipynb` | Notebook demo |
 | `python/test/test_live_sim_session.py` | Python session tests |
 | `python/assets/aircraft_lp.glb` | Low-poly aircraft mesh (323 triangles) |
-| `godot/` | Godot 4 project root (new) |
+| `godot/` | Godot 4 project root |
 | `godot/addons/liteaero_sim/` | GDExtension plugin source |
 
 ---
@@ -564,6 +565,37 @@ scene is authored.
 
 ---
 
+### OQ-LS-10 — Terrain wiring in `live_sim.cpp` for landing gear contact
+
+**Resolved — Option B.**
+
+> **Naming note:** The terrain abstract base class in `liteaero-flight` is currently
+> named `V_Terrain` (`liteaero/terrain/V_Terrain.hpp`). That name violates the
+> project's `PascalCase`-no-prefix naming convention. It is used below as the current
+> code name only; a rename cleanup is required (see `liteaero-flight` roadmap).
+
+`LandingGear::step()` requires a const reference to the terrain abstract base, passed
+through `Aircraft::setTerrain()`. Without this call, `Aircraft::step()` skips the gear
+contact block (`_terrain == nullptr` guard in `Aircraft.cpp`), producing incorrect
+physics for any ground-start scenario. Terrain wiring must occur in C++ — not via
+`SimSession` — because `Aircraft::setTerrain()` is not bound in the Python pybind11
+layer.
+
+**Option B — `TerrainMesh` from `.las_terrain` file.**
+
+`live_sim.cpp` reads `terrain_config.json` (written by `build_terrain.py`) to locate
+the `.las_terrain` binary; loads `TerrainMesh` from it; calls
+`aircraft.setTerrain(terrain_mesh)`. If `terrain_config.json` is absent or the
+`.las_terrain` file cannot be loaded, the binary exits with an error — there is no
+silent fallback to `FlatTerrain`. A terrain build is a required precondition for
+running `live_sim.exe`.
+
+`live_sim.cpp` constructs the `TerrainMesh` before calling `runner.initialize()`, calls
+`aircraft.setTerrain(terrain_mesh)`, and keeps the mesh alive for the duration of the
+run. The mesh load may add several seconds of startup time for large datasets.
+
+---
+
 ## Decision Records
 
 ### LS-DR-1 — Renderer for live simulation
@@ -630,3 +662,4 @@ determined by their own polling interval.
 | OQ-LS-7 | UDP datagram serialization format | Resolved → Option B (protobuf `SimulationFrameProto`) | No |
 | OQ-LS-8 | Godot scene launch mechanism | Resolved → Option C (developer opens Godot manually; Python/C++ broadcast regardless) | No |
 | OQ-LS-9 | Aircraft mesh coordinate frame correction | Resolved → Option B (fixed `rotation_degrees` on `AircraftMesh` node in Godot scene; no mesh re-export) | No |
+| OQ-LS-10 | Terrain wiring in `live_sim.cpp` for landing gear contact | Resolved → Option B (`TerrainMesh` from `.las_terrain`; error if absent — no `FlatTerrain` fallback) | No |

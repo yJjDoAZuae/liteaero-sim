@@ -3,7 +3,7 @@
 #include <liteaero/terrain/GeodeticPoint.hpp>
 #include <liteaero/terrain/LocalAABB.hpp>
 #include <liteaero/terrain/TerrainTile.hpp>
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include "environment/TerrainCell.hpp"
 #include <nlohmann/json.hpp>
 #include <array>
@@ -21,9 +21,9 @@ struct TileRef {
     liteaero::terrain::TerrainLod lod;
 };
 
-class TerrainMesh : public liteaero::terrain::V_Terrain {
+class TerrainMesh : public liteaero::terrain::Terrain {
 public:
-    // V_Terrain — barycentric interpolation of the finest available LOD tile.
+    // Terrain — barycentric interpolation of the finest available LOD tile.
     [[nodiscard]] float elevation_m(double latitude_rad,
                                     double longitude_rad) const override;
 

@@ -19,6 +19,7 @@
 
 #include "Aircraft.hpp"
 #include "broadcaster/UdpSimulationBroadcaster.hpp"
+#include "environment/TerrainMesh.hpp"
 #include "input/JoystickInput.hpp"
 #include "input/ScriptedInput.hpp"
 #include "propulsion/PropulsionEDF.hpp"
@@ -38,6 +39,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace liteaero::simulation;
 
@@ -201,11 +203,70 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // --- Locate terrain_config.json ---
+    // Written by build_terrain.py.  Absence is a hard error.
+    // Honour LITEAERO_GODOT_DIR; otherwise use godot/terrain/ relative to cwd.
+    std::string godot_terrain_dir;
+    if (const char* env = std::getenv("LITEAERO_GODOT_DIR")) {
+        godot_terrain_dir = std::string(env) + "/terrain";
+    } else {
+        // Default: godot/terrain/ relative to current working directory.
+        godot_terrain_dir = "godot/terrain";
+    }
+    const std::string tc_path = godot_terrain_dir + "/terrain_config.json";
+
+    nlohmann::json terrain_config_json;
+    {
+        std::ifstream tc_file(tc_path);
+        if (!tc_file.is_open()) {
+            std::cerr << "Error: terrain_config.json not found at " << tc_path
+                      << "\n       Run build_terrain.py first.\n";
+            return 1;
+        }
+        try {
+            tc_file >> terrain_config_json;
+        } catch (const std::exception& e) {
+            std::cerr << "Error: JSON parse error in " << tc_path
+                      << ": " << e.what() << "\n";
+            return 1;
+        }
+    }
+
+    if (!terrain_config_json.contains("las_terrain_path")) {
+        std::cerr << "Error: terrain_config.json missing 'las_terrain_path' field.\n"
+                     "       Regenerate it by re-running build_terrain.py.\n";
+        return 1;
+    }
+    const std::string las_terrain_path =
+        terrain_config_json.at("las_terrain_path").get<std::string>();
+
+    // --- Load TerrainMesh ---
+    liteaero::simulation::TerrainMesh terrain_mesh;
+    {
+        std::ifstream las_file(las_terrain_path, std::ios::binary);
+        if (!las_file.is_open()) {
+            std::cerr << "Error: .las_terrain file not found: " << las_terrain_path
+                      << "\n       Run build_terrain.py first.\n";
+            return 1;
+        }
+        const std::vector<uint8_t> bytes(
+            (std::istreambuf_iterator<char>(las_file)),
+            std::istreambuf_iterator<char>());
+        try {
+            terrain_mesh.deserializeLasTerrain(bytes);
+        } catch (const std::exception& e) {
+            std::cerr << "Error: failed to load .las_terrain: " << e.what() << "\n";
+            return 1;
+        }
+        std::cout << "Terrain loaded from " << las_terrain_path << "\n";
+    }
+
     // --- Construct Aircraft ---
     std::unique_ptr<Aircraft> aircraft;
     try {
         aircraft = std::make_unique<Aircraft>(make_propulsion(config_json));
         aircraft->initialize(config_json, args.dt_s);
+        aircraft->setTerrain(&terrain_mesh);
     } catch (const std::exception& e) {
         std::cerr << "Error: Aircraft initialization failed: " << e.what() << "\n";
         return 1;

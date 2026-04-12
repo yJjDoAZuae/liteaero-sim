@@ -445,6 +445,9 @@ def _build_terrain_config(
         config.get("visualization", {}).get("mesh_res_path", _DEFAULT_MESH_RES_PATH)
         or _DEFAULT_MESH_RES_PATH
     )
+    las_terrain_path: str = str(
+        (las_terrain_dir(dataset_name) / "terrain.las_terrain").resolve()
+    )
     return {
         "schema_version": 1,
         "dataset_name": dataset_name,
@@ -453,6 +456,7 @@ def _build_terrain_config(
         "world_origin_lon_rad": center_lon_rad,
         "world_origin_height_m": center_h_m,
         "aircraft_mesh_path": mesh_res_path,
+        "las_terrain_path": las_terrain_path,
     }
 
 

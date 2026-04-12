@@ -142,6 +142,8 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | SB-1 | **Aircraft and SimRunner — Python Bindings** — `KinematicState` (read-only class; 14 scalar attributes: `time_s`, `latitude_rad`, `longitude_rad`, `altitude_m`, `velocity_north/east/down_mps`, `heading_rad`, `pitch_rad`, `roll_rad`, `alpha_rad`, `beta_rad`, `airspeed_m_s`, `roll_rate_rad_s`); `Aircraft` Python class (wraps `PyAircraft` — owns `Propulsion` + `Aircraft`, tracks simulation time; `__init__(config, dt_s=0.02)` accepts JSON string or file path; `"propulsion"` section selects `PropulsionJet`, `PropulsionEDF`, or `PropulsionProp`+`MotorElectric`/`MotorPiston` — absent section uses zero-thrust stub; `reset()`, `step(cmd, dt_s, rho_kgm3)`, `state()`); `RunnerConfig(dt_s, duration_s, time_scale, mode)` — mode accepted as string (`"batch"`, `"realtime"`, `"scaled_realtime"`); `SimRunner` — `initialize(config, aircraft)`, `start()` / `stop()` (GIL released), `is_running()`, `elapsed_sim_time_s()`; `py::keep_alive<1,3>` on `initialize()` prevents Aircraft GC; `bind_aircraft.cpp`, `bind_runner.cpp`, `py_aircraft_types.hpp` added to `src/python/`; design authority: [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) — Aircraft and SimRunner section | `test_aircraft_bindings.py` — 12 tests; `test_runner_bindings.py` — 13 tests; 25 tests total; full Python suite 211 passed, 1 skipped |
 | SB-2 | **SimRunner Live Ring Buffer** — `Sample` struct (`time_s`, `value`); `ChannelSubscriber` (RAII, per-subscriber circular buffer, `channel_name()`, `drain()` returns batches and resets, `write()` called under registry mutex; silent overflow drops oldest; `~ChannelSubscriber()` calls `registry_->unsubscribe()`); `ChannelRegistry` (`register_channel(name, sample_rate_hz, depth_s)` idempotent; `subscribe(name)` → `shared_ptr<ChannelSubscriber>` empty buffer / no backfill (PP-F37); `publish(name, time_s, value)` fan-out to all subscribers (PP-F36); `available_channels()`; registry-mutex → subscriber-mutex lock ordering prevents deadlock); `SimRunner` extended with `ChannelRegistry registry_` member and `channel_registry()` accessor; `initialize()` registers 14 kinematic channels at `1/dt_s` Hz, 60 s depth; `runLoop()` publishes all 14 after each `Aircraft::step()`; channel names `kinematic/time_s` … `kinematic/roll_rate_rad_s`; pybind11: `Sample`, `ChannelSubscriber`, `ChannelRegistry` bound in `bind_ring_buffer.cpp`; `channel_registry()` added to `SimRunner` binding in `bind_runner.cpp` (re-opening `py::class_<SimRunner>` raises "already defined" — method added in the original binding instead); design authority: [`docs/architecture/ring_buffer.md`](../architecture/ring_buffer.md) | C++: `RingBuffer_test.cpp` — 19 tests (registration, subscribe, write/drain, overflow, late-join, multi-subscriber, RAII, thread-safety); Python: `test_ring_buffer_bindings.py` — 13 tests; full C++ suite 440 pass; full Python suite 224 passed, 1 skipped |
 | MI-1 | **Manual Input — Full Subsystem** — `ManualInput` abstract base; `KeyboardInput` (integrating keyboard adapter, configurable scancodes, action keys, injected key-state provider); `JoystickInput` (SDL2 adapter, axis pipeline: calibration/trim/normalization/dead-zone/scale, per-axis `raw_min`/`raw_max`/`raw_trim`, inversion, disconnect fallback, `captureTrim()`, `enumerateDevices()`); `ScriptedInput` (mutex-protected slot, `push(AircraftCommand)`); `SimRunner::setManualInput()` / `lastManualInputFrame()` with `SDL_WasInit` guard; `joystick_verify` tool (DEVICE/READY protocol, JSON lines + `--proto` output, `ManualInputFrameProto`/`AircraftCommandProto` added to `liteaerosim.proto`); MinGW runtime linked statically + SDL2.dll deployed alongside executable at build time; `manual_input_monitor.py` shared library + standalone Qt app (`InputMonitorConfig`, `InputMonitorFigure`, `InputMonitorWindow`, `_subprocess_env()`; persistent gauge artists — no `ax.clear()` on update); `manual_input_demo.ipynb` thin notebook using ipympl + `FuncAnimation`; `gx12_config.json` Radiomaster GX12 axis mapping; `liteaero_sim_py` pybind11 module (`AircraftCommand`, `ScriptedInput`, `JoystickInput.enumerate_devices()`); SDL2 and pybind11 added to `conanfile.txt` and dependency registry; `ipympl>=0.9` added to `pyproject.toml`; design authority: [`docs/architecture/manual_input.md`](../architecture/manual_input.md), [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md), [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) | C++: `KeyboardInput_test.cpp` — 10 tests; `JoystickInput_test.cpp` — 15 tests; `ScriptedInput_test.cpp` — 4 tests; `SimRunner_test.cpp` — 4 new manual input tests; Python: `test_manual_input_bindings.py` — 7 tests; `test_manual_input_monitor.py` — 29 tests |
+| LS-1 | **Live Simulation Viewer** — `tools/live_sim.cpp` (C++ joystick launcher) implemented; loads `TerrainMesh` from `las_terrain_path` in `terrain_config.json` and calls `aircraft.setTerrain()`; `build_terrain.py` writes `las_terrain_path` to `terrain_config.json` (TDD — 3 new tests); `V_Terrain` renamed to `Terrain` across liteaero-flight and liteaero-sim (`Terrain.hpp` created; `V_Terrain.hpp` replaced with `#error` tombstone; all headers, sources, tests, and CMakeLists comments updated); design authority: [`docs/architecture/live_sim_view.md`](../architecture/live_sim_view.md) | Python: `test_build_terrain.py` — 3 new tests for `las_terrain_path` (field presence, dataset name in path, absolute path); all prior LS-1 tests unchanged |
+| GP-1 | **Godot Plugin GDExtension** — Steps 1–8: `visualization` section added to three aircraft config fixtures + `aircraft_config_v1.md` schema doc; `build_terrain.py` writes `aircraft_mesh_path` to `terrain_config.json` (TDD — tests written first); `TerrainLoader.gd` rewritten with `_load_aircraft_mesh()`, `_find_vehicle()`, dual-mode `_find_simulation_receiver()` (native GDExtension + GDScript placeholder) and `_set_world_origin()`; static `AircraftMesh` node removed from `World.tscn`; `register_types.hpp`, `register_types.cpp` (WSAStartup/WSACleanup + ClassDB registration), `SimulationReceiver.hpp`, `SimulationReceiver.cpp` (non-blocking UDP socket, `SimulationFrameProto::ParseFromArray`, ENU→Godot position + NED→Godot quaternion); `liteaero_sim.gdextension` manifest; `godot/assets/aircraft_lp.glb` copied; build system (`LITEAERO_SIM_BUILD_GODOT_PLUGIN=ON`) already in place; design authority: [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md) | Manual integration test checklist (see GP-1 §Tests); Python: `test_build_terrain.py` — 2 new integration tests + 4 new unit tests for `_build_terrain_config()` |
 
 ---
 
@@ -199,7 +201,7 @@ decision row 26.
 3. ~~Add `SimRunner::set_broadcaster()` and broadcast after each `step()`.~~ ✅
 4. ~~Bind `SimRunner.set_broadcaster()` in `bind_runner.cpp`.~~ ✅
 5. ~~`JoystickInput` wiring — resolved by OQ-LS-5 (C++ binary).~~ ✅
-6. Godot project and GDScript placeholder exist. GDExtension C++ plugin pending GP-1.
+6. ~~Godot project and GDScript placeholder exist. GDExtension C++ plugin pending GP-1.~~ ✅ GP-1 delivered.
 
 ### Scope — Live Simulation Viewer
 
@@ -208,14 +210,14 @@ decision row 26.
   14560 after each `SimRunner` step.~~ ✅
 - ~~**`SimSession`** — Python class; owns `Aircraft`, `SimRunner`,
   `UdpSimulationBroadcaster`; wires manual input; starts in `RealTime` mode.~~ ✅
-- ~~**CLI launcher** (`python/tools/live_sim.py`, `src/tools/live_sim.cpp`).~~ ✅
+- ~~**CLI launcher** — `python/tools/live_sim.py` (scripted/notebook); `tools/live_sim.cpp` (joystick + `TerrainMesh` wiring).~~ ✅
 - ~~**Terrain build pipeline** (`build_terrain.py`) — produces terrain GLB and
   `terrain_config.json` sidecar; terrain dataset built and in place.~~ ✅
-- **Godot 4 scene** — `World.tscn` basic structure exists; aircraft mesh and
-  GDExtension plugin pending GP-1. See [GP-1](#gp-1-godot-plugin-gdextension-implementation).
-- **Aircraft mesh** — `python/assets/aircraft_lp.glb` committed; mesh wiring and
-  configurable-per-aircraft-config path pending GP-1.
-- **LandingGear terrain interaction** — deferred; LS-1 does not block on it.
+- ~~**Godot 4 scene** — `World.tscn` basic structure exists; aircraft mesh and
+  GDExtension plugin pending GP-1.~~ ✅ GP-1 delivered — see [GP-1](#gp-1-godot-plugin-gdextension-implementation).
+- ~~**Aircraft mesh** — `python/assets/aircraft_lp.glb` committed; mesh wiring and
+  configurable-per-aircraft-config path pending GP-1.~~ ✅
+- ~~**LandingGear terrain interaction** — `live_sim.cpp` loads `TerrainMesh` from `las_terrain_path` in `terrain_config.json`; calls `aircraft.setTerrain()` before `runner.initialize()`.~~ ✅
 
 ### Tests — Live Simulation Viewer
 
@@ -243,7 +245,9 @@ removed.
 
 ### Deliverables — Godot Plugin GDExtension Implementation
 
-#### Step 1 — Aircraft config `visualization` section
+**All 8 steps delivered.**
+
+#### ~~Step 1 — Aircraft config `visualization` section~~ ✅
 
 Add `"visualization": {"mesh_res_path": "res://assets/aircraft_lp.glb"}` to:
 
@@ -254,13 +258,13 @@ Add `"visualization": {"mesh_res_path": "res://assets/aircraft_lp.glb"}` to:
 Update `docs/schemas/aircraft_config_v1.md` to document the new `visualization`
 section and its `mesh_res_path` field.
 
-#### Step 2 — `build_terrain.py`: write `aircraft_mesh_path` to `terrain_config.json`
+#### ~~Step 2 — `build_terrain.py`: write `aircraft_mesh_path` to `terrain_config.json`~~ ✅
 
 Read `config.get("visualization", {}).get("mesh_res_path", "res://assets/aircraft_lp.glb")`
 and write it as `aircraft_mesh_path` in the `terrain_config` dict. Regenerate
 `godot/terrain/terrain_config.json` once to pick up the new field.
 
-#### Step 3 — `TerrainLoader.gd`: aircraft mesh loading and GDExtension compatibility
+#### ~~Step 3 — `TerrainLoader.gd`: aircraft mesh loading and GDExtension compatibility~~ ✅
 
 - Add `_load_aircraft_mesh(config)`: reads `aircraft_mesh_path` from config; loads
   via `ResourceLoader`; instantiates as child of `Vehicle` node; applies
@@ -271,12 +275,12 @@ and write it as `aircraft_mesh_path` in the `terrain_config` dict. Regenerate
 - Update `_set_world_origin()`: call `receiver.set_world_origin(lat, lon, h)` when
   native type is detected; use direct property assignment for GDScript placeholder.
 
-#### Step 4 — `World.tscn`: remove static `AircraftMesh` node
+#### ~~Step 4 — `World.tscn`: remove static `AircraftMesh` node~~ ✅
 
 Remove the `MeshInstance3D` `AircraftMesh` placeholder. `TerrainLoader` instantiates
 the mesh at runtime.
 
-#### Step 5 — GDExtension C++ source files
+#### ~~Step 5 — GDExtension C++ source files~~ ✅
 
 Per [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md):
 
@@ -291,20 +295,20 @@ Per [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md):
   `SimulationFrameProto::ParseFromArray()`, computes ENU offset, sets `Vehicle`
   position and quaternion.
 
-#### Step 6 — `.gdextension` manifest
+#### ~~Step 6 — `.gdextension` manifest~~ ✅
 
 Create `godot/addons/liteaero_sim/liteaero_sim.gdextension` declaring
 `entry_symbol = "liteaero_sim_init"` and
 `windows.release.x86_64 = "res://addons/liteaero_sim/bin/liteaero_sim_gdext.dll"`.
 
-#### Step 7 — Build system
+#### ~~Step 7 — Build system~~ ✅
 
 `CMakeLists.txt` already has `LITEAERO_SIM_BUILD_GODOT_PLUGIN=OFF` option and
 `add_subdirectory(godot/addons/liteaero_sim/src)` guard.
 `godot/addons/liteaero_sim/src/CMakeLists.txt` already exists with version-parsing
 and error-handling logic. No further CMake changes required.
 
-#### Step 8 — Aircraft mesh asset placement
+#### ~~Step 8 — Aircraft mesh asset placement~~ ✅
 
 Copy `python/assets/aircraft_lp.glb` → `godot/assets/aircraft_lp.glb` so Godot
 can find it at `res://assets/aircraft_lp.glb`.

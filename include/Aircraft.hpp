@@ -8,7 +8,7 @@
 #include "airframe/Inertia.hpp"
 #include "landing_gear/LandingGear.hpp"
 #include <liteaero/control/FilterSS2Clip.hpp>
-#include <liteaero/terrain/V_Terrain.hpp>
+#include <liteaero/terrain/Terrain.hpp>
 #include "propulsion/Propulsion.hpp"
 #include <Eigen/Dense>
 #include <cstdint>
@@ -55,7 +55,7 @@ public:
 
     // Set the terrain model used by LandingGear each step.
     // Call before the first step(). Pass nullptr to disable landing gear contact forces.
-    void setTerrain(const liteaero::terrain::V_Terrain* terrain) { _terrain = terrain; }
+    void setTerrain(const liteaero::terrain::Terrain* terrain) { _terrain = terrain; }
 
     // Reset all warm-start state to the initial conditions from the last initialize() call.
     void reset();
@@ -99,7 +99,7 @@ private:
     Inertia                                           _inertia;
     std::unique_ptr<Propulsion>                       _propulsion;
     LandingGear                                       _landing_gear;
-    const liteaero::terrain::V_Terrain*               _terrain          = nullptr;
+    const liteaero::terrain::Terrain*               _terrain          = nullptr;
     bool                                              _has_landing_gear = false;
 
     // 2nd-order LP command response filters (Nz, Ny, roll rate).

@@ -586,7 +586,34 @@ class TestBuildTerrainConfig:
         )
         for key in ("schema_version", "dataset_name", "glb_path",
                     "world_origin_lat_rad", "world_origin_lon_rad",
-                    "world_origin_height_m", "aircraft_mesh_path"):
+                    "world_origin_height_m", "aircraft_mesh_path",
+                    "las_terrain_path"):
             assert key in result, f"missing key: {key}"
         assert result["schema_version"] == 1
         assert result["glb_path"] == "res://terrain/terrain.glb"
+
+    def test_las_terrain_path_contains_dataset_name(self) -> None:
+        import build_terrain as bt
+
+        result = bt._build_terrain_config(
+            config={},
+            dataset_name="my_dataset",
+            center_lat_rad=0.1,
+            center_lon_rad=0.2,
+            center_h_m=0.0,
+        )
+        assert "my_dataset" in result["las_terrain_path"]
+        assert result["las_terrain_path"].endswith("terrain.las_terrain")
+
+    def test_las_terrain_path_is_absolute(self) -> None:
+        import build_terrain as bt
+        from pathlib import Path
+
+        result = bt._build_terrain_config(
+            config={},
+            dataset_name="ds",
+            center_lat_rad=0.1,
+            center_lon_rad=0.2,
+            center_h_m=0.0,
+        )
+        assert Path(result["las_terrain_path"]).is_absolute()
