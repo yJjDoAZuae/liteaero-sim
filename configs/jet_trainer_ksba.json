@@ -89,6 +89,9 @@
         "_comment": "Coverage half-side for terrain build — independent of initial_state",
         "radius_km": 90.0
     },
+    "visualization": {
+        "mesh_res_path": "res://assets/aircraft_lp.glb"
+    },
     "initial_state": {
         "_comment": "KSBA runway 07 threshold — aircraft at rest on the ground",
         "latitude_rad": 0.60073,

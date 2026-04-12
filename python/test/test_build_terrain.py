@@ -496,3 +496,97 @@ class TestEndToEndMocked:
         assert any(n.startswith("tile_L") for n in node_names), (
             f"No tile_L* nodes found in GLB. Node names: {node_names}"
         )
+
+    def test_terrain_config_includes_default_aircraft_mesh_path(
+        self, tmp_path: Path, _aircraft_config: Path
+    ) -> None:
+        """terrain_config.json must include aircraft_mesh_path with the default
+        value when visualization section is absent from the aircraft config."""
+        import build_terrain as bt
+
+        with self._all_mocks(bt, tmp_path / "cache"):
+            bt.build_terrain(_aircraft_config)
+
+        config_path = tmp_path / "godot" / "terrain" / "terrain_config.json"
+        cfg = json.loads(config_path.read_text())
+        assert "aircraft_mesh_path" in cfg, "aircraft_mesh_path missing from terrain_config.json"
+        assert cfg["aircraft_mesh_path"] == "res://assets/aircraft_lp.glb"
+
+    def test_terrain_config_aircraft_mesh_path_from_visualization_section(
+        self, tmp_path: Path
+    ) -> None:
+        """terrain_config.json uses mesh_res_path from the visualization section
+        when it is present in the aircraft config."""
+        import build_terrain as bt
+
+        cfg = _minimal_config(radius_km=1.0)
+        cfg["visualization"] = {"mesh_res_path": "res://assets/jet_trainer.glb"}
+        path = tmp_path / "jet.json"
+        path.write_text(json.dumps(cfg))
+
+        with self._all_mocks(bt, tmp_path / "cache"):
+            bt.build_terrain(path)
+
+        config_path = tmp_path / "godot" / "terrain" / "terrain_config.json"
+        result = json.loads(config_path.read_text())
+        assert result["aircraft_mesh_path"] == "res://assets/jet_trainer.glb"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _build_terrain_config helper
+# ---------------------------------------------------------------------------
+
+class TestBuildTerrainConfig:
+    def test_aircraft_mesh_path_from_visualization_section(self) -> None:
+        import build_terrain as bt
+
+        config = {"visualization": {"mesh_res_path": "res://assets/custom.glb"}}
+        result = bt._build_terrain_config(
+            config=config,
+            dataset_name="ds",
+            center_lat_rad=0.1,
+            center_lon_rad=0.2,
+            center_h_m=10.0,
+        )
+        assert result["aircraft_mesh_path"] == "res://assets/custom.glb"
+
+    def test_aircraft_mesh_path_default_when_no_visualization(self) -> None:
+        import build_terrain as bt
+
+        result = bt._build_terrain_config(
+            config={},
+            dataset_name="ds",
+            center_lat_rad=0.1,
+            center_lon_rad=0.2,
+            center_h_m=10.0,
+        )
+        assert result["aircraft_mesh_path"] == "res://assets/aircraft_lp.glb"
+
+    def test_aircraft_mesh_path_default_when_mesh_res_path_absent(self) -> None:
+        import build_terrain as bt
+
+        result = bt._build_terrain_config(
+            config={"visualization": {}},
+            dataset_name="ds",
+            center_lat_rad=0.1,
+            center_lon_rad=0.2,
+            center_h_m=10.0,
+        )
+        assert result["aircraft_mesh_path"] == "res://assets/aircraft_lp.glb"
+
+    def test_required_fields_present(self) -> None:
+        import build_terrain as bt
+
+        result = bt._build_terrain_config(
+            config={},
+            dataset_name="ksba_ga",
+            center_lat_rad=0.60073,
+            center_lon_rad=-2.09139,
+            center_h_m=3.0,
+        )
+        for key in ("schema_version", "dataset_name", "glb_path",
+                    "world_origin_lat_rad", "world_origin_lon_rad",
+                    "world_origin_height_m", "aircraft_mesh_path"):
+            assert key in result, f"missing key: {key}"
+        assert result["schema_version"] == 1
+        assert result["glb_path"] == "res://terrain/terrain.glb"

@@ -267,14 +267,13 @@ def build_terrain(
 
     shutil.copy2(g_path, godot_terrain_dir / "terrain.glb")
 
-    terrain_config = {
-        "schema_version": 1,
-        "dataset_name": dataset_name,
-        "glb_path": "res://terrain/terrain.glb",
-        "world_origin_lat_rad": center_lat_rad,
-        "world_origin_lon_rad": center_lon_rad,
-        "world_origin_height_m": center_h_m,
-    }
+    terrain_config = _build_terrain_config(
+        config=config,
+        dataset_name=dataset_name,
+        center_lat_rad=center_lat_rad,
+        center_lon_rad=center_lon_rad,
+        center_h_m=center_h_m,
+    )
     (godot_terrain_dir / "terrain_config.json").write_text(
         json.dumps(terrain_config, indent=4)
     )
@@ -424,6 +423,37 @@ def _select_display_tiles(
         if dist_m <= radius:
             display.append(tile)
     return display
+
+
+_DEFAULT_MESH_RES_PATH = "res://assets/aircraft_lp.glb"
+
+
+def _build_terrain_config(
+    config: dict,
+    dataset_name: str,
+    center_lat_rad: float,
+    center_lon_rad: float,
+    center_h_m: float,
+) -> dict:
+    """Return the terrain_config.json dict for the Godot sidecar file.
+
+    Reads ``visualization.mesh_res_path`` from *config* to populate
+    ``aircraft_mesh_path``.  Falls back to ``_DEFAULT_MESH_RES_PATH`` when
+    the field is absent.
+    """
+    mesh_res_path: str = (
+        config.get("visualization", {}).get("mesh_res_path", _DEFAULT_MESH_RES_PATH)
+        or _DEFAULT_MESH_RES_PATH
+    )
+    return {
+        "schema_version": 1,
+        "dataset_name": dataset_name,
+        "glb_path": "res://terrain/terrain.glb",
+        "world_origin_lat_rad": center_lat_rad,
+        "world_origin_lon_rad": center_lon_rad,
+        "world_origin_height_m": center_h_m,
+        "aircraft_mesh_path": mesh_res_path,
+    }
 
 
 def _godot_terrain_dir() -> Path:

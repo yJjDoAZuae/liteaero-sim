@@ -26,6 +26,7 @@ to initialize the simulation model.  The schema is validated by
 | `airframe` | object | Structural and operational performance limits (envelope). |
 | `inertia` | object | Mass and moment-of-inertia properties. |
 | `lift_curve` | object | Lift-curve model parameters. |
+| `visualization` | object | (optional) Godot rendering configuration. Absent field falls back to defaults. |
 | `initial_state` | object | Initial kinematic state. |
 
 ---
@@ -123,6 +124,26 @@ Maps directly to `LiftCurveParams` used by `LiftCurveModel`.
 | `cl_sep ≤ cl_max` | The post-stall plateau cannot exceed the stall peak. |
 | `cl_sep_neg ≥ cl_min` | The negative plateau cannot exceed (in magnitude) the negative stall trough. |
 | `cl_min < 0` | The negative stall vertex must be below zero. |
+
+---
+
+## `visualization` Section (optional)
+
+Controls which Godot 3D mesh is loaded for this aircraft configuration during live simulation.
+Read by `build_terrain.py` and written to `terrain_config.json` as `aircraft_mesh_path`.
+`TerrainLoader.gd` instantiates the mesh at scene start from `terrain_config.json` — no
+editor drag-and-drop required.
+
+| Field | Type | Default | Description |
+| ------- | ------ | ------- | ------------- |
+| `mesh_res_path` | string | `"res://assets/aircraft_lp.glb"` | Godot `res://` path to the aircraft GLB mesh. Must be a file present under `godot/` (the Godot project root). |
+
+The `visualization` section is optional. If absent, `build_terrain.py` uses the default path
+`"res://assets/aircraft_lp.glb"`.
+
+To swap the aircraft mesh for a specific test case without rebuilding terrain, edit
+`godot/terrain/terrain_config.json` directly and change `aircraft_mesh_path`. See
+[`docs/architecture/godot_plugin.md §Aircraft Config Visualization Section`](../architecture/godot_plugin.md#aircraft-config-visualization-section).
 
 ---
 

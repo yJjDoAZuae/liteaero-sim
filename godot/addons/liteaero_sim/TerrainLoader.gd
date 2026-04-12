@@ -1,11 +1,12 @@
 ## TerrainLoader.gd — Programmatic terrain dataset loader.
 ##
 ## Design authority: docs/architecture/terrain_build.md §OQ-TB-2 and §OQ-TB-3
+##                   docs/architecture/godot_plugin.md §TerrainLoader Integration
 ##
-## Reads godot/terrain/terrain_config.json at scene start, loads the GLB
+## Reads godot/terrain/terrain_config.json at scene start, loads the terrain GLB
 ## programmatically via ResourceLoader, instantiates it into the scene tree,
-## applies per-node LOD visibility ranges, and sets the world origin on
-## SimulationReceiver — all before the first UDP packet arrives.
+## applies per-node LOD visibility ranges, loads the aircraft mesh, and sets
+## the world origin on SimulationReceiver — all before the first UDP packet arrives.
 ##
 ## Workflow after a terrain build:
 ##   1. Run build_terrain (Python).
@@ -53,6 +54,7 @@ func _ready() -> void:
 
 	_apply_visibility_ranges(terrain_node)
 	add_child(terrain_node)
+	_load_aircraft_mesh(config)
 	_set_world_origin(config)
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,33 @@ func _load_terrain_scene(glb_path: String) -> Node3D:
 	return (packed as PackedScene).instantiate() as Node3D
 
 
+## Load the aircraft mesh from aircraft_mesh_path in config and attach it to
+## the Vehicle node as a child.  Applies body-frame correction (nose=+X ->
+## Godot -Z forward) per OQ-LS-9 Option B.
+func _load_aircraft_mesh(config: Dictionary) -> void:
+	var mesh_path: String = config.get("aircraft_mesh_path", "")
+	if mesh_path.is_empty():
+		push_warning("TerrainLoader: no aircraft_mesh_path in terrain_config.json — skipping mesh load")
+		return
+
+	var packed: Resource = ResourceLoader.load(mesh_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if packed == null or not (packed is PackedScene):
+		push_error("TerrainLoader: failed to load aircraft mesh from %s" % mesh_path)
+		return
+
+	var mesh_node: Node3D = (packed as PackedScene).instantiate() as Node3D
+	mesh_node.name = "AircraftMesh"
+	# Body-frame correction: nose=+X body frame -> Godot -Z (forward). See OQ-LS-9.
+	mesh_node.rotation_degrees = Vector3(0, 90, 0)
+
+	var vehicle := _find_vehicle(get_tree().root)
+	if vehicle == null:
+		push_error("TerrainLoader: Vehicle node not found — cannot attach aircraft mesh")
+		return
+
+	vehicle.add_child(mesh_node)
+
+
 ## Recursively walk node and set visibility_range_* on every MeshInstance3D
 ## whose name matches the tile_L{N}_* convention written by export_gltf.py.
 func _apply_visibility_ranges(node: Node) -> void:
@@ -126,21 +155,48 @@ func _parse_lod_from_name(node_name: String) -> int:
 	return lod
 
 
-## Set world_origin_* on the SimulationReceiver node found in the scene tree.
+## Depth-first search for the Vehicle node by name.
+func _find_vehicle(node: Node) -> Node3D:
+	if node.name == "Vehicle" and node is Node3D:
+		return node as Node3D
+	for child: Node in node.get_children():
+		var result := _find_vehicle(child)
+		if result != null:
+			return result
+	return null
+
+
+## Set world origin on the SimulationReceiver node found in the scene tree.
+## Supports both the native GDExtension type and the GDScript placeholder.
 func _set_world_origin(config: Dictionary) -> void:
 	var receiver := _find_simulation_receiver(get_tree().root)
 	if receiver == null:
 		push_warning("TerrainLoader: SimulationReceiver not found in scene tree")
 		return
 
-	receiver.world_origin_lat_rad = float(config.get("world_origin_lat_rad", 0.0))
-	receiver.world_origin_lon_rad = float(config.get("world_origin_lon_rad", 0.0))
-	receiver.world_origin_h_m     = float(config.get("world_origin_height_m", 0.0))
-	receiver.world_origin_set     = true
+	var lat_rad := float(config.get("world_origin_lat_rad", 0.0))
+	var lon_rad := float(config.get("world_origin_lon_rad", 0.0))
+	var h_m     := float(config.get("world_origin_height_m", 0.0))
+
+	if receiver.get_class() == "SimulationReceiver":
+		# GDExtension native type — use the bound method.
+		receiver.set_world_origin(lat_rad, lon_rad, h_m)
+	else:
+		# GDScript placeholder — direct property assignment.
+		receiver.world_origin_lat_rad = lat_rad
+		receiver.world_origin_lon_rad = lon_rad
+		receiver.world_origin_h_m     = h_m
+		receiver.world_origin_set     = true
 
 
-## Depth-first search for the first node whose script is SimulationReceiver.gd.
+## Depth-first search for the SimulationReceiver node.
+## Detects both the native GDExtension type (by class name) and the GDScript
+## placeholder (by script resource path) so TerrainLoader works in either state.
 func _find_simulation_receiver(node: Node) -> Node:
+	# Native GDExtension type — get_class() returns the registered C++ class name.
+	if node.get_class() == "SimulationReceiver":
+		return node
+	# GDScript placeholder — check script path.
 	var script: Script = node.get_script() as Script
 	if script != null and script.resource_path.ends_with("SimulationReceiver.gd"):
 		return node

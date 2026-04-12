@@ -19,11 +19,5 @@ shadow_enabled = true
 script = ExtResource("1_recv")
 broadcast_port = 14560
 
-[node name="AircraftMesh" type="MeshInstance3D" parent="Vehicle"]
-; Aircraft mesh loaded via drag-and-drop of python/assets/aircraft_lp.glb.
-; Axis correction: nose=+X body frame -> Godot -Z forward.
-; Apply rotation_degrees = Vector3(0, 90, 0) to this node in the Inspector.
-; See docs/architecture/live_sim_view.md OQ-LS-9 for details.
-
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.819152, 0.573576, 0, -0.573576, 0.819152, 0, 50, 150)
