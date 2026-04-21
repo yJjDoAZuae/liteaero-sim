@@ -697,6 +697,8 @@ $$
 
 `alphaPeak()` returns $\alpha_{peak}$ — the angle at which the positive quadratic reaches $C_{L,max}$ with zero slope. `alphaTrough()` returns $\alpha_{peak,neg}$ — the angle at which the negative quadratic reaches $C_{L,min}$ with zero slope.
 
+`alphaStar()` returns $\alpha_*$ — the angle at which the linear regime joins the positive stall transition parabola ($C^1$ join). `alphaStarNeg()` returns $\alpha_{*,neg}$ — the symmetric join on the negative side. These are the stall hysteresis exit thresholds: when a descending alpha falls at or below $\alpha_*$ (or a rising alpha reaches $\alpha_{*,neg}$), the `_stalled` flag clears and CL recovery begins.
+
 `alphaSep()` returns $\alpha_{sep}$ — the angle at which the positive descending parabola meets the flat post-stall plateau ($C_L = C_{L,sep}$). `alphaSepNeg()` returns the symmetric angle on the negative side. These mark the outer boundary of the parabolic CL domain; beyond them $C_L' = 0$ and the derivative of $f$ reduces to $T\cos\alpha$.
 
 ---
@@ -872,10 +874,10 @@ That is: step toward $\alpha_{eq}$ at the full Newton solution, but limit the ch
 Because $\alpha_{k+1}$ may differ from $\alpha_{eq}$ during the bridging transient, the realized load factor is not the commanded $n$ but the load factor achievable at the rate-limited alpha:
 
 $$
-n_{\text{realized}} = \frac{q_\infty S\,C_L(\alpha_{k+1}) + T\sin(\alpha_{k+1})}{mg}
+n_{\text{realized}} = \frac{q_\infty S\,C_{L,\text{eff}} + T\sin(\alpha_{k+1})}{mg}
 $$
 
-This is the load factor actually delivered to the kinematic integrator.  The commanded $n$ is the request; $n_{\text{realized}}$ is what the equations of motion see.
+where $C_{L,\text{eff}}$ is the effective lift coefficient from `_cl_recovering` — the stall-aware value described in [Stall Hysteresis and CL Recovery](#stall-hysteresis-and-cl-recovery) below.  In normal pre-stall operation $C_{L,\text{eff}} = C_L(\alpha_{k+1})$.  This is the load factor actually delivered to the kinematic integrator.  The commanded $n$ is the request; $n_{\text{realized}}$ is what the equations of motion see.
 
 This saturation of $n_{\text{realized}}$ is physically correct and acceptable: the aircraft is already near its structural or aerodynamic ceiling when the bridge is active.  Any shortfall in realized Nz during the bridge transient is a consequence of limited pitch authority, not a modeling error.
 
@@ -915,7 +917,7 @@ In the nominal lift curve model, CL recovers immediately as alpha decreases from
 This hysteresis means the CL curve traces different paths depending on the direction of alpha change:
 
 - **Increasing alpha past $\alpha_{sep}$**: CL follows the nominal model — linear to $\alpha_*$, parabolic to $\alpha_{peak}$, parabolic descent to $\alpha_{sep}$, then flat at $C_{L,sep}$.
-- **Decreasing alpha from stall**: CL stays flat at $C_{L,sep}$ until $\alpha$ falls below $\alpha_*$, at which point the linear model reapplies.
+- **Decreasing alpha from stall**: CL follows $\min(C_{L,sep},\,C_{L,\text{nom}}(\alpha))$ until the stall flag clears.  In the typical configuration ($C_{L,sep} < C_{L_\alpha}\,\alpha_*$) this equals $C_{L,sep}$ throughout the descent, and the flag clears when $\alpha$ falls below $\alpha_*$.  When $C_{L,sep} > C_{L_\alpha}\,\alpha_*$, the effective CL snaps to the nominal curve at the intersection above $\alpha_*$, and the stall flag clears at that crossing — recovery begins without waiting for $\alpha_*$.
 
 The region $\alpha_* \leq \alpha \leq \alpha_{sep}$ is therefore hysteretic: CL depends on whether the aircraft arrived from above or below.
 
@@ -932,39 +934,48 @@ $$
 
 Symmetrically for the negative side (alpha has passed $\alpha_{trough}$ and begins to increase).
 
-**Exit condition** (clear flag):
+**Exit conditions** (clear flag — either trigger is sufficient):
+
+**Threshold exit:** alpha reaches the recovery angle:
 $$
 \alpha_{k+1} \leq \alpha_* \quad\Longrightarrow\quad \texttt{\_stalled} = \text{false}
-$$
-$$
+\qquad
 \alpha_{k+1} \geq \alpha_{*,neg} \quad\Longrightarrow\quad \texttt{\_stalled\_neg} = \text{false}
 $$
+
+**Snap-down exit** (high-plateau case only, $C_{L,sep} > C_{L_\alpha}\,\alpha_*$): the nominal lift curve (ascending quadratic) descends to the plateau level before $\alpha_*$ is reached.  For the positive side, with $\alpha_{k+1}$ in the ascending-quadratic domain ($\alpha_* < \alpha_{k+1} < \alpha_{peak}$):
+$$
+C_{L,\text{nom}}(\alpha_{k+1}) \leq C_{L,sep} \quad\Longrightarrow\quad \texttt{\_stalled} = \text{false}
+$$
+At this crossing, $C_{L,\text{eff}} = \min(C_{L,sep}, C_{L,\text{nom}}) = C_{L,\text{nom}}$ — the effective CL is already on the nominal curve, so no hysteresis remains.  Symmetrically for the negative side ($\alpha_{trough}$ plays the role of $\alpha_{peak}$).
 
 The flags are evaluated using the rate-limited $\alpha_{k+1}$ (after the alpha bridge has been applied), not the Newton equilibrium target $\alpha_{eq}$.
 
 #### Effective CL While Stalled
 
-While `_stalled` is true, the effective lift coefficient is fixed at the post-stall plateau regardless of alpha:
+While `_stalled` is true, the effective lift coefficient is the minimum of the post-stall plateau and the nominal lift curve value at the current alpha:
 
 $$
-C_{L,\text{eff}} = C_{L,sep} \quad \text{while } \texttt{\_stalled} = \text{true}
+C_{L,\text{eff}} = \min\!\left(C_{L,sep},\, C_{L,\text{nom}}(\alpha_{k+1})\right) \quad \text{while } \texttt{\_stalled} = \text{true}
 $$
 
-This is the **returning curve** — CL stays flat at $C_{L,sep}$ throughout the entire descent from $\alpha_{peak}$ through the stall transition region, all the way down to $\alpha_*$.  The nominal descending parabola is bypassed entirely on the way back.
+**Typical case** ($C_{L,sep} < C_{L_\alpha}\,\alpha_*$): the nominal parabola remains above $C_{L,sep}$ throughout the entire descent from $\alpha_{peak}$ to $\alpha_*$, so $C_{L,\text{eff}} = C_{L,sep}$ for the full stall transition.  This is the **returning curve** — the nominal descending parabola is bypassed entirely on the way back.
 
-If alpha reverses and increases while `_stalled` is true (a new Nz demand before recovery completes), CL remains flat at $C_{L,sep}$ — the boundary layer has not reattached and no lift recovery occurs until alpha falls back to $\alpha_*$.  If alpha rises back past $\alpha_{peak}$ and then decreases again, the entry condition fires again and `_cl_recovering` resets to $C_{L,sep}$.
+**High-plateau case** ($C_{L,sep} > C_{L_\alpha}\,\alpha_*$): as alpha descends from $\alpha_{peak}$ into the ascending-quadratic region ($\alpha_* \leq \alpha \leq \alpha_{peak}$), the nominal CL eventually drops below $C_{L,sep}$.  At that crossing, $C_{L,\text{eff}}$ snaps instantly to the nominal value — the two curves intersect, so there is no discontinuity — and `_stalled` clears via the snap-down exit.  Recovery can begin above $\alpha_*$.
 
-When $\alpha_{k+1}$ falls below $\alpha_*$, `_stalled` clears.  If alpha then begins to rise, it re-enters the nominal lift curve at the linear regime $C_L = C_{L_\alpha}\,\alpha$; CL descends along the nominal parabola only if alpha rises far enough to re-enter the stall transition.  At that point, if alpha once again passes $\alpha_{peak}$ and decreases, `_stalled` sets again.
+If alpha reverses and increases while `_stalled` is still true (before a snap-down crossing), $C_{L,\text{eff}}$ continues to track $\min(C_{L,sep}, C_{L,\text{nom}})$.  If alpha rises back past $\alpha_{peak}$ and then decreases again, the entry condition fires again and `_cl_recovering` resets.
+
+When `_stalled` clears — via the threshold exit ($\alpha_{k+1} \leq \alpha_*$) or the snap-down exit — the CL recovery bridge activates.  If alpha then begins to rise from the threshold exit point, it re-enters the nominal lift curve at the linear regime $C_L = C_{L_\alpha}\,\alpha$; from the snap-down exit point, it is already on the ascending quadratic.  If alpha once again passes $\alpha_{peak}$ and decreases, `_stalled` sets again.
 
 #### CL Recovery Rate Limiting
 
-At the moment `_stalled` clears ($\alpha_{k+1}$ falls below $\alpha_*$), the nominal CL at $\alpha_*$ is:
+At the moment `_stalled` clears, the nominal CL at the exit alpha is:
 
 $$
 C_{L,\text{nom}}(\alpha_*) = C_{L_\alpha}\,\alpha_*
 $$
 
-which is higher than the returning curve value $C_{L,sep}$ (since $C_{L,sep} < C_{L,max}$ and $C_{L,max} > C_{L_\alpha}\,\alpha_*$ by construction).  The CL cannot jump instantaneously to the nominal value — lift rebuilds as boundary layer flow reattaches, which takes finite time.
+In the typical case ($C_{L,sep} < C_{L_\alpha}\,\alpha_*$) this is higher than the returning curve value $C_{L,sep}$, and a gap exists that closes over several steps.  In the high-plateau case ($C_{L,sep} > C_{L_\alpha}\,\alpha_*$), the snap-down during the stalled phase has already brought $C_{L,\text{eff}}$ to the nominal value, so the gap is zero and the rate-limit formula passes through immediately.  The CL cannot jump instantaneously to the nominal value — lift rebuilds as boundary layer flow reattaches, which takes finite time.
 
 The maximum rate of CL recovery is related to `alpha_dot_max_rad_s` through the lift-curve slope:
 
@@ -974,35 +985,25 @@ $$
 
 This has a clear physical basis: the same pitch authority that limits how fast $\alpha$ can change also bounds how fast the aerodynamic angle of attack seen by the wing can change, and therefore how fast attached-flow lift can rebuild.  No additional configuration parameter is required.
 
-The CL recovery bridge operates analogously to the alpha rate bridge:
+The CL recovery bridge operates analogously to the alpha rate bridge: upward movement toward nominal is rate-limited to $\dot{C}_{L,\max}\Delta t$ per step; downward movement (when nominal falls below the current recovering value) is instantaneous — there is no physical basis for sustaining CL above what the attached-flow model predicts:
 
 $$
-C_{L,k+1} = C_{L,k} + \text{clamp}\!\left(C_{L,\text{nom}}(\alpha_{k+1}) - C_{L,k},\ 0,\ \dot{C}_{L,\max}\Delta t\right)
+C_{L,k+1} = \min\!\left(C_{L,\text{nom}}(\alpha_{k+1}),\ C_{L,k} + \dot{C}_{L,\max}\Delta t\right)
 $$
 
-The clamp is one-sided (lower bound zero): CL may only increase during recovery, never overshoot.  The bridge is inactive — $C_{L,k+1} = C_{L,\text{nom}}(\alpha_{k+1})$ — as soon as the gap closes.
-
-**Instant jump when nominal is lower.** If at any point $C_{L,\text{nom}}(\alpha_{k+1}) < C_{L,k}$ (e.g., the aircraft is in a region where the nominal curve is below the returning plateau), the clamp produces a zero step and $C_{L,k+1} = C_{L,k}$.  But this condition — nominal below the returning value — cannot occur in the linear regime below $\alpha_*$ where the flag has cleared.  It can occur transiently above $\alpha_*$ if alpha has just crossed and nominal is still rising; in that case the one-sided clamp correctly holds CL at its current value rather than jumping down.  The only direction where an instantaneous jump is permitted is downward: if $C_{L,\text{nom}}(\alpha_{k+1}) < C_{L,k}$ strictly (nominal is below current), accept the jump — this represents a condition where the nominal model would produce less lift than the recovering model, and there is no physical basis for sustaining the higher value.
-
-Concretely: replace the one-sided clamp with a full-range clamp that permits downward steps but limits upward steps:
-
-$$
-C_{L,k+1} = C_{L,k} + \text{clamp}\!\left(C_{L,\text{nom}}(\alpha_{k+1}) - C_{L,k},\ -\infty,\ \dot{C}_{L,\max}\Delta t\right)
-$$
-
-Equivalently: $C_{L,k+1} = \min\!\left(C_{L,\text{nom}}(\alpha_{k+1}),\ C_{L,k} + \dot{C}_{L,\max}\Delta t\right)$.
+The bridge is inactive — $C_{L,k+1} = C_{L,\text{nom}}(\alpha_{k+1})$ — as soon as the gap closes.
 
 #### Interaction with the Newton Solver
 
 While `_stalled` is true, the Newton loop is bypassed entirely.  The alpha equilibrium target is computed by a single explicit solve using the current recovering CL as a fixed constant:
 
 $$
-f(\alpha) = q_\infty S\,C_{L,k} + T\sin\alpha - n\,mg = 0
+f(\alpha) = q_\infty S\,C_{L,\text{eff}} + T\sin\alpha - n\,mg = 0
 \quad\Longrightarrow\quad
-\alpha_{eq} = \arcsin\!\left(\frac{n\,mg - q_\infty S\,C_{L,k}}{T}\right)
+\alpha_{eq} = \arcsin\!\left(\frac{n\,mg - q_\infty S\,C_{L,\text{eff}}}{T}\right)
 $$
 
-This is the fully-separated explicit form (Issue 4 above) with $C_{L,k}$ substituted for $C_{L,sep}$.  From the solver's perspective, CL is a constant — it is not varying with alpha during the stall — so $f'(\alpha) = T\cos\alpha$ and no iteration is required.
+where $C_{L,\text{eff}}$ is the current value of `_cl_recovering` (equal to $C_{L,sep}$ throughout the stalled descent).  From the solver's perspective, CL is a constant — it is not varying with alpha during the stall — so $f'(\alpha) = T\cos\alpha$ and no iteration is required.
 
 The alpha bridge then steps toward $\alpha_{eq}$ at the rate limit.  **The alpha bridge is the only mechanism moving alpha while stalled** — no unconstrained jump occurs.
 

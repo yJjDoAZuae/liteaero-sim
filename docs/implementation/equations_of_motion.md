@@ -347,9 +347,13 @@ After `alpha_out` is determined (post rate-limit), update flags:
 // Entry: alpha has passed alphaPeak and is now decreasing
 if (alpha_out < _alpha_prev && _alpha_prev >= _lift.alphaPeak()) _stalled     = true;
 if (alpha_out > _alpha_prev && _alpha_prev <= _lift.alphaTrough()) _stalled_neg = true;
-// Exit
-if (alpha_out <= _lift.alphaStar())    _stalled     = false;
-if (alpha_out >= _lift.alphaStarNeg()) _stalled_neg = false;
+// Exit: threshold (alphaStar) or snap-down (nominal meets plateau in ascending quadratic)
+if (alpha_out <= _lift.alphaStar() ||
+    (alpha_out < _lift.alphaPeak() && _lift.evaluate(alpha_out) <= _lift.clSep()))
+    _stalled = false;
+if (alpha_out >= _lift.alphaStarNeg() ||
+    (alpha_out > _lift.alphaTrough() && _lift.evaluate(alpha_out) >= _lift.clSepNeg()))
+    _stalled_neg = false;
 ```
 
 Note: `_alpha_prev` here is the value from the *previous* step (before updating it to
@@ -371,15 +375,15 @@ bool stalled_neg = false;   // negative-side hysteresis active
    step it down; verify `stalled` sets on the first decreasing step
 2. `Hysteresis_FlagDoesNotSetOnAscent` — push alpha past `alphaPeak` on the way up;
    verify `stalled` is false while ascending
-3. `Hysteresis_FlagClearsOnlyAtAlphaStar` — reduce alpha through stall region; flag
-   remains set until alpha crosses `alphaStar()`, clears immediately after
-4. `Hysteresis_CLFlatThroughDescentRegion` — verify `cl_eff == C_L_sep` throughout
+3. `Hysteresis_FlagClearsAtAlphaStar` — configuration with `clSep() < clAlpha() * alphaStar()`; reduce alpha through stall region; flag remains set until alpha crosses `alphaStar()`, clears immediately after
+4. `Hysteresis_FlagClearsAtSnapDown` — configuration with `clSep() > clAlpha() * alphaStar()`; flag clears when `_lift.evaluate(alpha_out)` first drops to `clSep()` in the ascending-quadratic domain, above `alphaStar()`
+5. `Hysteresis_CLFlatThroughDescentRegion` — verify `cl_eff == C_L_sep` throughout
    the descent from `alphaPeak` to `alphaStar`, not the nominal descending parabola
-5. `Hysteresis_AlphaBounceDoesNotClearFlag` — alpha descends partway, then increases
+6. `Hysteresis_AlphaBounceDoesNotClearFlag` — alpha descends partway, then increases
    again without reaching `alphaStar()`; flag stays set
-6. `Hysteresis_NoFlagWithoutStallEntry` — normal pre-stall operation; flag never sets
-7. `Hysteresis_NegativeSideSymmetric` — negative-side entry and exit
-8. `Hysteresis_SerializationRoundTrip` — JSON and proto round-trip with flag set
+7. `Hysteresis_NoFlagWithoutStallEntry` — normal pre-stall operation; flag never sets
+8. `Hysteresis_NegativeSideSymmetric` — negative-side entry and exit
+9. `Hysteresis_SerializationRoundTrip` — JSON and proto round-trip with flag set
 
 ---
 
@@ -392,15 +396,15 @@ float _cl_recovering;      // current effective CL during post-stall recovery (p
 float _cl_recovering_neg;  // current effective CL (negative side)
 ```
 
-Initialized in constructor to `_lift.evaluate(0.0f)` (zero for symmetric airfoils).
-`reset(alpha0_rad)` sets both to `_lift.evaluate(alpha0_rad)` to avoid a one-step
-initialization error when starting at a non-zero alpha.
+Initialized in constructor and `reset()` to `0.0f`.  Under OQ-10-B, every non-stalled
+`solve()` call overwrites `_cl_recovering` before computing `n_realized`; the initial
+value is never used without being overwritten first.
 
 **Three-phase CL behavior:**
 
 | Phase | Condition | Effective CL |
 | --- | --- | --- |
-| Stalled descent | `_stalled == true` (alpha ≥ `alphaStar()`) | Fixed at `C_L_sep` |
+| Stalled descent | `_stalled == true` (alpha ≥ `alphaStar()`) | `min(clSep(), C_L_nom(alpha))` — snaps to nominal if nominal falls below `C_L_sep` |
 | Recovery | `_stalled == false`, `_cl_recovering < C_L_nom(alpha)` | Rate-limited rise toward nominal at `cl_dot_max` |
 | Normal | `_stalled == false`, `_cl_recovering == C_L_nom(alpha)` | Tracks nominal lift curve |
 
@@ -418,15 +422,24 @@ After updating hysteresis flags (Item 2), update `_cl_recovering`:
 const float cl_dot_max = _lift.clAlpha() * _alpha_dot_max_rad_s;
 const float cl_nom = _lift.evaluate(alpha_out);
 
+// Positive side
 if (_stalled) {
-    _cl_recovering = _lift.params().cl_sep;   // flat plateau; no recovery while stalled
+    // min(): hold plateau, but snap instantly to nominal if nominal falls below clSep
+    _cl_recovering = std::min(_lift.clSep(), cl_nom);
 } else {
-    // Rate-limit upward; instant downward
+    // Rate-limit upward approach to nominal; instant downward snap
     _cl_recovering = std::min(cl_nom, _cl_recovering + cl_dot_max * in.dt_s);
 }
-```
 
-Symmetrically for `_cl_recovering_neg` using `cl_sep_neg`.
+// Negative side — mirrors positive with inverted direction (max instead of min)
+if (_stalled_neg) {
+    // max(): hold plateau, but snap instantly to nominal if nominal rises above clSepNeg
+    _cl_recovering_neg = std::max(_lift.clSepNeg(), cl_nom);
+} else {
+    // Rate-limit downward approach to nominal; instant upward snap
+    _cl_recovering_neg = std::max(cl_nom, _cl_recovering_neg - cl_dot_max * in.dt_s);
+}
+```
 
 When `_stalled` is true, the Newton loop is replaced by the explicit solve:
 
@@ -451,19 +464,41 @@ const float n_realized = (qS * cl_eff + T * std::sin(alpha_out)) / mg;
 Note: `_cl_recovering` tracks nominal when `_stalled == false` and the bridge has
 converged, so using it unconditionally is correct in all phases.
 
-**`LiftCurveModel` accessor needed:**
+**alphaDot during stall (OQ-15-A):**
+
+While `_stalled` or `_stalled_neg`, the Newton loop is bypassed so `positive_stall` and
+`negative_stall` remain `false`.  The correct IFT derivative for the explicit solve (flat
+CL, `dC_L/dα = 0`) is `T·cos(α)` alone.  Replace the existing `fprime_alpha` computation:
 
 ```cpp
-float clAlpha() const;   // returns the pre-stall lift-curve slope C_Lα
+const float fprime_alpha = _stalled     ?  T * std::cos(alpha_out)
+                         : _stalled_neg ? -T * std::cos(alpha_out)
+                         : qS * _lift.derivative(alpha_out) + T * std::cos(alpha_out);
+float alphaDot = 0.f;
+if (!positive_stall && !negative_stall && std::abs(fprime_alpha) > kTol) {
+    alphaDot = mg * in.n_z_dot / fprime_alpha;
+}
 ```
 
-Add if not already present.
+The existing Newton fold-guard (`positive_stall` / `negative_stall`) remains and fires only
+in the non-stalled path.
+
+**`LiftCurveModel` accessors needed:**
+
+```cpp
+float clAlpha()  const;  // returns the pre-stall lift-curve slope C_Lα
+float clSep()    const;  // returns C_L_sep — positive-side post-stall plateau CL
+float clSepNeg() const;  // returns C_L_sep_neg — negative-side post-stall plateau CL
+```
+
+Add any not already present.  `clSep()` and `clSepNeg()` are included in Implementation
+Order Step 1.
 
 **New fields in `LoadFactorOutputs`:**
 
 ```cpp
 float cl_eff = 0.f;          // effective CL used (recovering or nominal)
-bool  cl_recovering = false;  // true while CL recovery bridge is active (below alphaStar, CL < nominal)
+bool  cl_recovering = false;  // true while CL recovery bridge is active (_cl_recovering < C_L_nom(alpha_out))
 ```
 
 **Serialization:** add `_cl_recovering` and `_cl_recovering_neg` to JSON and proto
@@ -472,17 +507,22 @@ serialization.
 **Tests to write:**
 
 1. `CLRecovery_FlatThroughEntireDescentToAlphaStar` — enter stall at `alphaPeak`, reduce
-   alpha to `alphaStar()`; verify `cl_eff == C_L_sep` throughout, not the nominal parabola
-2. `CLRecovery_RateLimitedBelowAlphaStar` — alpha crosses `alphaStar()`; verify CL climbs
+   alpha to `alphaStar()`; verify `cl_eff == C_L_sep` throughout.  Valid only when
+   `C_L_sep < C_L_star`; use a lift curve where `clSep() < clAlpha() * alphaStar()`.
+2. `CLRecovery_SnapToNominalBeforeAlphaStar` — use a lift curve where
+   `C_L_sep > C_L_star`; enter stall; verify `cl_eff` tracks `min(clSep(), cl_nom)` and
+   snaps to the nominal descending quadratic at the intersection alpha (above `alphaStar()`)
+   with no CL discontinuity.
+3. `CLRecovery_RateLimitedBelowAlphaStar` — alpha crosses `alphaStar()`; verify CL climbs
    toward nominal at exactly `cl_alpha * alpha_dot_max * dt` per step
-3. `CLRecovery_InstantDownwardFollow` — during recovery (below `alphaStar()`), raise alpha
+4. `CLRecovery_InstantDownwardFollow` — during recovery (below `alphaStar()`), raise alpha
    back into the descending quadratic; verify `cl_eff` follows nominal parabola downward
    immediately without rate limiting
-4. `CLRecovery_BridgeDeactivatesAtNominal` — run recovery to completion; verify
+5. `CLRecovery_BridgeDeactivatesAtNominal` — run recovery to completion; verify
    `cl_recovering == false` and `cl_eff == nominal`
-5. `CLRecovery_NzFromEffectiveCL` — confirm realized Nz uses `cl_eff` throughout all phases
-6. `CLRecovery_TZeroHoldsAlpha` — T=0 while stalled; verify `alpha_out` held at `_alpha_prev`
-7. Serialization round-trip for `_cl_recovering` / `_cl_recovering_neg`
+6. `CLRecovery_NzFromEffectiveCL` — confirm realized Nz uses `cl_eff` throughout all phases
+7. `CLRecovery_TZeroHoldsAlpha` — T=0 while stalled; verify `alpha_out` held at `_alpha_prev`
+8. Serialization round-trip for `_cl_recovering` / `_cl_recovering_neg`
 
 ---
 
@@ -492,7 +532,7 @@ The following questions were raised during planning and resolved as documented.
 
 | # | Question | Decision |
 | --- | --- | --- |
-| OQ-1 | Alpha bridge activation scope (unconditional vs. stall-conditional) | **Unconditional.** Apply the rate limit to all alpha steps. Physics are always correct; with a generous `alpha_dot_max_rad_s` default (π rad/s) the bridge is transparent in normal pre-stall operation. |
+| OQ-1 | Alpha bridge activation scope (unconditional vs. stall-conditional) | **Unconditional.** Apply the rate limit to all alpha steps. Physics are always correct; with a generous `alpha_dot_max_rad_s` default (π/2 rad/s) the bridge is transparent in normal pre-stall operation. |
 | OQ-2 | Newton residual while `_stalled` is true (nominal CL vs. recovering CL) | **Explicit solve using recovering CL.** While `_stalled`, Newton is replaced by `α_eq = arcsin((n·mg − qS·_cl_recovering) / T)`. The alpha bridge is the only mechanism moving alpha; it drives toward this target. Realized Nz uses `_cl_recovering`. |
 | OQ-3 | `dt_s` delivery to `solve()` | **Add `dt_s` to `LoadFactorInputs`.** Explicit per-call field; supports variable-rate stepping; no constructor or serialization changes to `LoadFactorAllocator`. |
 | OQ-4 | `LiftCurveModel` accessors needed | **Add `alphaStar()`, `alphaStarNeg()`, `clAlpha()` as public accessors.** Consistent with the existing `alphaPeak()`, `alphaSep()` interface; no design trade-off. |
@@ -506,103 +546,19 @@ incorporated into the Design Decisions table:
 | # | Question | Decision |
 | --- | --- | --- |
 | OQ-7 | Newton residual while stalled — contradiction with OQ-2 | **B: explicit solve using recovering CL** (see OQ-2 row above). OQ-2 revised accordingly. Algorithm doc §"Interaction with the Newton Solver" is correct as written. |
-| OQ-8 | Hysteresis entry condition (`alphaSep()` vs. `alphaPeak()`) | **Entry when alpha has passed `alphaPeak()` and begins to reduce**, not at `alphaSep()`. Algorithm doc entry condition was wrong; must be corrected. CL stays flat at `C_L_sep` throughout the descent from `alphaPeak()` until `alphaStar()`. |
-| OQ-9 | Re-entry behavior when alpha increases while `_stalled` is true | **CL stays flat at `C_L_sep` until alpha reaches `alphaStar()` regardless of intermediate direction changes.** Once below `alphaStar()`, the CL recovery bridge activates. If alpha then rises back into the descending quadratic, CL follows the nominal parabola downward (no rate limit on descent). If alpha rises past `alphaPeak()` and then decreases again, `_stalled` re-enters and `_cl_recovering` resets to `C_L_sep`. |
+| OQ-8 | Hysteresis entry condition (`alphaSep()` vs. `alphaPeak()`) | **Entry when alpha has passed `alphaPeak()` and begins to reduce**, not at `alphaSep()`. |
+| OQ-9 | Re-entry behavior when alpha increases while `_stalled` is true | **Effective CL is `min(clSep(), clNom(alpha))` throughout the stalled phase** (see OQ-16). If the nominal descends below C_L_sep before alphaStar(), CL snaps to nominal at that crossing with no discontinuity. Once below alphaStar(), the CL recovery bridge activates. If alpha rises back into the transition and CL overshoots nominal, it snaps instantly to nominal. If alpha rises past alphaPeak() and decreases again, `_stalled` re-enters. |
+| OQ-10 | When to introduce `_cl_recovering` | **B: Introduce in Item 1.** The realized-Nz formula is written once and never replaced; Items 2/3 add only the stalled update branch. |
+| OQ-11 | `_cl_recovering` initialization value | **Initialize to zero.** Under OQ-10-B, every non-stalled `solve()` call sets `_cl_recovering = _lift.evaluate(alpha_out)` before computing `n_realized`; the initial value is overwritten before first use. |
+| OQ-12 | Hysteresis entry check — one-step delay | **A: Accept one-step delay.** At 100 Hz the error is one step of the nominal parabola; negligible and self-correcting. |
+| OQ-13 | `clSep()` / `clSepNeg()` vs. `params()` accessor | **A: Add `clSep()` and `clSepNeg()` as individual accessors.** Consistent with `alphaPeak()`, `alphaSep()` pattern. Added to Implementation Order Step 1. |
+| OQ-14 | `cl_eff` delivery to `Aircraft.cpp` | **A: Add `cl_eff` to `LoadFactorOutputs`.** `Aircraft.cpp` replaces `_liftCurve->evaluate(lfa_out.alpha_rad)` at line 203 with `lfa_out.cl_eff`. |
+| OQ-15 | `alphaDot` computation during stall | **A: While `_stalled`, substitute `fprime_alpha = T * cos(alpha_out)`.** Exact IFT derivative for the flat-CL explicit solve; zero if T ≈ 0. Same substitution applies for `_stalled_neg`. |
+| OQ-16 | Stalled and negative-side CL formulas | **Stalled branch: `_cl_recovering = min(clSep(), clNom)`.** Allows instant snap to nominal when nominal descends below C_L_sep — no discontinuity at the intersection, recovery can begin above alphaStar(). Non-stalled recovery: `min(clNom, _cl_recovering + clDotMax * dt)`. Negative side mirrors with inverted sign throughout: stalled `max(clSepNeg(), clNom)`; recovery `max(clNom, _cl_recovering_neg - clDotMax * dt)`. |
 
 ### Open Questions
 
-The following questions must be resolved before implementation begins.
-
----
-
-**OQ-10: Item 1 realized-Nz formula will be replaced by Item 3**
-
-Item 1 specifies `n_realized = (qS * _lift.evaluate(alpha_out) + T * sin(alpha_out)) / mg`.
-Item 3 establishes that `_cl_recovering` is the correct CL for realized Nz in all phases.
-Item 1 will be written before `_cl_recovering` exists, so its formula will need replacement
-when Item 3 is added — a regression risk if not planned for explicitly.
-
-**Alternatives:**
-
-- **A.** Accept two-step replacement — Item 1 uses `_lift.evaluate()` as a placeholder;
-  Item 3 replaces it. Document the replacement in both items.
-- **B.** Introduce `_cl_recovering` in Item 1, initialized to `_lift.evaluate(alpha_out)`
-  every step when not stalled. Items 2/3 add the stalled update branch without changing the
-  realized-Nz formula.
-
-**Recommendation: B.** Writing the realized-Nz formula once and never replacing it is
-safer than a planned formula replacement that could be missed or partially applied.
-
----
-
-**OQ-11: `_cl_recovering` initialization value**
-
-The plan specifies initialization to zero. At construction or after `reset()` with a
-non-zero `alpha0_rad`, `_cl_recovering = 0` produces a wrong realized Nz on the first
-`solve()` call.
-
-**Alternatives:**
-
-- **A.** Initialize to zero, accept one-step error — catches up on the first call.
-- **B.** Initialize to `_lift.evaluate(alpha0_rad)` in `reset()` — `reset()` already takes
-  `alpha0_rad`; one lift-curve evaluation eliminates the error. Constructor initializes to
-  `_lift.evaluate(0.0f)`.
-
-**Recommendation: B.** `reset()` already has the information needed; the fix is trivial
-and eliminates a guaranteed wrong value on the first call after any non-zero-alpha reset.
-
----
-
-**OQ-12: Hysteresis entry check — one-step delay acceptable?**
-
-The Item 2 entry condition compares `alpha_out < _alpha_prev && _alpha_prev >= alphaPeak()`.
-For one timestep after the peak is crossed downward, `_stalled` is false and CL follows
-the nominal descending parabola.
-
-**Alternatives:**
-
-- **A.** Accept the one-step delay — at 100 Hz this is 10 ms.
-- **B.** Check against `alpha_eq` before the bridge — `_stalled` sets the moment the
-  Newton target first descends from above `alphaPeak()`. Requires restructuring operation
-  order so the hysteresis check runs before the bridge step.
-
-**Recommendation: A.** The error in realized CL for one step in the descending parabola
-is small and self-correcting. Option B adds ordering complexity for negligible benefit.
-
----
-
-**OQ-13: `_lift.params().cl_sep` is inaccessible**
-
-Item 3 uses `_lift.params().cl_sep` to set `_cl_recovering` while stalled. `LiftCurveModel`
-has no `params()` accessor.
-
-**Alternatives:**
-
-- **A.** Add `clSep()` and `clSepNeg()` accessors — consistent with the existing pattern
-  (`alphaPeak()`, `alphaSep()`, etc.).
-- **B.** Add `params()` returning `const LiftCurveParams&` — exposes the full params struct.
-
-**Recommendation: A.** Individual accessors are consistent with the existing interface.
-Exposing the full params struct grants more access than needed.
-
----
-
-**OQ-14: How `cl_eff` reaches `Aircraft.cpp`**
-
-`Aircraft.cpp` line 203 computes `cl` from `_liftCurve->evaluate(lfa_out.alpha_rad)` and
-passes it to `AeroPerformance::compute()`, which produces the Wind-frame force vector fed
-to `KinematicState::step()`. During stall recovery, this must use `cl_eff` instead.
-
-**Alternatives:**
-
-- **A.** Add `cl_eff` to `LoadFactorOutputs` — `Aircraft.cpp` replaces line 203 with
-  `lfa_out.cl_eff`. Clean; no duplication of state.
-- **B.** `Aircraft.cpp` manages its own recovering-CL state independently — duplicates
-  logic already in `LoadFactorAllocator`.
-
-**Recommendation: A.** `cl_eff` is a direct output of the allocator's solve. `Aircraft.cpp`
-already reads all other force-relevant outputs from `LoadFactorOutputs`; this is consistent
-with that pattern.
+All questions from OQ-10 through OQ-16 have been resolved; see Design Decisions above.  No open questions remain before implementation.
 
 ---
 
@@ -610,13 +566,13 @@ with that pattern.
 
 | Step | Action |
 | --- | --- |
-| 1 | Add `alphaStar()`, `alphaStarNeg()`, `clAlpha()` accessors to `LiftCurveModel` (with tests) |
+| 1 | Add `alphaStar()`, `alphaStarNeg()`, `alphaTrough()`, `clAlpha()`, `clSep()`, `clSepNeg()` accessors to `LiftCurveModel` (with tests) |
 | 2 | Add `alpha_dot_max_rad_s` to `AirframePerformance` (proto, JSON, round-trip tests) |
-| 3 | Add `dt_s` to `LoadFactorInputs` |
-| 4 | Implement Item 1 (alpha rate bridge) — tests first |
-| 5 | Implement Item 2 (hysteresis flags) — tests first |
-| 6 | Implement Item 3 (CL recovery) — tests first |
-| 7 | Update all fixture files and inline configs for new `alpha_dot_max_rad_s` field |
+| 3 | Update all fixture files and inline configs for new `alpha_dot_max_rad_s` field |
+| 4 | Add `dt_s` to `LoadFactorInputs` |
+| 5 | Implement Item 1 (alpha rate bridge) — tests first |
+| 6 | Implement Item 2 (hysteresis flags) — tests first |
+| 7 | Implement Item 3 (CL recovery) — tests first |
 | 8 | Update `Aircraft.cpp` to pass `alpha_dot_max_rad_s` and `dt_s` through |
 
 ---
