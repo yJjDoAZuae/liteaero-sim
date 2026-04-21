@@ -823,6 +823,206 @@ Newton's method is then run from $\alpha_0$ rather than from a fixed starting po
 
 **Initialization and regime switching.** On the first call (or after a large discontinuous $\delta n$), the predictor may land far from the correct root. In this case, evaluate $f$ at $\alpha_*$, $\alpha_{peak}$, and $\alpha_{sep}$ to identify which intervals contain sign changes, then pick the initial guess from the interval consistent with the current branch state.
 
+**Thrust-reduction branch switch.** A qualitatively different regime change occurs when thrust drops while $\alpha_{prev}$ is above $\alpha_{peak}$.  The fold point $\alpha^*$ where $f'(\alpha) = q_\infty S C_L'(\alpha) + T\cos\alpha = 0$ moves toward $\alpha_{peak}$ as $T$ decreases.  If thrust drops enough that $f'(\alpha_{prev}) < 0$ with the new (lower) $T$, the aircraft is no longer at a stable operating point — the net vertical force is decreasing with $\alpha$ at the current attitude.  A real fly-by-wire system responds by commanding nose-down to reduce $\alpha$ until a stable pre-fold operating point is recovered.
+
+The solver must replicate this behavior.  The detection condition is:
+
+$$
+f'(\alpha_{prev};\,T_{\text{new}}) = q_\infty S C_L'(\alpha_{prev}) + T_{\text{new}}\cos\alpha_{prev} < 0
+\quad\text{and}\quad
+f(\alpha_{prev};\,T_{\text{new}}) > 0
+$$
+
+The first condition means $\alpha_{prev}$ is now on the wrong side of the new fold (negative gradient — demand increases faster than lift + thrust can track).  The second means the load factor demand is still unsatisfied (the aircraft is not simply over-lifting).  Together they identify the thrust-reduction stall: $\alpha_{prev}$ is above the new fold with insufficient force to meet the demand.
+
+When this condition is detected, the predictor **discards $\alpha_{prev}$ and resets the warm-start to $\alpha = 0$**.  Newton then converges to the pre-stall root that satisfies the demand with the reduced thrust.  This produces a nose-down transient: $\alpha$ drops from the post-fold value to the new pre-stall solution, mirroring the FBW pitch-down response.
+
+If the demand is unachievable even on the pre-stall side (e.g., thrust dropped so much that even $\alpha_{peak}$ cannot provide enough lift), Newton sweeps to the fold and the fold guard clamps $\alpha$ at the new $\alpha^*$ — the best achievable attitude with the current thrust.  The stall flag is set.
+
+Note: if $f(\alpha_{prev}) \leq 0$ (the aircraft is generating more than enough force — e.g., a throttle cut at low commanded Nz), there is no instability and no branch switch is needed.  The standard predictor step handles this case correctly.
+
+### Alpha Rate Limiting: Stall Recovery Bridge
+
+#### Problem Statement
+
+When operating above $\alpha_{peak}$ — whether due to a large Nz command with sufficient thrust, or because the branch-continuation predictor has tracked alpha into the post-fold region — a reduction in thrust or commanded Nz can create a discontinuity: the Newton equilibrium solution $\alpha_{eq}$ jumps from a post-fold value to a pre-stall value in one timestep.  Even with the thrust-reduction branch switch above, the solver's warm-start reset produces an instantaneous step in $\alpha$, which violates physical continuity.
+
+A real FBW aircraft with finite pitch authority cannot change $\alpha$ instantaneously.  The pitch channel drives $\alpha$ toward the equilibrium at a rate bounded by the achievable pitch authority.  The alpha rate-limiting mechanism models this constraint.
+
+#### Design Concept: Bridge, Not Filter
+
+This mechanism is **not** a continuous lag filter on $\alpha$.  It is a **bridge**: a transient device that applies only when the Newton equilibrium $\alpha_{eq}$ is not reachable in a single timestep at the configured pitch authority.  The moment $\alpha$ converges to $\alpha_{eq}$, the bridge deactivates and the solver is solution-locked at the Newton equilibrium.
+
+The distinction is critical: a continuous lag filter would slow down normal pre-stall maneuvers — every pull-up would be sluggish.  The bridge activates only when alpha would otherwise jump discontinuously (across the fold or away from a post-fold operating point).
+
+#### Mechanism
+
+Let $\alpha_{k}$ be the current alpha (from the previous timestep), $\alpha_{eq}$ be the Newton equilibrium target computed by the existing solver, and $\dot\alpha_{\max}$ be the maximum pitch authority rate (rad/s), a new aircraft configuration parameter.
+
+The rate-limited output $\alpha_{k+1}$ is:
+
+$$
+\alpha_{k+1} = \alpha_{k} + \text{clamp}\!\left(\alpha_{eq} - \alpha_{k},\ -\dot\alpha_{\max}\Delta t,\ +\dot\alpha_{\max}\Delta t\right)
+$$
+
+That is: step toward $\alpha_{eq}$ at the full Newton solution, but limit the change per timestep to $\dot\alpha_{\max}\Delta t$.  When $|\alpha_{eq} - \alpha_k| \leq \dot\alpha_{\max}\Delta t$, the clamp is inactive and $\alpha_{k+1} = \alpha_{eq}$ — the bridge deactivates and normal solution-locked behavior is restored.
+
+#### Load Factor from Rate-Limited Alpha
+
+Because $\alpha_{k+1}$ may differ from $\alpha_{eq}$ during the bridging transient, the realized load factor is not the commanded $n$ but the load factor achievable at the rate-limited alpha:
+
+$$
+n_{\text{realized}} = \frac{q_\infty S\,C_L(\alpha_{k+1}) + T\sin(\alpha_{k+1})}{mg}
+$$
+
+This is the load factor actually delivered to the kinematic integrator.  The commanded $n$ is the request; $n_{\text{realized}}$ is what the equations of motion see.
+
+This saturation of $n_{\text{realized}}$ is physically correct and acceptable: the aircraft is already near its structural or aerodynamic ceiling when the bridge is active.  Any shortfall in realized Nz during the bridge transient is a consequence of limited pitch authority, not a modeling error.
+
+#### When the Bridge Is Active
+
+The bridge is active if and only if:
+
+$$
+|\alpha_{eq} - \alpha_k| > \dot\alpha_{\max}\Delta t
+$$
+
+In normal pre-stall operation this condition is never true: each Newton step produces an $\alpha_{eq}$ that is only slightly different from $\alpha_k$ (the predictor places the warm-start near the solution), and $\dot\alpha_{\max}\Delta t$ is much larger than the inter-timestep change.  The bridge imposes no cost on normal operation.
+
+The bridge activates only when the Newton equilibrium target has moved by more than one step of pitch authority from the current alpha — which occurs precisely in the scenarios described above: post-fold operating points under reduced thrust, or large step demands that sweep alpha across the fold.
+
+#### Relationship to the Thrust-Reduction Branch Switch
+
+The thrust-reduction branch switch (warm-start reset to $\alpha = 0$) and the alpha rate limiter are complementary:
+
+- The branch switch ensures the Newton solver finds the correct pre-stall root after a thrust reduction event.
+- The rate limiter ensures that the transition from the old $\alpha_{prev}$ (post-fold) to the new $\alpha_{eq}$ (pre-stall) is physically continuous.
+
+Without the rate limiter, the branch switch produces an instantaneous jump.  With the rate limiter, $\alpha$ walks from the post-fold value to the pre-stall equilibrium at $\dot\alpha_{\max}$ — modeling the FBW nose-down recovery.  Once $\alpha$ reaches $\alpha_{eq}$, the bridge deactivates and solution-locked operation resumes.
+
+#### Configuration Parameter
+
+`alpha_dot_max_rad_s` — maximum pitch authority rate (rad/s).  Resides in the `airframe` section of the aircraft configuration (alongside `alpha_max_rad` and `alpha_min_rad`).  Represents the combined effect of pitch control authority and pitch moment of inertia: how fast the FBW system can drive $\alpha$ given pitch damping and available control moment.
+
+A default of $\pi/2$ rad/s is a generous upper bound that makes the bridge effectively inactive for most configurations; operators with specific authority models should set this to the achievable pitch rate at the maneuver Nz condition.
+
+### Stall Hysteresis and CL Recovery
+
+#### Physical Motivation
+
+In the nominal lift curve model, CL recovers immediately as alpha decreases from the post-stall region — the model is stateless, so the same $\alpha$ always produces the same $C_L$.  Real aerodynamics do not behave this way.  Once separated flow has established over the wing, reducing alpha does not immediately reattach it.  The boundary layer remains separated — and CL stays at the post-stall plateau value — until alpha has dropped far enough for reattachment to occur.  Reattachment happens approximately at $\alpha_*$, the angle where the parabolic stall transition meets the linear regime.  Below $\alpha_*$, attached flow is recovered and the linear lift model applies again.
+
+This hysteresis means the CL curve traces different paths depending on the direction of alpha change:
+
+- **Increasing alpha past $\alpha_{sep}$**: CL follows the nominal model — linear to $\alpha_*$, parabolic to $\alpha_{peak}$, parabolic descent to $\alpha_{sep}$, then flat at $C_{L,sep}$.
+- **Decreasing alpha from stall**: CL stays flat at $C_{L,sep}$ until $\alpha$ falls below $\alpha_*$, at which point the linear model reapplies.
+
+The region $\alpha_* \leq \alpha \leq \alpha_{sep}$ is therefore hysteretic: CL depends on whether the aircraft arrived from above or below.
+
+#### State
+
+The hysteresis state is a boolean flag `_stalled` (positive side) and `_stalled_neg` (negative side) carried by `LoadFactorAllocator`.  The flags are initialized to `false`.
+
+**Entry condition** (set flag): the flag sets when alpha has passed $\alpha_{peak}$ and the rate-limited output $\alpha_{k+1}$ begins to decrease:
+
+$$
+\alpha_{k+1} < \alpha_k \quad \text{and} \quad \alpha_k \geq \alpha_{peak}
+\quad\Longrightarrow\quad \texttt{\_stalled} = \text{true}
+$$
+
+Symmetrically for the negative side (alpha has passed $\alpha_{trough}$ and begins to increase).
+
+**Exit condition** (clear flag):
+$$
+\alpha_{k+1} \leq \alpha_* \quad\Longrightarrow\quad \texttt{\_stalled} = \text{false}
+$$
+$$
+\alpha_{k+1} \geq \alpha_{*,neg} \quad\Longrightarrow\quad \texttt{\_stalled\_neg} = \text{false}
+$$
+
+The flags are evaluated using the rate-limited $\alpha_{k+1}$ (after the alpha bridge has been applied), not the Newton equilibrium target $\alpha_{eq}$.
+
+#### Effective CL While Stalled
+
+While `_stalled` is true, the effective lift coefficient is fixed at the post-stall plateau regardless of alpha:
+
+$$
+C_{L,\text{eff}} = C_{L,sep} \quad \text{while } \texttt{\_stalled} = \text{true}
+$$
+
+This is the **returning curve** — CL stays flat at $C_{L,sep}$ throughout the entire descent from $\alpha_{peak}$ through the stall transition region, all the way down to $\alpha_*$.  The nominal descending parabola is bypassed entirely on the way back.
+
+If alpha reverses and increases while `_stalled` is true (a new Nz demand before recovery completes), CL remains flat at $C_{L,sep}$ — the boundary layer has not reattached and no lift recovery occurs until alpha falls back to $\alpha_*$.  If alpha rises back past $\alpha_{peak}$ and then decreases again, the entry condition fires again and `_cl_recovering` resets to $C_{L,sep}$.
+
+When $\alpha_{k+1}$ falls below $\alpha_*$, `_stalled` clears.  If alpha then begins to rise, it re-enters the nominal lift curve at the linear regime $C_L = C_{L_\alpha}\,\alpha$; CL descends along the nominal parabola only if alpha rises far enough to re-enter the stall transition.  At that point, if alpha once again passes $\alpha_{peak}$ and decreases, `_stalled` sets again.
+
+#### CL Recovery Rate Limiting
+
+At the moment `_stalled` clears ($\alpha_{k+1}$ falls below $\alpha_*$), the nominal CL at $\alpha_*$ is:
+
+$$
+C_{L,\text{nom}}(\alpha_*) = C_{L_\alpha}\,\alpha_*
+$$
+
+which is higher than the returning curve value $C_{L,sep}$ (since $C_{L,sep} < C_{L,max}$ and $C_{L,max} > C_{L_\alpha}\,\alpha_*$ by construction).  The CL cannot jump instantaneously to the nominal value — lift rebuilds as boundary layer flow reattaches, which takes finite time.
+
+The maximum rate of CL recovery is related to `alpha_dot_max_rad_s` through the lift-curve slope:
+
+$$
+\dot{C}_{L,\max} = C_{L_\alpha} \cdot \dot\alpha_{\max}
+$$
+
+This has a clear physical basis: the same pitch authority that limits how fast $\alpha$ can change also bounds how fast the aerodynamic angle of attack seen by the wing can change, and therefore how fast attached-flow lift can rebuild.  No additional configuration parameter is required.
+
+The CL recovery bridge operates analogously to the alpha rate bridge:
+
+$$
+C_{L,k+1} = C_{L,k} + \text{clamp}\!\left(C_{L,\text{nom}}(\alpha_{k+1}) - C_{L,k},\ 0,\ \dot{C}_{L,\max}\Delta t\right)
+$$
+
+The clamp is one-sided (lower bound zero): CL may only increase during recovery, never overshoot.  The bridge is inactive — $C_{L,k+1} = C_{L,\text{nom}}(\alpha_{k+1})$ — as soon as the gap closes.
+
+**Instant jump when nominal is lower.** If at any point $C_{L,\text{nom}}(\alpha_{k+1}) < C_{L,k}$ (e.g., the aircraft is in a region where the nominal curve is below the returning plateau), the clamp produces a zero step and $C_{L,k+1} = C_{L,k}$.  But this condition — nominal below the returning value — cannot occur in the linear regime below $\alpha_*$ where the flag has cleared.  It can occur transiently above $\alpha_*$ if alpha has just crossed and nominal is still rising; in that case the one-sided clamp correctly holds CL at its current value rather than jumping down.  The only direction where an instantaneous jump is permitted is downward: if $C_{L,\text{nom}}(\alpha_{k+1}) < C_{L,k}$ strictly (nominal is below current), accept the jump — this represents a condition where the nominal model would produce less lift than the recovering model, and there is no physical basis for sustaining the higher value.
+
+Concretely: replace the one-sided clamp with a full-range clamp that permits downward steps but limits upward steps:
+
+$$
+C_{L,k+1} = C_{L,k} + \text{clamp}\!\left(C_{L,\text{nom}}(\alpha_{k+1}) - C_{L,k},\ -\infty,\ \dot{C}_{L,\max}\Delta t\right)
+$$
+
+Equivalently: $C_{L,k+1} = \min\!\left(C_{L,\text{nom}}(\alpha_{k+1}),\ C_{L,k} + \dot{C}_{L,\max}\Delta t\right)$.
+
+#### Interaction with the Newton Solver
+
+While `_stalled` is true, the Newton loop is bypassed entirely.  The alpha equilibrium target is computed by a single explicit solve using the current recovering CL as a fixed constant:
+
+$$
+f(\alpha) = q_\infty S\,C_{L,k} + T\sin\alpha - n\,mg = 0
+\quad\Longrightarrow\quad
+\alpha_{eq} = \arcsin\!\left(\frac{n\,mg - q_\infty S\,C_{L,k}}{T}\right)
+$$
+
+This is the fully-separated explicit form (Issue 4 above) with $C_{L,k}$ substituted for $C_{L,sep}$.  From the solver's perspective, CL is a constant — it is not varying with alpha during the stall — so $f'(\alpha) = T\cos\alpha$ and no iteration is required.
+
+The alpha bridge then steps toward $\alpha_{eq}$ at the rate limit.  **The alpha bridge is the only mechanism moving alpha while stalled** — no unconstrained jump occurs.
+
+If $T = 0$, the explicit solve has no solution (the equation becomes $q_\infty S\,C_{L,k} = n\,mg$, which is either always true or never true independent of alpha).  In this case $\alpha_{eq}$ is undefined; the alpha bridge holds $\alpha_{k+1} = \alpha_k$ and the stall flag remains set until alpha is externally driven below $\alpha_*$.
+
+Once `_stalled` clears and the CL recovery bridge deactivates ($C_{L,k}$ has reached $C_{L,\text{nom}}(\alpha_{k+1})$), the nominal Newton loop resumes for both equilibrium solve and derivative computation.
+
+#### Summary of `LoadFactorAllocator` State
+
+| State variable | Purpose |
+| --- | --- |
+| `_alpha_prev` | Warm-start and branch-continuation predictor |
+| `_beta_prev` | Warm-start for lateral solver |
+| `_n_z_prev` | Branch-continuation predictor for alpha |
+| `_n_y_prev` | Branch-continuation predictor for beta |
+| `_stalled` | Positive-side hysteresis flag |
+| `_stalled_neg` | Negative-side hysteresis flag |
+| `_cl_recovering` | Current effective CL during post-stall recovery (positive side) |
+| `_cl_recovering_neg` | Current effective CL during post-stall recovery (negative side) |
+
 ### Implicit Equation for $\beta$
 
 The lateral load factor $n_y$ (positive in $+\hat{y}_W$, to the right of the velocity vector) is the commanded lateral force per unit weight. It is provided jointly by the aerodynamic side force $Y$ and the lateral component of thrust $-T\cos\alpha\sin\beta$:
