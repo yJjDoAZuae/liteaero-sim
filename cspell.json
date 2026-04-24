@@ -49,7 +49,9 @@
         "ksba",
         "KSBA",
         "mathbf",
-        "bmatrix"
+        "bmatrix",
+        "Eigen",
+        "constexpr"
     ],
     "ignorePaths": [
         "build/**",
