@@ -921,7 +921,17 @@ determined by their own polling interval.
 
 ### OQ-LS-12 — Vertical datum convention for `initial_state.altitude_m`
 
-**Status:** Open — blocks Issue 6 fix.
+**Resolved — Option A.** Aircraft state altitude is always WGS84 ellipsoidal.
+`initial_state.altitude_m` is interpreted as WGS84 ellipsoidal height; the
+canonical internal convention is unchanged from current behavior. Any MSL
+height needed for instrumentation, charts, or atmosphere is produced by an
+explicit conversion using the EGM2008 geoid undulation at the aircraft's
+lat/lon (see OQ-LS-13 and OQ-LS-14). No `altitude_msl_m` config field is
+introduced — config authors must supply ellipsoidal values. Update
+[`Aircraft.cpp:108`](../../src/Aircraft.cpp) inline documentation and the
+aircraft-config schema docs to state this convention explicitly.
+
+**Background and rejected options retained below.**
 
 After the geoid-correction step is added to `build_terrain.py`, the
 `.las_terrain` file will hold true WGS84 ellipsoidal heights and the
@@ -990,7 +1000,28 @@ the EGM grid file.
 
 ### OQ-LS-13 — Geoid model and source-specific correction
 
-**Status:** Open — blocks Issue 6 fix.
+**Resolved — per-source geoid for DEM correction; EGM2008 for in-simulation
+runtime conversions.**
+
+`build_terrain.py` selects the geoid model based on `--dem-source` (Option A
+below): Copernicus GLO-30 → EGM2008, NASADEM → EGM96, SRTM → EGM96. Each
+source is corrected with its native geoid so the conversion is exact within
+the geoid model's own accuracy.
+
+For all in-simulation runtime conversions — for example, the atmosphere
+model's WGS84 → MSL conversion (OQ-LS-14) and any future instrumentation
+that displays MSL altitude — the simulation uses **EGM2008 universally**.
+This decouples runtime conversion from whatever geoid the underlying DEM
+source happened to use; the simulation's internal geoid reference is fixed
+and well-defined regardless of terrain provenance. EGM2008 is also the
+highest-accuracy modern geoid widely available, and the residual difference
+versus EGM96 (< 1 m almost everywhere) is below the simulation's noise floor.
+
+The docstring in [`download.py`](../../python/tools/terrain/download.py)
+that incorrectly claims "MSL-adjusted via EGM96" for Copernicus must be
+corrected to "EGM2008" as part of this work item.
+
+**Background and rejected options retained below.**
 
 `apply_geoid_correction()` accepts `geoid="egm2008"` or `geoid="egm96"`. The
 correct choice depends on the DEM source's published vertical datum, which
@@ -1045,7 +1076,32 @@ for parity with Copernicus, the default DEM source.
 
 ### OQ-LS-14 — Atmospheric model height reference
 
-**Status:** Open — does not block Issues 6 / 7 but should be flagged.
+**Resolved — Option B.** Convert `h_WGS84` → `h_MSL` inside `Aircraft::step()`
+before each atmospheric query, using the EGM2008 geoid undulation at the
+aircraft's current lat/lon (per OQ-LS-13). The conversion is physically
+correct and removes a known systematic bias from atmospheric density,
+pressure, and temperature outputs — and from any sensor or instrumentation
+model that consumes them.
+
+**Implementation approach:**
+
+- Add a geoid-undulation lookup helper to the simulation domain (e.g.,
+  `liteaero::geodesy::Egm2008Geoid::undulation(lat_rad, lon_rad)`). The
+  underlying grid is the EGM2008 PROJ grid file (see OQ-LS-17 for grid
+  distribution).
+- `Aircraft::step()` computes
+  `h_msl_m = state.position.height_WGS84_m() - undulation(lat, lon)`
+  before invoking `Atmosphere::state(h_msl_m)`.
+- Per-frame lookup cost is one bilinear interpolation on a small grid;
+  negligible at simulation rates. If profiling later identifies hot-path
+  cost, cache the value across consecutive frames whenever the aircraft
+  moves less than a configurable horizontal threshold (the geoid is smooth;
+  N varies < 0.1 m over typical between-frame motions).
+- Existing `Atmosphere` API does not change — it continues to accept an
+  altitude argument; the call site interprets the value as MSL.
+- No protobuf or wire-format change is required.
+
+**Background and rejected options retained below.**
 
 `Atmosphere::density_kgm3(altitude_m)` and related queries take "altitude" as
 input ([`Atmosphere.cpp`](../../src/environment/Atmosphere.cpp)). The ISA
@@ -1078,7 +1134,126 @@ this resolution.
 
 ### OQ-LS-15 — Where to perform ECEF→ENU for aircraft Godot position
 
-**Status:** Open — blocks Issue 7 fix.
+**Resolved — Option B with strict architectural separation.** The broadcaster
+side pre-computes the viewer-local position so the wire format carries
+viewer-ready coordinates, and the receiver becomes a thin pass-through.
+However, the projection logic must **not** be embedded into core simulation
+domain code (`Aircraft`, `KinematicState`, `TerrainMesh`, `SimRunner`). It
+lives in a dedicated projection module that the live-sim launcher composes
+into the broadcaster. Other viewer back-ends (Unity, Unreal, web-based, etc.)
+plug in by providing a different projector implementation; the simulation
+domain is unaware of any of them.
+
+**New module: `liteaero::projection`**
+
+A new module is added under `include/projection/` and `src/projection/`
+containing a viewer-projection abstraction:
+
+```cpp
+// include/projection/IViewerProjector.hpp  (Interface Layer)
+namespace liteaero::projection {
+
+struct ViewerOrigin {
+    double lat_rad;
+    double lon_rad;
+    double height_wgs84_m;     // ellipsoidal
+};
+
+struct ViewerPosition {
+    float x_m;
+    float y_m;
+    float z_m;
+};
+
+class IViewerProjector {
+public:
+    virtual ~IViewerProjector() = default;
+
+    // Project a geodetic position (WGS84 ellipsoidal) into the viewer's
+    // local 3D coordinate system relative to the configured world origin.
+    virtual ViewerPosition project(double lat_rad,
+                                   double lon_rad,
+                                   float  height_wgs84_m) const = 0;
+};
+
+} // namespace
+```
+
+The Godot/glTF concrete implementation (`GodotEnuProjector`) performs full
+ECEF→ENU using the WGS84 ellipsoid at the world origin's tangent plane,
+then applies the glTF axis permutation `(x = east, y = up, z = -north)`.
+Implementation reuses geodesy helpers — `geodeticToEcef` / `ecefOffsetToEnu`
+from [`TerrainMesh.cpp`](../../src/environment/TerrainMesh.cpp) — extracted
+to a shared `liteaero::geodesy` module so that both the terrain domain and
+the projection module call identical math without one depending on the
+other.
+
+**Wire format change.**
+
+`SimulationFrameProto` is extended with viewer-projected position fields:
+
+```proto
+// Already present (kept):
+double timestamp_s        = 1;
+double latitude_rad       = 2;
+double longitude_rad      = 3;
+float  height_wgs84_m     = 4;
+// ... q_w/x/y/z, velocity_north/east/down_mps, airspeed_mps, agl_m
+// New (added by this work item):
+float  viewer_x_m         = 14;
+float  viewer_y_m         = 15;
+float  viewer_z_m         = 16;
+```
+
+The original geodetic fields are retained — they are the canonical state and
+remain useful for non-Godot consumers. The viewer fields are an additional
+convenience for the configured viewer back-end. Multiple back-ends with
+different axis conventions cannot be served by the same broadcast in this
+form (a single broadcaster has a single configured projector); a future
+multi-viewer scenario would call for either separate broadcasters per viewer
+or a more abstract handshake.
+
+**Wiring.**
+
+[`tools/live_sim.cpp`](../../tools/live_sim.cpp) reads
+`world_origin_lat_rad / lon_rad / height_m` from the same `terrain_config.json`
+it already consumes for the `.las_terrain` path (OQ-LS-10), constructs a
+`GodotEnuProjector` with that origin, and passes it to the broadcaster:
+
+```cpp
+auto projector  = std::make_unique<projection::GodotEnuProjector>(origin);
+auto broadcaster = std::make_unique<UdpSimulationBroadcaster>(port,
+                                                              projector.get());
+runner.set_broadcaster(broadcaster.get());
+```
+
+`UdpSimulationBroadcaster` invokes `projector->project(...)` once per frame
+and writes the result into `viewer_x/y/z_m` before sending. The simulation
+domain (`Aircraft`, `SimRunner`, `TerrainMesh`) never sees the projector or
+the world origin.
+
+**Receiver changes.**
+
+`SimulationReceiver` (both C++ GDExtension and GDScript placeholder) reads
+`viewer_x/y/z_m` directly into `Vehicle.position`. The flat-Earth
+`east_m / up_m / north_m` computation in `_decode_frame()` is removed.
+`set_world_origin()` is no longer needed by the receiver — only the
+projector on the simulation side requires the origin. `TerrainLoader.gd`
+stops calling `set_world_origin()` on the receiver. (It still reads the
+origin for its own use, e.g., diagnostic prints, but no longer pushes it
+across the scene tree.)
+
+**Architectural compliance check.**
+
+- Domain Layer (Aircraft, KinematicState, TerrainMesh, SimRunner): unchanged.
+  No knowledge of viewer or world origin.
+- Interface Layer: `liteaero::projection` (new); `UdpSimulationBroadcaster`
+  composes a projector via interface pointer.
+- Application Layer: `tools/live_sim.cpp` instantiates the concrete projector
+  and wires it.
+- Future viewers add a new concrete projector class; nothing else changes.
+
+**Background and rejected options retained below.**
 
 The terrain GLB places tiles via curvature-aware ECEF→ENU. The aircraft
 position must be computed via the **same** transform for visual/sim AGL
@@ -1136,7 +1311,23 @@ standalone C++ test file that includes only `SimulationReceiver`'s helpers
 
 ### OQ-LS-16 — In-tile curvature correction in `TerrainMesh::elevation_m()`
 
-**Status:** Open — defer; small effect, does not block the fix.
+**Resolved — Option A, defer.** With OQ-LS-15 resolved, visual / simulation
+AGL parity is established at the broadcast boundary: the projector and the
+terrain GLB both use the same ECEF-based projection from the same world
+origin, so the rendered aircraft sits at exactly the same Y as the rendered
+terrain whenever the simulation reports `AGL = 0`. The remaining in-tile
+tangent-plane approximation in `TerrainMesh::elevation_m()` is purely a
+sim-internal quantity — it affects what the simulation reports as AGL and
+when landing-gear contact triggers, but it does **not** create a sim-vs-render
+mismatch any more.
+
+The residual error (~12 m worst-case at the corner of a 25 km LOD 4 tile,
+< 1 m within the home-tile interior of typical AGL queries) is acceptable
+for the current implementation phase. Document the approximation in the
+`elevation_m()` docstring and revisit if/when a use case requires
+sub-meter AGL accuracy at large tile distances.
+
+**Background and rejected options retained below.**
 
 `TerrainMesh::elevation_m()` returns
 `centroid.height_wgs84_m + barycentric(up_offsets)`, treating the tile as a
@@ -1172,7 +1363,19 @@ much smaller issue.
 
 ### OQ-LS-17 — Geoid grid file distribution
 
-**Status:** Open — operational dependency of Issue 6 fix.
+**Resolved — Option A, rely on PROJ network access.** First terrain build on
+a given machine downloads the EGM2008 / EGM96 grid files via PROJ to
+`$PROJ_USER_WRITABLE_DIRECTORY` and caches them; subsequent builds and
+in-simulation lookups (per OQ-LS-14) hit the cache without network access.
+Document the first-run network requirement in
+[`docs/installation/README.md`](../installation/README.md) and in
+`build_terrain.py --help`. C++ in-simulation use of the same grids
+(per OQ-LS-14) reads them from the PROJ cache directory — the simulation
+does not perform its own download; if the cache is empty when the
+simulation starts, a clear error message tells the operator to run
+`build_terrain.py` first.
+
+**Background and rejected options retained below.**
 
 `geoid_correct.py` uses `pyproj` with PROJ network access enabled
 (`pyproj.network.set_network_enabled(True)`). On first use, PROJ downloads the
@@ -1213,9 +1416,9 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 | OQ-LS-9 | Aircraft mesh coordinate frame correction | Resolved — layout-frame meshes + `rotation_degrees = Vector3(0, 180, 0)` correct for both static and live simulation | No |
 | OQ-LS-10 | Terrain wiring in `live_sim.cpp` for landing gear contact | Resolved → Option B (`TerrainMesh` from `.las_terrain`; error if absent — no `FlatTerrain` fallback) | No |
 | OQ-LS-11 | Mesh Z-axis sign mismatch: live-simulation attitude error | Resolved — eliminated by layout-frame mesh convention; see OQ-LS-9 | No |
-| OQ-LS-12 | Vertical datum convention for `initial_state.altitude_m` | Open — Issue 6 fix (recommend Option B: add `altitude_msl_m` field) | **Yes — Issue 6** |
-| OQ-LS-13 | Geoid model and source-specific correction | Open — Issue 6 fix (recommend Option A: per-source geoid) | **Yes — Issue 6** |
-| OQ-LS-14 | Atmospheric model height reference | Open — recommend defer (Option A: accept geoid undulation error) | No |
-| OQ-LS-15 | Where to perform ECEF→ENU for aircraft Godot position | Open — Issue 7 fix (recommend Option A: SimulationReceiver-side) | **Yes — Issue 7** |
-| OQ-LS-16 | In-tile curvature correction in `TerrainMesh::elevation_m()` | Open — recommend defer (Option A: accept ~12 m worst-case) | No |
-| OQ-LS-17 | Geoid grid file distribution | Open — recommend Option B (bundle grids in repo) | Yes — Issue 6 fix operationally |
+| OQ-LS-12 | Vertical datum convention for `initial_state.altitude_m` | Resolved — Option A (always WGS84 ellipsoidal; MSL produced by EGM2008 conversion when needed) | No |
+| OQ-LS-13 | Geoid model and source-specific correction | Resolved — per-source geoid for DEM correction; EGM2008 universally for in-simulation runtime conversions | No |
+| OQ-LS-14 | Atmospheric model height reference | Resolved — Option B (convert h_WGS84 → h_MSL inside `Aircraft::step()` via EGM2008) | No |
+| OQ-LS-15 | Where to perform ECEF→ENU for aircraft Godot position | Resolved — Option B with strict architectural separation (new `liteaero::projection` module; broadcaster composes a projector; domain layer untouched) | No |
+| OQ-LS-16 | In-tile curvature correction in `TerrainMesh::elevation_m()` | Resolved — Option A, defer (no sim-vs-render mismatch after OQ-LS-15; ~12 m worst-case sim-internal error acceptable) | No |
+| OQ-LS-17 | Geoid grid file distribution | Resolved — Option A (rely on PROJ network access; cached after first build) | No |
