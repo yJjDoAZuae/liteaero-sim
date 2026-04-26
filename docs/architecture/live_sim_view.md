@@ -1422,3 +1422,95 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 | OQ-LS-15 | Where to perform ECEF→ENU for aircraft Godot position | Resolved — Option B with strict architectural separation (new `liteaero::projection` module; broadcaster composes a projector; domain layer untouched) | No |
 | OQ-LS-16 | In-tile curvature correction in `TerrainMesh::elevation_m()` | Resolved — Option A, defer (no sim-vs-render mismatch after OQ-LS-15; ~12 m worst-case sim-internal error acceptable) | No |
 | OQ-LS-17 | Geoid grid file distribution | Resolved — Option A (rely on PROJ network access; cached after first build) | No |
+
+---
+
+## Implementation Roadmap — Issue 6 / 7 Resolution
+
+The corrections to Issues 6 and 7, given the OQ-LS-12 through OQ-LS-17
+resolutions, decompose into ten discrete tasks. Tasks are scoped so that each
+one delivers a complete, testable increment with no half-finished interfaces
+left behind. TDD per CLAUDE.md applies to every task: failing test first,
+production code second.
+
+### Tasks
+
+| Task | Title | Scope | Depends on |
+| --- | --- | --- | --- |
+| LS-T1 | Extract `liteaero::geodesy` module | Lift `geodeticToEcef`, `ecefOffsetToEnu`, `enuToEcefOffset`, `primeVerticalRadius` out of [`src/environment/TerrainMesh.cpp`](../../src/environment/TerrainMesh.cpp) into `include/geodesy/Wgs84.hpp` + `src/geodesy/Wgs84.cpp`. Refactor `TerrainMesh.cpp` to call the shared functions; existing behavior unchanged. | — |
+| LS-T2 | Add `liteaero::geodesy::Egm2008Geoid` C++ lookup | New `include/geodesy/Egm2008Geoid.hpp` + `src/geodesy/Egm2008Geoid.cpp`. Reads the EGM2008 PROJ grid file (1° or 2.5′; pick during implementation based on accuracy/size tradeoff) from the PROJ user-writable cache directory. Public API: `float undulation_m(double lat_rad, double lon_rad)`. Bilinear interpolation; clear error if grid file is absent. | — |
+| LS-T3 | Wire DEM geoid correction in `build_terrain.py` | Insert `apply_geoid_correction()` call between `mosaic_dem()` and the LOD triangulation loop in [`python/tools/terrain/build_terrain.py`](../../python/tools/terrain/build_terrain.py). Per-source geoid table: `copernicus_dem_glo30 → egm2008`, `nasadem → egm96`, `srtm → egm96`. Fix the docstring in [`python/tools/terrain/download.py`](../../python/tools/terrain/download.py) (`EGM96` → `EGM2008` for Copernicus). | — |
+| LS-T4 | Create `liteaero::projection` module | New `include/projection/IViewerProjector.hpp` (interface) and `include/projection/GodotEnuProjector.hpp` + `src/projection/GodotEnuProjector.cpp` (concrete). `GodotEnuProjector` calls `liteaero::geodesy` helpers; applies glTF axis permutation `(x = east, y = up, z = -north)`. Owns a `ViewerOrigin` set at construction. | LS-T1 |
+| LS-T5 | Extend `SimulationFrameProto` and broadcaster | Add `viewer_x_m` (14), `viewer_y_m` (15), `viewer_z_m` (16) to `proto/liteaerosim.proto`. Update `SimulationFrame` struct. `UdpSimulationBroadcaster` constructor takes an `IViewerProjector*` (non-owning, may be null); when non-null, projector is invoked once per frame to populate viewer fields; when null, fields are zeroed and receiver-side fallback to geodetic kicks in (preserves backward compatibility for non-viewer broadcaster uses). Regenerate `liteaerosim.pb.h` via cmake reconfigure. | LS-T4 |
+| LS-T6 | Wire atmosphere h_WGS84 → h_MSL conversion | In `Aircraft::step()` (or wherever atmospheric queries occur), call `Egm2008Geoid::undulation_m()` to convert `state.position.height_WGS84_m()` to MSL before invoking `Atmosphere::state(...)`. Update `Atmosphere` API docstring to clarify it accepts MSL geopotential altitude. Add a brief block comment in [`src/Aircraft.cpp`](../../src/Aircraft.cpp) noting the WGS84 → MSL conversion site. | LS-T2 |
+| LS-T7 | Wire `live_sim` launcher with projector | [`tools/live_sim.cpp`](../../tools/live_sim.cpp) reads `world_origin_lat_rad`, `world_origin_lon_rad`, `world_origin_height_m` from `terrain_config.json` (already opened for `.las_terrain` path resolution per OQ-LS-10). Construct a `GodotEnuProjector` with that origin and pass it into `UdpSimulationBroadcaster`. | LS-T5 |
+| LS-T8 | Simplify `SimulationReceiver` (C++ + GDScript) | Remove the flat-Earth `east_m / up_m / north_m` computation in [`SimulationReceiver.cpp::_decode_frame`](../../godot/addons/liteaero_sim/src/SimulationReceiver.cpp) and [`SimulationReceiver.gd::_apply_frame`](../../godot/addons/liteaero_sim/SimulationReceiver.gd). Read `viewer_x/y/z_m` directly into `Vehicle.position`. Remove the `set_world_origin()` method from the receiver public API and the corresponding call in [`TerrainLoader.gd::_set_world_origin`](../../godot/addons/liteaero_sim/TerrainLoader.gd) (TerrainLoader can stop pushing the origin into the receiver — it is no longer needed there). | LS-T5 |
+| LS-T9 | Documentation cross-references | Update [`docs/architecture/terrain.md`](terrain.md) and [`docs/architecture/godot_plugin.md`](godot_plugin.md) to reflect the new projection module and the WGS84-ellipsoidal terrain heights (no more orthometric mislabel). Update the aircraft-config schema docs to state `altitude_m` is WGS84 ellipsoidal. Update the §Coordinate System section of this document to remove the now-obsolete flat-Earth ENU formulas in §`SimulationReceiver` behavior. | LS-T1, LS-T3, LS-T5, LS-T6, LS-T8 |
+| LS-T10 | End-to-end validation flight | Build a fresh terrain dataset for KSBA with the geoid-corrected pipeline; configure an aircraft with `initial_state.altitude_m` set to the correct WGS84 ellipsoidal value (≈ −29 m for KSBA); fly out to ≥ 25 km from the world origin and verify that (a) gear contact triggers exactly when the aircraft visually touches the terrain, (b) `agl_m` HUD reading matches visual perception, and (c) atmospheric airspeed/altitude indications are within expected tolerance for the location. | LS-T3, LS-T5, LS-T6, LS-T7, LS-T8 |
+
+### Test deliverables per task
+
+| Task | Required tests |
+| --- | --- |
+| LS-T1 | Existing `TerrainMesh_test.cpp` continues to pass; new `geodesy/Wgs84_test.cpp` round-trips a known geodetic ↔ ECEF ↔ ENU point against hand-computed values. |
+| LS-T2 | `geodesy/Egm2008Geoid_test.cpp` validates undulation at three known reference points (e.g., KSBA ≈ −33 m, KDEN ≈ −18 m, LFPG ≈ +44 m) within EGM2008 published accuracy. |
+| LS-T3 | `python/test/test_build_terrain.py` extension: build a small mock DEM with known orthometric values, run the full pipeline, assert the resulting `.las_terrain` heights match orthometric + per-source-geoid undulation within tolerance. |
+| LS-T4 | `projection/GodotEnuProjector_test.cpp` projects three points (origin, +25 km east, +25 km east at +1000 m altitude) and verifies the curvature drop and axis permutation are correct against hand-computed values. |
+| LS-T5 | `SimulationBroadcaster_test.cpp` extension: with a stub `IViewerProjector` returning known values, assert the broadcast datagram carries those values in the new fields; with `nullptr` projector, fields are zero. |
+| LS-T6 | `Aircraft_test.cpp` extension: a unit test fixes the aircraft at KSBA (`h_WGS84 = -29`), asserts that `Atmosphere::state` is queried with `h_MSL ≈ 4` (within 1 m), and that the resulting density matches ISA at 4 m MSL. |
+| LS-T7 | `live_sim` smoke test: launch with a known terrain_config.json, capture one broadcast datagram off the loopback socket, assert `viewer_*` fields are non-zero and consistent with the configured world origin. |
+| LS-T8 | Manual: open the Godot scene with a recorded UDP playback; verify the aircraft renders at the same Y as the rendered terrain when the playback's `agl_m` is zero. |
+| LS-T9 | None; documentation review only. |
+| LS-T10 | Manual flight test described in the task scope. |
+
+### Dependency graph
+
+```text
+LS-T1  ──────────►  LS-T4  ──►  LS-T5  ──┬──►  LS-T7  ──┐
+                                          ├──►  LS-T8  ──┤
+LS-T2  ──────────►  LS-T6  ──────────────┘             │
+                                                         │
+LS-T3  ───────────────────────────────────────────────────┤
+                                                         ▼
+                                              LS-T9  ──►  LS-T10
+```
+
+### Recommended phase ordering
+
+The dependency graph admits the following sequence; phases group tasks that
+can be undertaken in parallel.
+
+**Phase 1 — Foundations (parallel-able):**
+
+1. LS-T1 — Extract `liteaero::geodesy`.
+2. LS-T2 — Add `Egm2008Geoid` lookup.
+3. LS-T3 — DEM geoid correction in `build_terrain.py`.
+
+**Phase 2 — New modules built on the foundations:**
+
+4. LS-T4 — Projection module (requires LS-T1).
+5. LS-T6 — Atmosphere conversion (requires LS-T2).
+
+**Phase 3 — Wire format and broadcaster integration:**
+
+6. LS-T5 — Extend `SimulationFrameProto` and wire the projector into the
+   broadcaster (requires LS-T4).
+
+**Phase 4 — Consumer integration (parallel-able):**
+
+7. LS-T7 — `live_sim` launcher composes a projector (requires LS-T5).
+8. LS-T8 — Receiver simplification (requires LS-T5).
+
+**Phase 5 — Closeout:**
+
+9. LS-T9 — Documentation cross-references.
+10. LS-T10 — End-to-end validation flight.
+
+### Risks and mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| LS-T3 changes the published terrain heights, invalidating any cached `.las_terrain` files in user workspaces. | Document the breaking change in the build_terrain `--help` epilog and in `docs/installation/README.md`; require `--force` rebuild semantics to be documented as the recovery path. Per project rule 7 (no backward compatibility shims), no migration tool is provided. |
+| LS-T2 / LS-T6 introduces a runtime PROJ grid dependency in the simulation hot path. | Profile the per-frame undulation lookup; if it appears in profiling, add the inter-frame cache described in OQ-LS-14. The geoid is smooth (< 0.1 m variation per second of typical motion), so caching across consecutive frames is safe. |
+| LS-T5's new proto fields are unset (zero) for legacy receivers or tests using older protos. | The receiver fallback path (when `viewer_*` is identically zero) reverts to the previous flat-Earth math, allowing pre-LS-T5 datagram replays to continue working during the transition. Removed only after LS-T8 is merged. |
+| LS-T10 reveals an integration gap not caught by unit tests (e.g., axis permutation off in a specific configuration). | LS-T4's tests use hand-computed reference values from independent geodesy software (e.g., GeographicLib) to catch axis errors before integration. LS-T10 is a confirmation, not the first signal.    |
