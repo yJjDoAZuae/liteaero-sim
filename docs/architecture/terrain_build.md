@@ -892,6 +892,393 @@ produces no warnings on any real DEM tile across the KSBA test datasets.
 
 ---
 
+## OQ-TB-5 Analysis — Imagery Mapping: Per-Facet Color → Texture-Based Surface
+
+### Imagery Resolution Loss in the Per-Facet Pipeline
+
+Surface imagery is currently transferred to the rendered terrain as a single uint8
+RGB triplet per triangle, computed by [colorize.py](../../python/tools/terrain/colorize.py)
+sampling the imagery raster at exactly one point — the facet centroid — and stored
+in the GLB as duplicated `COLOR_0` vertex attributes.
+
+Three failure modes follow from this:
+
+1. **Resolution loss.** Imagery (Sentinel-2 at 10 m/pixel; Landsat 9 at 30 m/pixel) is
+   sampled once per facet.  At LOD 0 a typical facet is 50–100 m² of irregular shape;
+   at LOD 4 it is hundreds of thousands of m².  All imagery pixels not at the facet
+   centroid are discarded.
+2. **Feature aliasing.** Linear high-contrast features (runways, roads, shorelines)
+   narrower than ~2× the local mesh edge length reduce to a speckle pattern of
+   facets that happen to fall on the feature versus those that don't.  The KSBA
+   runway (45 m wide) is invisible at LOD 0 in practice.
+3. **Flat shading per face.** No interpolation across the triangle, so even a feature
+   well-resolved by the mesh tessellation appears as a hard polygon edge rather than a
+   smooth surface.
+
+### Mesh-Imagery Coupling — The Underlying Cause
+
+The pipeline conflates two independent quantities — geometric mesh resolution and
+imagery sample resolution — and locks them to a single per-face value.  Standard
+real-time terrain rendering decouples the two: **mesh geometry** controls silhouette,
+self-shadowing, and AGL collision (LOD-driven tessellation), while **surface imagery**
+is delivered as a 2D texture and sampled by the GPU's fragment shader at full imagery
+resolution regardless of triangle size.
+
+This decoupling is the standard glTF 2.0 pattern: `MeshPrimitive` carries `POSITION`,
+`NORMAL`, and `TEXCOORD_0`; the `material.pbrMetallicRoughness.baseColorTexture`
+references a JPEG / PNG payload embedded in the GLB.  No per-vertex color is used.
+
+### Use Case Constraints
+
+The texturing approach must serve three distinct simulation profiles, each with
+different coverage and resolution requirements:
+
+| Profile | Typical aircraft | Coverage radius | Min imagery resolution |
+| --- | --- | --- | --- |
+| **GA / training** | Cessna, small UAS | 5–15 km | ~5 m/pixel (runway markings) |
+| **Jet trainer** | T-38, light jet | 30–50 km | ~10 m/pixel |
+| **Commercial / high-altitude** | Airliner, business jet | 100–300 km | ~30 m/pixel |
+
+The first profile (where this question originated — KSBA UAS) is the most
+demanding per-pixel: low altitude, short distances to surface features, runway
+detail must be visible.  Higher-altitude profiles tolerate coarser imagery because
+viewing distance compresses pixel detail anyway.
+
+### Hardware Constraints
+
+The viewer is Godot 4.6 + Vulkan running on the operator's desktop GPU.  Concrete
+limits that bound the design:
+
+| Constraint | Value | Source |
+| --- | --- | --- |
+| GPU max 2D texture size | 16 384 × 16 384 (~268 MP) | Vulkan minimum spec; most desktop GPUs since 2014 |
+| GPU max 2D texture size (low-end / mobile / iGPU) | 4096 × 4096 | Older Intel iGPUs, some integrated AMD |
+| Target VRAM budget | 4–8 GB total scene | Per OQ-TB-3; aircraft mesh + terrain mesh + textures + Godot scene state |
+| `Texture2DArray` max layers | 2048 | Vulkan minimum spec |
+| GLB maximum file size | Practically ~2 GB | glTF 2.0 spec uses uint32 byte offsets |
+| Native imagery resolution | 10 m (Sentinel-2), 30 m (Landsat 9), 500 m (MODIS) | Source-determined; cannot be exceeded without super-resolution |
+
+Two of these dominate: GPU max texture size limits how large a single mosaic can be,
+and native imagery resolution limits how much detail any approach can deliver.  At
+Sentinel-2's 10 m/pixel, a 16 384² texture covers `163 km × 163 km` — comfortably more
+than any single-airport build needs.
+
+### Imagery-Source Limits
+
+Sentinel-2 returns 10 m/pixel native.  No matter which texture-binding strategy we
+choose, that's the ceiling on usable detail.  Storing higher-resolution textures
+(say, 0.5 m/pixel via bilinear up-sampling) only makes sense when the GPU's bilinear
+fragment shader has detail to interpolate; for a flat 10 m source pixel, an oversize
+texture wastes VRAM without adding sharpness.  The only reason to oversample is to
+preserve edge sharpness through mipmap chains and anisotropic filtering at oblique
+viewing angles — a second-order benefit.
+
+### Alternatives Considered
+
+Nine candidates, ordered roughly from least to most ambitious.
+
+#### Option A — Per-facet vertex color (status quo)
+
+Each triangle carries one RGB triplet via duplicated `COLOR_0` vertex attributes.
+Already in production; analyzed at length above.
+
+- **VRAM:** ~0 dedicated texture; duplicated vertices add ~30% to geometry.
+- **Disk:** Smallest GLB.
+- **Quality:** Speckle aliasing on linear features; flat-shaded faces; runway
+  invisible.
+- **Verdict:** Rejected.
+
+#### Option B — Per-vertex color, GPU-interpolated
+
+Sample imagery at each vertex (not facet centroid); store per-vertex colors; GPU's
+rasterizer interpolates RGB linearly across the triangle.
+
+- **VRAM:** Same as A.
+- **Quality:** No flat-face artifacts; smoother surface.  Imagery sampling still
+  bounded by mesh resolution — runway still under-resolved at LOD 0 (10 m vertex
+  spacing) since the runway feature is only 45 m wide and centered between vertex
+  positions much of the time.
+- **Verdict:** Marginal improvement, doesn't solve the fundamental problem.
+  Rejected.
+
+#### Option C — Per-tile JPEG textures
+
+One texture per terrain tile, embedded in the GLB.  Tile UVs derived from each
+vertex's geodetic position normalized to the tile bounds.
+
+- **VRAM (KSBA 12 km, ~144 L0 tiles at 2048²):** ~2.3 GB.  Much of this is
+  bilinear up-sampling of native 10 m/pixel imagery to 0.5 m/pixel — minimal
+  display benefit at significant VRAM cost.
+- **Disk (GLB):** ~200 MB of JPEGs (1–2 MB × 144).  Loading triggers ~144 GPU
+  texture uploads at scene start — measurable startup stutter.
+- **Quality issues:**
+  - **Tile seams.** Bilinear filtering cannot sample across a tile boundary.
+    Without 1–2 px of imagery padding, seams are visible.  Padding adds 5–10%
+    to texture data and complicates the build (each tile must be rendered with
+    overlap into neighbor tiles).
+  - **Independent mipmap chains.** Each tile generates mipmaps in isolation.
+    Adjacent tiles' coarse mip levels do not match — a far-distance LOD switch
+    can show a visible discontinuity.
+- **Draw calls / state:** ~144 texture binds per frame; not a bottleneck on
+  modern GPUs but real overhead.
+- **Implementation cost:** High — per-tile texture render, per-tile glTF
+  material binding, padding logic, separate Godot material per tile.
+- **Verdict:** Originally proposed; rejected after performance analysis.
+
+#### Option D — Single mosaic texture per coverage area (recommended for typical builds)
+
+One texture covers the entire dataset's bounding box at imagery-native pixel
+density.  Every tile shares the same texture; UVs are computed per vertex from the
+vertex's geodetic position normalized to the dataset bounds.
+
+- **VRAM (KSBA 12 km, 24 km bounding box at 10 m/pixel):** 2400 × 2400 ≈ 6 MP.
+  Padded to 4096² = 16 MP.  RGBA8 = 64 MB; with mipmap chain (33% extra) ≈ 85 MB.
+  An order of magnitude less than Option C.
+- **Disk (GLB):** Single JPEG q92 ≈ 2–3 MB.  Loading: one texture upload, ~10 ms.
+- **Quality:**
+  - **No seams.** All filtering is internal to a single texture.  Bilinear,
+    anisotropic, and the full mipmap chain work as designed everywhere.
+  - **Native resolution preserved.** No per-tile resolution mismatch — every
+    tile sees the same texture under the same mipmap chain, so distant tiles
+    automatically use coarser mip levels via Godot's screen-space derivative
+    sampling.
+  - **No PoT-padding waste.** Texture sized to actual imagery extent (rounded
+    up to the nearest power of two for mipmap support).
+- **Draw calls / state:** One texture bound for all terrain rendering.  Per-tile
+  draw calls remain (geometry is still per-tile for LOD culling) but no per-call
+  texture state change.
+- **LOD interaction:** Mesh LOD switching (per OQ-TB-3) operates on geometry
+  alone.  All mesh LODs reference the same mosaic texture; the GPU's mipmap
+  selection chooses the appropriate detail level per fragment.
+- **Implementation cost:** Lower than Option C (no padding, one material, simpler
+  glTF) and lower than the status quo's vertex-duplication path.
+- **Coverage limit:** Fits within GPU max texture size for areas up to ~163 km
+  at 10 m/pixel (Sentinel-2) or ~491 km at 30 m/pixel (Landsat 9).  Comfortably
+  covers all GA and most jet-trainer profiles.
+- **Verdict:** **Recommended baseline for all builds within the coverage limit.**
+
+#### Option E — Multi-mosaic regional textures (extension for very large coverage)
+
+For coverage exceeding the single-mosaic limit (> ~50 km radius at Sentinel-2 native
+resolution, with safety margin for low-end GPUs at 4096² limit), partition the
+dataset into geographic regions, one mosaic per region, sized within the lowest
+common denominator GPU limit.
+
+- **VRAM:** Sum of regional mosaic VRAMs.  E.g., 200 km × 200 km coverage at
+  Sentinel-2 = 4 mosaics of 80 MB each = 320 MB.  Linear scaling, no per-tile
+  multiplier.
+- **Disk:** Linear in coverage area.
+- **Quality:** Seams at region boundaries (~ few times per dataset, not per
+  tile).  Manageable with the same overlap-padding technique that would be
+  required for Option C, applied at regional rather than tile scale.
+- **Implementation cost:** Slightly above Option D — region partitioning logic
+  in the build pipeline, region-to-tile assignment, multiple materials in GLB.
+- **Verdict:** **Recommended extension when coverage exceeds the single-mosaic
+  limit.**  Defer until the use case appears (no current jet-trainer / airliner
+  build).
+
+#### Option F — Texture array (`Texture2DArray`)
+
+All tile textures packed as slices in a single `Texture2DArray` resource; shader
+indexes via per-vertex slice ID attribute.
+
+- **VRAM:** Same as Option C (one slice per tile).
+- **Quality:** Same per-tile seam problem as Option C.
+- **State:** Single binding for all terrain.
+- **Layer limit:** Vulkan minimum is 2048; KSBA's 144 tiles are fine, but a
+  large jet-trainer build can exceed 2048 tiles at fine LODs.
+- **glTF support:** Texture arrays are an extension (`MSFT_texture_dds` /
+  custom), not standard glTF 2.0.  Godot 4 supports them at the engine level
+  but the import path requires a custom converter.
+- **Verdict:** Same quality issues as Option C with comparable VRAM.  The only
+  win is texture state batching, which Option D already achieves natively.
+  Rejected.
+
+#### Option G — Atlas (single texture, sub-region per tile)
+
+All tiles packed into a single texture as sub-rectangles (UV mapping per tile
+references the corresponding sub-region).  Effectively a manual texture array.
+
+- **VRAM:** Slightly less than Option F (no slice padding to power of two).
+- **Quality:** Mipmap bleeding between adjacent sub-regions — a coarse mip
+  level samples across atlas boundaries, mixing one tile's pixels into another.
+  Mitigated by inter-region padding (typical: 8 px guard band per side per LOD
+  level).  Padding overhead grows with mipmap depth.
+- **Verdict:** Equivalent to Option D from a quality standpoint but with
+  significant atlas-management complexity.  No advantage.  Rejected.
+
+#### Option H — Triplanar / procedural with imagery as parameters
+
+Sample imagery as sparse data points; reconstruct a continuous coloration via a
+shader (e.g., triplanar projection from three orthogonal planes, or noise-based
+ground texture modulated by imagery).
+
+- **Verdict:** Appropriate for procedurally-generated planetary terrain where
+  no high-quality source raster exists.  We have a high-quality raster.
+  Discarded.
+
+#### Option I — Virtual / sparse texturing (page-based streaming)
+
+A single very large logical texture, with only the visible portion (pages of
+typically 128² each) resident in VRAM at any time; pages are loaded on demand
+based on the camera frustum.
+
+- **Quality:** Equivalent to Option D, no seams, single shader binding.
+- **VRAM:** Bounded constant regardless of dataset size — only resident pages
+  count.
+- **Disk:** Same as Option E or larger (full source imagery preserved).
+- **Implementation cost:** Substantial.  Godot 4 does not provide a
+  general-purpose virtual texturing system; it would require a custom
+  RenderingDevice integration (compute shader feedback + page table +
+  on-demand IO).  Industry-standard for AAA simulators (X-Plane, MSFS) but
+  far beyond this project's current scope.
+- **Verdict:** **Future option** if datasets grow into continent-scale coverage
+  with sub-meter native imagery.  Not now.
+
+### Performance Comparison Summary
+
+For a 12 km KSBA build (24 km × 24 km bounding box, 144 L0 tiles, Sentinel-2
+imagery at 10 m/pixel):
+
+| Option | Tex VRAM | GLB size | Tile seams | Tex state changes / frame | Build complexity |
+| --- | --- | --- | --- | --- | --- |
+| **A — Per-facet color** | 0 | small | n/a (vertex colors) | 0 | done |
+| **B — Per-vertex color** | 0 | small | n/a | 0 | low |
+| **C — Per-tile JPEG** | ~2.3 GB | +200 MB | yes (need padding) | ~144 | high |
+| **D — Single mosaic** | ~85 MB | +3 MB | none | 1 | low |
+| **E — Multi-mosaic regional** | scales linearly | scales linearly | few | small | medium |
+| **F — Texture2DArray** | ~2.3 GB | +200 MB | yes | 1 | high (custom glTF) |
+| **G — Atlas** | ~85 MB | +3 MB | yes (need padding) | 1 | high |
+| **H — Triplanar / procedural** | low | small | n/a | 1 | very high; wrong fit |
+| **I — Virtual texturing** | bounded | very large | none | 1 | very high |
+
+For larger datasets (jet trainer / airliner, > 50 km radius), Option D's mosaic
+exceeds the GPU max texture size at native imagery resolution; Option E (multi-
+mosaic) is the appropriate choice.
+
+### Recommendation — OQ-TB-5
+
+**Option D — Single mosaic texture per coverage area** as the baseline.  All
+current build profiles (GA, jet trainer ≤ 50 km) fit within the single-mosaic
+limit at Sentinel-2 native resolution.
+
+**Option E — Multi-mosaic regional textures** as a documented extension; not
+implemented now.  Add when a build profile requires coverage exceeding ~50 km
+radius at native imagery resolution.  The data model accommodates this from the
+start: each tile records its assigned mosaic ID; current builds always use
+mosaic ID 0, future builds may have several.
+
+#### Mosaic specification
+
+For a build covering geographic bounds `[lat_min, lat_max] × [lon_min, lon_max]`
+with imagery raster at native pixel size `Δ_imagery`:
+
+- **Pixel resolution:**
+
+  ```text
+  W_pixels = ceil((lon_max - lon_min) * cos(center_lat) * R_earth / Δ_imagery)
+  H_pixels = ceil((lat_max - lat_min) * R_earth / Δ_imagery)
+  ```
+
+  Round up to the next power of two on each axis (with the larger axis at most
+  4096 for low-end-GPU compatibility, 8192 for desktop, 16384 for high-end).
+  If both axes would exceed 4096 the build emits a warning and the operator
+  should switch to Option E (not implemented yet — flagged as a runtime error
+  at build time until E is delivered).
+- **Padding:** None required — single texture has no internal seams.  The
+  mosaic extent is the union of all tile extents, slightly larger than the
+  configured radius bounds, so vertices at the dataset's outer edge are
+  comfortably inside the texture.
+- **Format:** JPEG quality 92 inside the GLB; sRGB gamma encoding (Sentinel-2
+  imagery is already display-gamma encoded in our `colorize.py`).
+- **Mipmap chain:** Generated on import by Godot 4 — automatic.
+
+#### UV mapping
+
+Each vertex's UVs are computed from its geodetic position relative to the
+mosaic's geographic bounds, identical to the formula in the per-tile design but
+referencing the mosaic bounds (not tile bounds):
+
+```text
+u = (lon - mosaic_lon_min) / (mosaic_lon_max - mosaic_lon_min)
+v = (mosaic_lat_max - lat) / (mosaic_lat_max - mosaic_lat_min)   # row 0 = north
+```
+
+Since all tiles share the same mosaic, vertices at tile boundaries produce
+identical UVs in the two adjacent tiles' meshes — no boundary stitching logic
+is required beyond the existing `boundary_points` mechanism for geometric
+continuity.
+
+#### Material and shading
+
+Single `BaseMaterial3D` (or `StandardMaterial3D`) per terrain GLB:
+
+- `albedo_texture = <mosaic ImageTexture>`
+- `shading_mode = SHADING_MODE_PER_PIXEL`
+- `cull_mode = CULL_DISABLED`
+- `texture_filter = TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC`
+
+The `vertex_color_use_as_albedo` flag is removed; `COLOR_0` is no longer emitted.
+
+[TerrainLoader.gd](../../godot/addons/liteaero_sim/TerrainLoader.gd) drops the
+`material_override` walk for terrain — the GLB already carries a textured
+material on every `MeshInstance3D`.  The brightness / saturation / contrast
+sliders (currently overriding `_terrain_material`) should instead drive material
+parameters on the imported material in place, or be implemented as a post-
+process screen shader if global control is desired.
+
+#### Pipeline impact
+
+| Step | Current | After OQ-TB-5 (Option D) |
+| --- | --- | --- |
+| `download.py` | downloads imagery chunks | unchanged |
+| `mosaic.py` | mosaics chunks → single GeoTIFF | unchanged |
+| `geoid_correct.py` (LS-T3) | DEM → ellipsoidal | unchanged |
+| `triangulate.py` | DEM → `TerrainTileData` with ENU vertices | unchanged geometry; adds geodetic position cache for UV computation |
+| `colorize.py` | per-facet RGB from imagery centroid sample | superseded by `mosaic_render.py` (new) |
+| `mosaic_render.py` (NEW) | crops imagery mosaic → JPEG bytes at PoT resolution | new |
+| `las_terrain.py` | per-facet `colors` field | unchanged — `colors` advisory only |
+| `export_gltf.py` | per-facet `COLOR_0` via duplicated vertices | mosaic JPEG + single material; per-vertex `TEXCOORD_0`; shared vertices |
+| `TerrainLoader.gd` | builds custom `_terrain_material` and overrides per-`MeshInstance3D` | leaves GLB material in place; removes the `_terrain_material` construction |
+
+#### Vertex deduplication side effect
+
+Removing `COLOR_0` allows each shared vertex to appear once instead of three
+times in the GLB.  KSBA L0 vertex count drops from ~432 K (3 × 144 K facets) to
+~144 K — the geometry portion of the GLB shrinks accordingly.  GPU vertex shader
+work also drops 3×.  Free benefit of the texturing change.
+
+### Implementation Tasks — TB-T1 through TB-T5
+
+| Task | Scope |
+| --- | --- |
+| TB-T1 | New `python/tools/terrain/mosaic_render.py` — given `(mosaic_bbox_deg, imagery_path, max_pixel_dim)` produces a JPEG byte buffer covering the bbox at imagery-native resolution rounded up to the nearest PoT, capped at `max_pixel_dim`.  Returns also the actual geographic bounds of the rendered raster (may exceed `mosaic_bbox_deg` due to PoT rounding). |
+| TB-T2 | Extend `TerrainTileData` (or its parent dataset metadata) with the per-build mosaic descriptor: `mosaic_jpeg: bytes`, `mosaic_lat_min/max`, `mosaic_lon_min/max`, `mosaic_w_pixels`, `mosaic_h_pixels`.  Populate from `mosaic_render.py` output during `build_terrain.py`. |
+| TB-T3 | Rewrite `export_gltf.py`: build vertex deduplication (one POSITION per logical vertex); compute per-vertex `TEXCOORD_0` from each vertex's geodetic position vs the mosaic bounds; emit a single glTF `Image` (JPEG) + `Texture` + `Material` referenced by every tile's `MeshPrimitive`; remove `COLOR_0`. |
+| TB-T4 | Update `TerrainLoader.gd`: remove `_create_materials()`'s terrain-material construction and `_apply_material_to_tree()`'s terrain branch; rely on the GLB's imported textured material.  Add `texture_filter` override per-`MeshInstance3D` if the GLB import default doesn't already select `LINEAR_WITH_MIPMAPS_ANISOTROPIC`.  Re-wire saturation / brightness / contrast sliders against the imported material's `albedo_color` modulation, or remove them and document a follow-up. |
+| TB-T5 | Detection + warning: `mosaic_render.py` raises `MosaicTooLargeError` when computed `(W_pixels, H_pixels)` exceeds the configured GPU ceiling.  `build_terrain.py` catches and prints a clear message instructing the operator to wait for Option E (multi-mosaic regional) — or, optionally, downsample imagery resolution to fit (with the trade-off documented). |
+
+Total: ~400 lines of new/changed Python, ~80 lines of GDScript change, no C++
+change, no simulation-side change.  The `.las_terrain` schema is unaffected.
+
+### Resolution Criterion — OQ-TB-5
+
+OQ-TB-5 is resolved when:
+
+1. A KSBA terrain build produces a GLB carrying a single embedded JPEG mosaic
+   texture and per-vertex `TEXCOORD_0` attributes; `COLOR_0` is absent.
+2. The runway is visible as a clean, continuous strip in the Godot view at every
+   altitude where the surrounding tiles are within the active LOD's display
+   radius.
+3. Mesh LOD switching produces no visible texture discontinuity (mipmap chain
+   handles the resolution transition).
+4. VRAM consumption for terrain textures is within an order of magnitude of the
+   imagery-native-resolution lower bound (i.e., not bilateral up-sampling waste).
+5. Build pipeline detects coverage areas exceeding the single-mosaic limit and
+   emits a clear error referencing Option E.
+
+---
+
 ## Roadmap Item
 
 This design is associated with roadmap item **TB-1** in
@@ -902,6 +1289,8 @@ This design is associated with roadmap item **TB-1** in
 - OQ-TB-1, OQ-TB-2, and OQ-TB-3 are resolved by this document.  Implementation may begin.
 - OQ-TB-4 (triangulation mesh quality) is open.  It does not block the current implementation
   but must be resolved before the terrain pipeline is considered production-ready.
+- OQ-TB-5 (UV-mapped imagery textures) is open.  Resolution defines the texturing
+  approach; implementation is gated on user approval of this design.
 - All existing terrain ingestion tools in `python/tools/terrain/` (Steps 14–21 of
   [terrain-implementation-plan.md](../roadmap/terrain-implementation-plan.md)) — all
   complete.
