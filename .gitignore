@@ -28,3 +28,4 @@ godot/terrain/
 data/terrain/
 # GDExtension build output
 godot/addons/liteaero_sim/bin/
+data/proj_grids/egm2008.bin
