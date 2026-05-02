@@ -7,11 +7,13 @@
 // The Godot scene is launched separately by the developer.
 //
 // Usage:
-//   live_sim --config <aircraft-json> [--joystick <joystick-json>]
-//            [--device <index>] [--dt <seconds>] [--port <udp-port>]
+//   live_sim --config <aircraft-json> --terrain <terrain-config-json>
+//            [--joystick <joystick-json>] [--device <index>]
+//            [--dt <seconds>] [--port <udp-port>]
 //
 // Arguments:
 //   --config   Aircraft JSON config file (required)
+//   --terrain  terrain_config.json path written by build_terrain.py (required)
 //   --joystick JoystickInput JSON config file; enables joystick mode
 //   --device   SDL device index to use with joystick mode (default 0)
 //   --dt       Simulation timestep in seconds (default 0.02)
@@ -135,6 +137,7 @@ static void handle_signal(int /*sig*/)
 
 struct Args {
     std::string config_path;
+    std::string terrain_config_path;
     std::string joystick_config_path;
     int         device_index = 0;
     float       dt_s         = 0.02f;
@@ -145,7 +148,7 @@ static void print_usage(const char* prog)
 {
     std::cerr
         << "Usage: " << prog
-        << " --config <aircraft-json>"
+        << " --config <aircraft-json> --terrain <terrain-config-json>"
            " [--joystick <joystick-json>] [--device <index>]"
            " [--dt <seconds>] [--port <udp-port>]\n";
 }
@@ -157,6 +160,8 @@ static Args parse_args(int argc, char** argv)
         const std::string flag(argv[i]);
         if ((flag == "--config" || flag == "-c") && i + 1 < argc) {
             args.config_path = argv[++i];
+        } else if (flag == "--terrain" && i + 1 < argc) {
+            args.terrain_config_path = argv[++i];
         } else if (flag == "--joystick" && i + 1 < argc) {
             args.joystick_config_path = argv[++i];
         } else if (flag == "--device" && i + 1 < argc) {
@@ -173,6 +178,11 @@ static Args parse_args(int argc, char** argv)
     }
     if (args.config_path.empty()) {
         std::cerr << "Error: --config is required\n";
+        print_usage(argv[0]);
+        std::exit(1);
+    }
+    if (args.terrain_config_path.empty()) {
+        std::cerr << "Error: --terrain is required\n";
         print_usage(argv[0]);
         std::exit(1);
     }
@@ -206,16 +216,8 @@ int main(int argc, char** argv)
     }
 
     // --- Locate terrain_config.json ---
-    // Written by build_terrain.py.  Absence is a hard error.
-    // Honour LITEAERO_GODOT_DIR; otherwise use godot/terrain/ relative to cwd.
-    std::string godot_terrain_dir;
-    if (const char* env = std::getenv("LITEAERO_GODOT_DIR")) {
-        godot_terrain_dir = std::string(env) + "/terrain";
-    } else {
-        // Default: godot/terrain/ relative to current working directory.
-        godot_terrain_dir = "godot/terrain";
-    }
-    const std::string tc_path = godot_terrain_dir + "/terrain_config.json";
+    // Path supplied via --terrain; written by build_terrain.py.
+    const std::string tc_path = args.terrain_config_path;
 
     nlohmann::json terrain_config_json;
     {

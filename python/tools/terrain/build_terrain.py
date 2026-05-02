@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,7 +22,10 @@ from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
 from mosaic import mosaic_dem, mosaic_imagery
 from mosaic_render import MosaicTooLargeError, render_mosaic
-from terrain_paths import derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir
+from terrain_paths import (
+    derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir,
+    terrain_config_path,
+)
 from triangulate import lod_grid_spacing_deg, triangulate
 from verify import MeshQualityError, check
 
@@ -322,13 +324,8 @@ def build_terrain(
     )
 
     # -------------------------------------------------------------------
-    # Step 7: Write Godot sidecar files
+    # Step 7: Write terrain_config.json to dataset root
     # -------------------------------------------------------------------
-    godot_terrain_dir = _godot_terrain_dir()
-    godot_terrain_dir.mkdir(parents=True, exist_ok=True)
-
-    shutil.copy2(g_path, godot_terrain_dir / "terrain.glb")
-
     terrain_config = _build_terrain_config(
         config=config,
         dataset_name=dataset_name,
@@ -336,9 +333,9 @@ def build_terrain(
         center_lon_rad=center_lon_rad,
         center_h_m=center_h_m,
     )
-    (godot_terrain_dir / "terrain_config.json").write_text(
-        json.dumps(terrain_config, indent=4)
-    )
+    tc_path_out = terrain_config_path(dataset_name)
+    tc_path_out.write_text(json.dumps(terrain_config, indent=4))
+    _log.info("%s: terrain_config.json → %s", dataset_name, tc_path_out)
 
     # -------------------------------------------------------------------
     # Step 8: Write metadata.json (written last; its presence signals success)
@@ -565,7 +562,7 @@ def _build_terrain_config(
         tyre_r = float(wheel.get("tyre_radius_m", 0.0))
         gear_contact_height_m = max(gear_contact_height_m, attach_z + tyre_r)
 
-    glb_path_str = "res://terrain/terrain.glb"
+    glb_path_str = str(gltf_path(dataset_name).resolve())
 
     return {
         "schema_version": 1,
@@ -579,14 +576,6 @@ def _build_terrain_config(
         "aircraft_gear_contact_height_m": round(gear_contact_height_m, 4),
         "las_terrain_path": las_terrain_path,
     }
-
-
-def _godot_terrain_dir() -> Path:
-    """Return the path to godot/terrain/, using LITEAERO_GODOT_DIR env var if set."""
-    env = os.environ.get("LITEAERO_GODOT_DIR")
-    if env:
-        return Path(env) / "terrain"
-    return _PROJECT_ROOT / "godot" / "terrain"
 
 
 # ---------------------------------------------------------------------------
@@ -619,9 +608,11 @@ def _main() -> None:
             "  # Force a full rebuild (keeps cached downloads):\n"
             "  python build_terrain.py ../configs/general_aviation_ksba.json --force\n\n"
             "output locations:\n"
-            "  Terrain data:   data/terrain/<name>/\n"
-            "  Godot GLB:      godot/terrain/terrain.glb\n"
-            "  Godot config:   godot/terrain/terrain_config.json"
+            "  Terrain data:        data/terrain/<name>/\n"
+            "  terrain_config.json: data/terrain/<name>/terrain_config.json\n\n"
+            "to run the live sim after build:\n"
+            "  live_sim.exe --config configs/<name>.json \\\n"
+            "               --terrain data/terrain/<name>/terrain_config.json"
         ),
     )
     parser.add_argument(

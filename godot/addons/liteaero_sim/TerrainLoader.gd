@@ -3,10 +3,11 @@
 ## Design authority: docs/architecture/terrain_build.md §OQ-TB-2, §OQ-TB-3, §OQ-TB-5
 ##                   docs/architecture/godot_plugin.md §TerrainLoader Integration
 ##
-## Reads godot/terrain/terrain_config.json at scene start, loads the terrain GLB
-## programmatically via ResourceLoader, instantiates it into the scene tree,
-## applies per-node LOD visibility ranges, loads the aircraft mesh, and positions
-## the camera — all before the first UDP packet arrives.
+## Reads terrain_config.json from the path supplied via the Godot command-line user
+## arg --terrain at scene start, loads the terrain GLB programmatically via
+## ResourceLoader, instantiates it into the scene tree, applies per-node LOD
+## visibility ranges, loads the aircraft mesh, and positions the camera — all before
+## the first UDP packet arrives.
 ##
 ## Terrain texture: the GLB carries an embedded JPEG mosaic texture and a PBR
 ## material on each MeshInstance3D.  No material override is applied by this loader;
@@ -17,12 +18,12 @@
 ##
 ## Workflow after a terrain build:
 ##   1. Run build_terrain (Python).
-##   2. Press Play in Godot.
-##   No editor drag-and-drop or Inspector edits required.
+##   2. Launch Godot with:
+##        godot4 -- --terrain <absolute-path-to-terrain_config.json>
+##      Or in the Godot editor: Project → Project Settings → Run → Launch Flags,
+##      set to:  -- --terrain <absolute-path-to-terrain_config.json>
 
 extends Node
-
-const _CONFIG_PATH := "res://terrain/terrain_config.json"
 
 
 ## LOD visibility range lower bounds (metres) — switch-to-finer hysteresis thresholds.
@@ -259,22 +260,40 @@ func _apply_material_to_tree(node: Node, mat: Material) -> void:
 
 # ---------------------------------------------------------------------------
 
+func _get_terrain_config_path() -> String:
+	var user_args := OS.get_cmdline_user_args()
+	var i := 0
+	while i < user_args.size():
+		if user_args[i] == "--terrain" and i + 1 < user_args.size():
+			return user_args[i + 1]
+		i += 1
+	return ""
+
+
 func _load_config() -> Dictionary:
-	if not FileAccess.file_exists(_CONFIG_PATH):
+	var config_path := _get_terrain_config_path()
+	if config_path.is_empty():
 		push_error(
-			"TerrainLoader: terrain_config.json not found at %s — run build_terrain first"
-			% _CONFIG_PATH
+			"TerrainLoader: --terrain argument not provided. "
+			+ "Launch Godot with: godot4 -- --terrain <path-to-terrain_config.json>"
 		)
 		return {}
 
-	var f := FileAccess.open(_CONFIG_PATH, FileAccess.READ)
+	if not FileAccess.file_exists(config_path):
+		push_error(
+			"TerrainLoader: terrain_config.json not found at '%s' — run build_terrain first"
+			% config_path
+		)
+		return {}
+
+	var f := FileAccess.open(config_path, FileAccess.READ)
 	if f == null:
-		push_error("TerrainLoader: cannot open %s" % _CONFIG_PATH)
+		push_error("TerrainLoader: cannot open '%s'" % config_path)
 		return {}
 
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
 	if parsed == null or not (parsed is Dictionary):
-		push_error("TerrainLoader: terrain_config.json is not a valid JSON object")
+		push_error("TerrainLoader: terrain_config.json is not a valid JSON object at '%s'" % config_path)
 		return {}
 
 	return parsed as Dictionary

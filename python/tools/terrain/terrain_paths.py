@@ -7,9 +7,10 @@ project root (``Path(__file__).parents[3]``).  Override by setting
 Repository structure under ``TERRAIN_DATA_ROOT``::
 
     <dataset_name>/
-        source/           raw downloaded files (DEM GeoTIFF, imagery GeoTIFF)
+        terrain_config.json  Godot sidecar: world origin, GLB and las_terrain paths
+        source/              raw downloaded files (DEM GeoTIFF, imagery GeoTIFF)
         derived/
-            las_terrain/  LAS-format triangulated terrain
+            las_terrain/     LAS-format triangulated terrain
             gltf/
                 terrain.glb
             metadata.json
@@ -65,3 +66,8 @@ def gltf_path(dataset_name: str) -> Path:
 def metadata_path(dataset_name: str) -> Path:
     """Return the path to the dataset metadata JSON file."""
     return derived_dir(dataset_name) / "metadata.json"
+
+
+def terrain_config_path(dataset_name: str) -> Path:
+    """Return the path to terrain_config.json at the dataset root."""
+    return dataset_dir(dataset_name) / "terrain_config.json"

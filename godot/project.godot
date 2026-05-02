@@ -14,3 +14,7 @@ config/name="LiteAero Live Sim Viewer"
 config/description="Real-time 3D visualization of LiteAero Sim telemetry received via UDP."
 run/main_scene="res://scenes/World.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
+
+[editor]
+
+run/main_run_args="-- --terrain C:\\Users\\Alex\\avraero\\liteaero\\liteaero-sim\\data\\terrain\\small_uas_ksba\\terrain_config.json"
