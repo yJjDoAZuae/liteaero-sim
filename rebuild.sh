@@ -58,11 +58,32 @@ conan install . \
     --settings "build_type=$BUILD_TYPE"
 
 # ---------------------------------------------------------------------------
-# 3. CMake configure
+# 3. CMake configure — first pass without Godot plugin.
+#    The GDExtension CMakeLists checks for liteaerosim.pb.cc at configure
+#    time; that file does not exist until the proto target has been built.
 # ---------------------------------------------------------------------------
 
 echo ""
-echo "--- cmake configure ---"
+echo "--- cmake configure (1/2 — proto sources not yet generated) ---"
+cmake -B "$BUILD_DIR" -G "MinGW Makefiles" \
+    -DCMAKE_TOOLCHAIN_FILE="$BUILD_DIR/conan_toolchain.cmake" \
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+
+# ---------------------------------------------------------------------------
+# 3a. Generate protobuf sources
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "--- generating protobuf sources ---"
+mingw32-make -C "$BUILD_DIR" -j"$JOBS" liteaerosim_proto
+
+# ---------------------------------------------------------------------------
+# 3b. CMake reconfigure — second pass enables the Godot plugin now that
+#     liteaerosim.pb.cc exists.
+# ---------------------------------------------------------------------------
+
+echo ""
+echo "--- cmake configure (2/2 — Godot plugin enabled) ---"
 cmake -B "$BUILD_DIR" -G "MinGW Makefiles" \
     -DCMAKE_TOOLCHAIN_FILE="$BUILD_DIR/conan_toolchain.cmake" \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
