@@ -5,7 +5,7 @@ Runs a synthetic end-to-end pipeline using a flat 5×5 km DEM at the equator:
     2. simplify()     → L1 tile (face count < L0)
     3. colorize()     → all facets white (solid-color imagery)
     4. write_las_terrain() / read_las_terrain() round-trip
-    5. export_gltf()  → GLB magic bytes + POSITION count == 3 × facets
+    5. export_gltf()  → GLB magic bytes + POSITION count == unique vertex count
 """
 
 from __future__ import annotations
@@ -19,7 +19,8 @@ import pytest
 pytest.importorskip("rasterio")
 pytest.importorskip("scipy")
 pytest.importorskip("pyfqmr")
-pytest.importorskip("trimesh")
+pytest.importorskip("PIL")
+pytest.importorskip("pygltflib")
 
 
 def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
@@ -118,10 +119,15 @@ def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
     np.testing.assert_array_almost_equal(recovered[0].vertices, tile_l0.vertices, decimal=4)
 
     # -------------------------------------------------------------------
-    # 6. export_gltf() → GLB magic + POSITION count == 3 × facets.
+    # 6. export_gltf() → GLB magic + POSITION count == unique vertex count.
     # -------------------------------------------------------------------
+    from mosaic_render import render_mosaic
+
+    img_bbox = (lon_min - 0.001, lat_min - 0.001, lon_max + 0.001, lat_max + 0.001)
+    mosaic_desc = render_mosaic(img_bbox, imagery_path, source="sentinel2")
+
     glb_path = tmp_path / "terrain.glb"
-    export_gltf([tile_l0, tile_colored], glb_path)
+    export_gltf([tile_l0, tile_colored], glb_path, mosaic=mosaic_desc)
 
     glb_bytes = glb_path.read_bytes()
     assert glb_bytes[:4] == b"glTF", f"Bad GLB magic: {glb_bytes[:4]!r}"
@@ -140,9 +146,9 @@ def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
             if pos_idx is not None:
                 total_positions += accessors[pos_idx]["count"]
 
-    expected = 3 * (len(tile_l0.indices) + len(tile_colored.indices))
+    expected = len(tile_l0.vertices) + len(tile_colored.vertices)
     assert total_positions == expected, (
-        f"Expected {expected} POSITION vertices, got {total_positions}"
+        f"Expected {expected} POSITION vertices (unique), got {total_positions}"
     )
 
     assert b"liteaerosim_terrain" in glb_bytes

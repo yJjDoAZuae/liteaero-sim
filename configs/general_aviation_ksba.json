@@ -123,10 +123,10 @@
         "mesh_res_path": "res://assets/aircraft_lp.glb"
     },
     "initial_state": {
-        "_comment": "KSBA runway 07 threshold — aircraft at rest on the ground",
+        "_comment": "KSBA runway 07 threshold — aircraft at rest on the ground. altitude_m is WGS84 ellipsoidal (OQ-LS-12 Option A); MSL display only at HUD.",
         "latitude_rad": 0.60073,
         "longitude_rad": -2.09139,
-        "altitude_m": 3.0,
+        "altitude_m": -32.22,
         "velocity_north_mps": 0.0,
         "velocity_east_mps": 0.0,
         "velocity_down_mps": 0.0,

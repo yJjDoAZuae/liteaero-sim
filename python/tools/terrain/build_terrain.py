@@ -22,6 +22,7 @@ from export_gltf import export_gltf
 from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
 from mosaic import mosaic_dem, mosaic_imagery
+from mosaic_render import MosaicTooLargeError, render_mosaic
 from terrain_paths import derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir
 from triangulate import lod_grid_spacing_deg, triangulate
 from verify import MeshQualityError, check
@@ -160,7 +161,10 @@ def build_terrain(
         center_lon_deg = math.degrees(float(init["longitude_rad"]))
     center_lat_rad: float = math.radians(center_lat_deg)
     center_lon_rad: float = math.radians(center_lon_deg)
-    center_h_m: float = float(init.get("altitude_m", 0.0))
+    # center_h_m is derived from the geoid-corrected DEM after Step 2a so that
+    # the world-origin WGS84 height matches the actual terrain surface, not the
+    # aircraft's initial state altitude_m (which is independent and also WGS84).
+    center_h_m: float = 0.0  # overwritten after geoid correction in Step 2a
 
     # Terrain radius: CLI/caller override takes precedence over config terrain section.
     if radius_m is None:
@@ -247,6 +251,29 @@ def build_terrain(
     )
     apply_geoid_correction(dem_mosaic_path, dem_ellipsoidal_path, geoid=geoid)
 
+    center_h_m = _sample_dem_height(dem_ellipsoidal_path, center_lon_deg, center_lat_deg)
+    _log.info(
+        "%s: world origin WGS84 height %.3f m  (sampled from ellipsoidal DEM)",
+        dataset_name, center_h_m,
+    )
+
+    # -------------------------------------------------------------------
+    # Step 2b: Render JPEG mosaic texture (TB-T1)
+    #
+    # Covers the full bbox at imagery-native pixel density, rounded up to
+    # the nearest power of two.  All tile GLB mesh primitives share this
+    # texture; per-vertex TEXCOORD_0 maps each vertex to the mosaic.
+    # -------------------------------------------------------------------
+    _log.info("%s: rendering mosaic texture ...", dataset_name)
+    mosaic_desc = render_mosaic(
+        bbox_deg, img_mosaic_path, imagery_source, max_pixel_dim=8192
+    )
+    _log.info(
+        "%s: mosaic texture %d×%d px  %.1f kB JPEG",
+        dataset_name, mosaic_desc.width_pixels, mosaic_desc.height_pixels,
+        len(mosaic_desc.jpeg_bytes) / 1024.0,
+    )
+
     # -------------------------------------------------------------------
     # Step 3: Triangulate and colorize all LOD levels
     # -------------------------------------------------------------------
@@ -285,12 +312,13 @@ def build_terrain(
     )
 
     # -------------------------------------------------------------------
-    # Step 6: Export GLB
+    # Step 6: Export GLB (with embedded mosaic texture)
     # -------------------------------------------------------------------
     export_gltf(
         display_tiles,
         g_path,
         world_origin=(center_lat_rad, center_lon_rad, center_h_m),
+        mosaic=mosaic_desc,
     )
 
     # -------------------------------------------------------------------
@@ -339,6 +367,19 @@ def build_terrain(
 # ---------------------------------------------------------------------------
 # Internal helpers (also exposed for unit-testing parameter derivation)
 # ---------------------------------------------------------------------------
+
+def _sample_dem_height(dem_path: Path, lon_deg: float, lat_deg: float) -> float:
+    """Return the WGS84 ellipsoidal height (m) from dem_path at (lon_deg, lat_deg).
+
+    Uses rasterio's point-sampling via the affine transform.  The DEM must
+    already carry ellipsoidal heights (i.e., geoid correction applied).
+    """
+    import rasterio
+
+    with rasterio.open(dem_path) as src:
+        vals = list(src.sample([(lon_deg, lat_deg)]))
+    return float(vals[0][0])
+
 
 def _radius_from_config(config: dict) -> float:
     """Return the terrain radius (m) from the config ``terrain.radius_km`` field.
@@ -674,7 +715,7 @@ def _main() -> None:
             imagery_source=args.imagery_source,
             force=args.force,
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, ValueError, MosaicTooLargeError) as exc:
         parser.error(str(exc))
 
     print(f"terrain ready → {glb_path}")

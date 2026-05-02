@@ -1,16 +1,18 @@
 ## TerrainLoader.gd — Programmatic terrain dataset loader.
 ##
-## Design authority: docs/architecture/terrain_build.md §OQ-TB-2 and §OQ-TB-3
+## Design authority: docs/architecture/terrain_build.md §OQ-TB-2, §OQ-TB-3, §OQ-TB-5
 ##                   docs/architecture/godot_plugin.md §TerrainLoader Integration
-##                   docs/architecture/godot_plugin.md §Mesh Appearance Shader
 ##
 ## Reads godot/terrain/terrain_config.json at scene start, loads the terrain GLB
 ## programmatically via ResourceLoader, instantiates it into the scene tree,
-## applies per-node LOD visibility ranges, loads the aircraft mesh, and sets
-## the world origin on SimulationReceiver — all before the first UDP packet arrives.
+## applies per-node LOD visibility ranges, loads the aircraft mesh, and positions
+## the camera — all before the first UDP packet arrives.
+##
+## Terrain texture: the GLB carries an embedded JPEG mosaic texture and a PBR
+## material on each MeshInstance3D.  No material override is applied by this loader;
+## the GLB's imported material is used as-is.
 ##
 ## Appearance controls (adjustable in the Inspector while the scene runs):
-##   terrain_saturation / terrain_brightness / terrain_contrast / terrain_transparency
 ##   aircraft_saturation / aircraft_brightness / aircraft_contrast / aircraft_transparency
 ##
 ## Workflow after a terrain build:
@@ -114,7 +116,6 @@ const _LOD_VIS_END_M: Array[float] = [
 # Private state
 # ---------------------------------------------------------------------------
 
-var _terrain_material:      StandardMaterial3D = null
 var _aircraft_material:     StandardMaterial3D = null
 var _camera:                Camera3D           = null
 var _aircraft_center_world_y: float            = 0.0
@@ -144,10 +145,6 @@ func _ready() -> void:
 
 	add_child(terrain_node)
 	_apply_visibility_ranges(terrain_node)
-	if _terrain_material != null:
-		call_deferred("_apply_material_deferred", terrain_node)
-	else:
-		push_error("TerrainLoader: terrain_material is null — shader creation failed")
 	_load_aircraft_mesh(config)
 	# LS-T8: SimulationReceiver no longer needs the world origin.  The
 	# simulation-side GodotEnuProjector consumes terrain_config.json directly
@@ -222,11 +219,6 @@ func _find_camera(node: Node) -> Camera3D:
 # ---------------------------------------------------------------------------
 
 func _create_materials() -> void:
-	_terrain_material = StandardMaterial3D.new()
-	_terrain_material.vertex_color_use_as_albedo = true
-	_terrain_material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	_terrain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-
 	_aircraft_material = StandardMaterial3D.new()
 	_update_aircraft_color()
 
@@ -255,19 +247,15 @@ func _update_aircraft_color() -> void:
 	_aircraft_material.flags_transparent = aircraft_transparency < 1.0
 
 
-func _apply_material_deferred(terrain_node: Node) -> void:
-	_apply_material_to_tree(terrain_node, _terrain_material, true)
-
-## Recursively apply mat to every MeshInstance3D under node.
-## is_terrain controls shadow casting: terrain receives but does not cast shadows.
-func _apply_material_to_tree(node: Node, mat: Material, is_terrain: bool = false) -> void:
+## Recursively apply mat and enable shadow casting on every MeshInstance3D under node.
+## Used for the aircraft mesh only; terrain material is provided by the GLB.
+func _apply_material_to_tree(node: Node, mat: Material) -> void:
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
 		mi.material_override = mat
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if is_terrain \
-			else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	for child: Node in node.get_children():
-		_apply_material_to_tree(child, mat, is_terrain)
+		_apply_material_to_tree(child, mat)
 
 # ---------------------------------------------------------------------------
 
