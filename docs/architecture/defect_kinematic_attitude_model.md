@@ -308,13 +308,33 @@ production code second. Items are sequenced so each builds on verified predecess
 Write tests verifying that `stepQnv` (or the refactored successor) produces the correct `q_nVW`
 from known velocity vectors:
 
-- Level flight (γ = 0, χ = 0): `q_nVW` = identity.
-- Level flight (γ = 0, χ = 90°): correct yaw-only rotation.
-- Climbing flight (γ = 45°, χ = 0): correct pitch-only rotation.
-- Near-vertical (γ → 90°): azimuth singularity fallback holds; result is continuous.
-- Zero-velocity degeneracy: returns a defined (identity or last-valid) quaternion without NaN.
+- **Level flight, north (γ = 0, χ = 0):** `q_nVW` = identity.
+- **Level flight, east (γ = 0, χ = 90°):** correct yaw-only rotation; no pitch component.
+- **Climbing flight (γ = 45°, χ = 0):** correct pitch-only rotation; no yaw component.
+- **Zero-velocity degeneracy:** returns a defined (identity or last-valid) quaternion without NaN.
+- **Orientation continuity near vertical — ascending approach:** Sweep γ through a sequence of
+  angles approaching 90° from below (e.g., 80°, 85°, 88°, 89°, 89.9°, 90°) with a fixed
+  horizontal component (χ = 45°). At each step compute `q_nVW` and verify that the angular
+  distance `2 * acos(|q_i · q_{i+1}|)` between consecutive outputs is bounded by a small
+  multiple of the input angle increment. The bound must hold all the way to γ = 90° — the
+  singularity fallback must not introduce a discontinuous jump.
+- **Orientation continuity near vertical — descending approach:** Same sweep from γ = −80°
+  toward −90°, again with a fixed nonzero χ. Same continuity bound must hold.
+- **Orientation continuity across vertical:** Sweep γ from 89° through 90° to 91° (velocity
+  passes from steep climb through straight up to slightly past vertical). `q_nVW` must change
+  by no more than the angular displacement corresponding to the 2° total sweep — i.e., it must
+  not jump discontinuously as γ crosses 90°. Because χ is degenerate at exactly γ = 90°, the
+  singularity fallback must preserve the previous azimuth (or a defined convention) rather than
+  snapping to zero or producing a large rotation.
+- **Azimuth independence at vertical:** At γ = 90° exactly, two velocity vectors with different
+  horizontal components but the same vertical component (e.g., v = [ε, 0, −V] and
+  v = [0, ε, −V] for small ε → 0) must produce `q_nVW` values that are close to each other
+  and to the γ → 90° limit from the sweep above. This validates that the singularity fallback
+  is consistent with the surrounding neighborhood.
 
-These tests define the contract for the VW-frame builder before any production code changes.
+These tests fully specify the contract for the VW-frame builder — correctness in the non-singular
+regime, and orientation continuity (no jump discontinuities) through the vertical singularity —
+before any production code changes.
 
 ### IP-2 — Activate `stepQnv`; fix `q_nv()` accessor (D-3)
 
@@ -347,6 +367,19 @@ Write tests that will fail against the current `stepQnw` and pass only after IP-
 - **Snapshot round-trip through velocity change:** Serialize `KinematicState`, restore, apply a
   large velocity direction change — `q_nw` must remain coherent (roll component preserved via
   `q_roll` extracted from the snapshot's stored `q_nw`).
+- **Roll residual continuity through vertical — no roll input:** Starting from a steep climb
+  (γ = 80°, χ = 45°, nonzero wind-axis bank angle, zero roll rate), drive γ through 90° and
+  beyond (e.g., 80° → 85° → 90° → 95°) by applying a sequence of small velocity increments,
+  each within a single `step()` call. After each step, extract the roll residual
+  `q_roll = q_nVW⁻¹ ⊗ q_nw` and verify that its angular magnitude changes by no more than
+  a small tolerance driven by floating-point precision — the roll residual must not jump as
+  γ crosses 90°. This test will fail against the current `stepQnw` because `setFromTwoVectors`
+  produces a large spurious rotation whenever the velocity direction changes sharply, whether
+  due to a gear bounce or an arithmetically near-degenerate azimuth.
+- **Roll residual continuity through vertical — with constant roll input:** Same trajectory as
+  above but with a nonzero constant `p_W`. Verify that the accumulated roll residual grows
+  monotonically at the commanded rate throughout the vertical crossing — it must not stall,
+  reverse, or jump as γ passes 90°.
 
 ### IP-4 — Rewrite `stepQnw` with quaternion roll residual algorithm (D-1)
 
