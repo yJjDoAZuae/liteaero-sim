@@ -61,28 +61,27 @@ before this call.
 
 **Main flow:**
 
-For `i` in `[0, integration_substeps)`, executing at the finer timestep `integration_dt_s`:
-
 1. Compute true airspeed from `KinematicState::velocity_NED_mps()` and the supplied
    `wind_NED_mps`. Dynamic pressure follows from `rho_kgm3` and airspeed.
-2. Record previous-step thrust `T_prev = _propulsion->thrust_n()`.
+2. Read `T_prev` from the previous propulsion step (or 0 at `t=0`).
 3. Clamp raw commanded load factors to airframe structural limits.
 4. Run the command filter loop `cmd_filter_substeps` times, advancing `_nz_filter`,
    `_ny_filter`, and `_roll_rate_filter` at `cmd_filter_dt_s`. After the loop, read shaped
    commands and compute derivatives analytically from filter state.
-5. Solve for angle of attack (`α`) and sideslip (`β`) using `LoadFactorAllocator::solve()`
-   with the shaped load factors and their analytically derived time derivatives.
-   `alpha_min_rad` and `alpha_max_rad` are passed to the solver as a box constraint
-   applied at every Newton iteration — a hard physical limit independent of the lift curve
-   stall boundary.
+5. Solve for angle of attack (`α`) and sideslip (`β`) using `LoadFactorAllocator::solve()`.
 6. Evaluate `CL = LiftCurveModel::evaluate(α)`.
 7. Compute aerodynamic forces in the Wind frame via `AeroPerformance::compute()`.
-8. Advance propulsion: `thrust_n = Propulsion::step(throttle, V_air, rho)`.
-9. Decompose thrust into Wind-frame acceleration components; combine with aerodynamic
-   forces. Gravity is **not** added separately — it is already embedded in the load factor
-   constraint solved in step 5.
-10. Advance `KinematicState::step()` with the computed Wind-frame acceleration, shaped roll
-    rate, and aerodynamic angle inputs, using `integration_dt_s`.
+8. Step landing gear (`LandingGear::step()`) and body collider (`BodyCollider::step()`)
+   against terrain, accumulating contact forces in the body frame.
+9. Advance propulsion: `thrust_n = Propulsion::step(throttle, V_air, rho)`.
+10. Assemble Wind-frame acceleration from thrust, aerodynamic forces, and contact forces
+    (transformed body→wind). Gravity is implicit — the allocator generates lift equal to
+    `n_z·m·g`, which at equilibrium exactly cancels gravity.
+11. Advance `KinematicState::step()` with the computed Wind-frame acceleration, shaped roll
+    rate, and aerodynamic angle inputs.
+12. Apply terrain hard constraint via `BodyCollider::maxCornerPenetration_m()` and
+    `KinematicState::applyTerrainHardConstraint()` if any body-collider corner penetrates
+    terrain after integration.
 
 **Postconditions:** `state()` reflects the aircraft position, velocity, and attitude at
 `time_sec + runner_dt_s`. `Propulsion::thrust_n()` reflects the engine thrust at the last
@@ -340,6 +339,7 @@ classDiagram
 
     class KinematicState {
         +step(time_sec, accel_Wind, rollRate, alpha, beta, alphaDot, betaDot, wind_NED) void
+        +applyTerrainHardConstraint(penetration_m) void
         +velocity_NED_mps() Vector3f
         +serializeJson() json
         +deserializeJson(j) void
@@ -674,14 +674,17 @@ its full configuration and internal state.
 8. AeroForces F = _aeroPerf->compute(lf.alpha_rad, lf.beta_rad, q_inf, CL)
    // F.x_n < 0 (drag),  F.y_n (side force),  F.z_n < 0 (lift upward)
 
+8b. ContactForces G = _landingGear->step(...)  // body frame; also _bodyCollider->step()
+
 9. float T  = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3)   // outer rate
 
 10. float cα = cosf(lf.alpha_rad),  sα = sinf(lf.alpha_rad)
     float cβ = cosf(lf.beta_rad),   sβ = sinf(lf.beta_rad)
+    // Contact forces rotated from body frame to Wind frame via R_nw^T * R_nb
     Eigen::Vector3f a_Wind {
-        (T * cα * cβ  + F.x_n) / _inertia.mass_kg,
-        (-T * cα * sβ + F.y_n) / _inertia.mass_kg,
-        (-T * sα      + F.z_n) / _inertia.mass_kg
+        (T * cα * cβ  + F.x_n + G_wind.x()) / _inertia.mass_kg,
+        (-T * cα * sβ + F.y_n + G_wind.y()) / _inertia.mass_kg,
+        (-T * sα      + F.z_n + G_wind.z()) / _inertia.mass_kg
     }
 
 11. _state.step(time_sec, a_Wind,
@@ -689,6 +692,9 @@ its full configuration and internal state.
                 lf.alpha_rad,  lf.beta_rad,
                 lf.alphaDot_rps, lf.betaDot_rps,
                 wind_NED_mps)
+
+12. if (_bodyCollider->maxCornerPenetration_m() > 0)
+        _state.applyTerrainHardConstraint(_bodyCollider->maxCornerPenetration_m())
 ```
 
 ### Wind-Frame Force Decomposition
@@ -728,9 +734,10 @@ flowchart LR
         VAS["1. V_air / q_inf"]
         ELP["3. Envelope clamp"]
         FLT["4–5. Command filters\n_nz / _ny / _roll_rate\n+ derivative extraction"]
-        LFA["6. LoadFactorAllocator"]
-        LCM["7. LiftCurveModel"]
-        AER["8. AeroPerformance"]
+        LFA["5. LoadFactorAllocator"]
+        LCM["6. LiftCurveModel"]
+        AER["7. AeroPerformance"]
+        GEAR["8. LandingGear +\nBodyCollider"]
         PROP["9. Propulsion (outer rate)"]
         ACCEL["10. Wind-frame accel"]
         KIN["11. KinematicState"]
@@ -746,11 +753,13 @@ flowchart LR
     LCM --> LFA
     LFA --> AER
     VAS --> AER
+    ENV --> GEAR
     VAS --> PROP
     CMD --> PROP
     ENV --> PROP
     PROP --> ACCEL
     AER --> ACCEL
+    GEAR --> ACCEL
     LFA --> ACCEL
     FLT --> KIN
     ACCEL --> KIN
