@@ -50,6 +50,7 @@ to the C++ `TerrainMesh` class.
 | OQ-TB-2 | How should the terrain world origin and GLB path be communicated to the Godot scene without manual GUI interaction? | **Resolved — see §OQ-TB-2 Analysis** |
 | OQ-TB-3 | How should LOD levels be exported to the Godot GLB so that the correct LOD renders at each camera distance without exceeding GPU VRAM? | **Resolved — see §OQ-TB-3 Analysis** |
 | OQ-TB-4 | The current `triangulate.py` produces sliver triangles (small interior angles, high aspect ratios) in flat and coastal regions.  How should the triangulation algorithm be redesigned to guarantee mesh quality? | **Open — see §OQ-TB-4 Analysis** |
+| OQ-TB-5 | How should surface imagery be bound to terrain geometry to achieve runway-visible detail without per-facet color aliasing? | **Resolved — see §OQ-TB-5 Addendum** |
 
 ---
 
@@ -473,7 +474,7 @@ def build_terrain(
     name: str | None = None,
     radius_m: float | None = None,
     dem_source: str = "copernicus_dem_glo30",
-    imagery_source: str = "sentinel2",
+    imagery_source: str = "naip",
     force: bool = False,
 ) -> Path:
     """Build a complete terrain dataset for a live-sim aircraft configuration.
@@ -494,8 +495,8 @@ def build_terrain(
     dem_source:
         DEM data source.  One of ``"copernicus_dem_glo30"``, ``"nasadem"``, ``"srtm"``.
     imagery_source:
-        Imagery source for facet colorisation.  One of ``"sentinel2"``,
-        ``"landsat9"``, ``"modis"``.
+        Imagery source for colorisation.  One of ``"naip"`` (default),
+        ``"sentinel2"``, ``"landsat9"``, ``"modis"``.
     force:
         If True, delete cached downloads and regenerate all derived files from scratch.
 
@@ -571,7 +572,7 @@ bbox_deg = (
 
 ## Download Strategy
 
-### Chunk Size
+### DEM — Chunk Size
 
 The Sentinel Hub Process API limits each request to approximately 2,500 × 2,500 pixels.
 At the native L0 resolution of 0.000090 deg/px, the maximum chunk side is
@@ -595,21 +596,85 @@ a single `mosaic_dem` call.
 | General aviation | 66 km × 66 km | 3 × 3 | 9 | ~65 MB |
 | Jet trainer | 180 km × 180 km | 8 × 8 | 64 | ~1.2 GB |
 
-Imagery download uses the same tiling with the same chunk dimensions.  Total API
-requests (DEM + imagery) = 2 × the DEM request count above.
+### NAIP Imagery — Planetary Computer STAC API
+
+NAIP (National Agriculture Imagery Program) provides ~0.6 m/pixel native-resolution
+aerial orthophotos for the continental US.  It is the default `imagery_source` because
+it resolves features the runway width (~45 m) that are invisible in Sentinel-2 (10 m/px).
+
+**Data source:** Microsoft Planetary Computer STAC API.
+
+```
+https://planetarycomputer.microsoft.com/api/stac/v1/collections/naip/items
+```
+
+The TNM API previously used for NAIP is decommissioned and returns no results.  The
+Planetary Computer API returns NAIP quarter-quad COG tiles; imagery assets are hosted
+on Azure Blob Storage and are publicly accessible without SAS tokens.
+
+**Tile discovery:** `download.py:_download_naip` queries the API with the terrain bbox,
+follows pagination links (`rel='next'`), and sorts results by `-datetime` (newest first).
+Feature IDs use the format `<state>_m_<quad>_<quadrant>_<zone>_<gsd>_<YYYYMMDD>`.
+
+**Geographic deduplication:** The first four underscore-separated components form the
+geographic quad key (`state_m_quad_quadrant`), which uniquely identifies the ground
+footprint independent of GSD variant (060cm vs 100cm) and acquisition date.  Only the
+most recent tile for each quad key is retained.  This prevents downloading both 0.6 m
+and 1.0 m captures of the same area.
+
+**Download method — full-tile streaming:** NAIP quarter-quads are COGs (~13 km × 11 km,
+~300 MB per tile).  COG windowed reads (HTTP range requests) issue thousands of
+round-trips for any terrain-scale window, taking 25 minutes or more per tile.  The
+implementation streams each tile in its entirety as a single HTTP response
+(`requests.get(stream=True)`) into a temp file, then renames it to the cache path.
+This reduces per-tile download time to under 10 minutes on typical consumer broadband.
+
+**Temp file cleanup:** The temp file is deleted on any exception, including
+`KeyboardInterrupt` (caught as `BaseException`), so a cancelled build does not
+accumulate orphaned files in the cache directory.
+
+**Cache key — feature ID only:** Each NAIP tile is cached as
+`python/cache/terrain/imagery/naip/<feature_id>.tif`.  The cache key contains no bbox
+component so the same downloaded tile is reused for any terrain configuration whose
+bbox intersects that tile's footprint.
+
+**NAIP → `render_mosaic` bypass of `mosaic_imagery`:** `mosaic_imagery` computes pixel
+resolution from the source raster's `transform.a` field (UTM pixel size in metres, e.g.
+0.6) and passes it as `resolution` to `calculate_default_transform` targeting EPSG:4326.
+This misinterprets metres as degrees, producing a 1×1-pixel output.  For NAIP tiles,
+`build_terrain` therefore skips `mosaic_imagery` entirely and passes the per-tile paths
+directly to `render_mosaic` as `(path, "naip")` pairs.
+
+### Sentinel-2 and Landsat Imagery
+
+Sentinel-2 and Landsat 9 continue to use the existing chunked download from Sentinel Hub
+with the same chunk dimensions as the DEM:
+
+| Aircraft class | Bbox extent | Chunks (per axis) | Total imagery requests |
+| --- | --- | --- | --- |
+| Small UAS | 24 km × 24 km | 1 × 1 | 1 |
+| General aviation | 66 km × 66 km | 3 × 3 | 9 |
+| Jet trainer | 180 km × 180 km | 8 × 8 | 64 |
+
+Each chunk is merged by `mosaic_imagery` before being passed to `render_mosaic`.
 
 ### Cache Layout
 
-Each downloaded chunk is stored at:
+DEM chunks and non-NAIP imagery chunks are stored at:
 
 ```
 python/cache/terrain/dem/<source>/<bbox_tag>.tif
 python/cache/terrain/imagery/<source>/<bbox_tag>.tif
 ```
 
-where `bbox_tag` is generated by `download.py:_bbox_tag`.  If the file already exists
-the download is skipped.  `force=True` deletes all cached files for the dataset before
-beginning.
+NAIP tiles are stored at:
+
+```
+python/cache/terrain/imagery/naip/<feature_id>.tif
+```
+
+If the cache file already exists the download is skipped.  `force=True` deletes all
+cached files for the dataset before beginning.
 
 ---
 
@@ -625,19 +690,22 @@ aircraft_config_path
     ├─ compute: radius_m, bbox_deg, n_chunks
     │
     ▼
-[1] download_dem(chunk_bbox)          ×n_chunks   (native L0 resolution)
-    download_imagery(chunk_bbox)       ×n_chunks
+[1] download_dem(chunk_bbox)                ×n_chunks   (native L0 resolution)
+    download_naip(bbox_deg)                 (NAIP: full tile per quarter-quad)
+       — or —
+    download_imagery(chunk_bbox)            ×n_chunks   (Sentinel-2, Landsat)
     │
     ▼
 [2] mosaic_dem(dem_chunks → source/dem_mosaic.tif)
-    mosaic_dem(img_chunks → source/img_mosaic.tif)
+    [NAIP: skip mosaic_imagery; pass tile paths directly to render_mosaic]
+    [Sentinel-2/Landsat: mosaic_imagery(img_chunks → source/img_mosaic_<src>.tif)]
     │
     ▼
 [3] triangulate(dem_mosaic, bbox_deg, lod=0)
     → L0 tile (TerrainTileData)
     │
     ▼
-[4] colorize(tile, img_mosaic, source=imagery_source)
+[4] colorize(tile, img_mosaic, source=imagery_source)   [advisory; .las_terrain colors]
     → L0 tile with per-facet RGB
     │
     ▼
@@ -651,7 +719,14 @@ aircraft_config_path
 [6] write_las_terrain(las_terrain_dir / "terrain.las_terrain", all_tiles)
     │
     ▼
-[7] export_gltf(display_tiles, gltf_path)   (see OQ-TB-3 §Geographic Partitioning)
+[7] display_tiles = geographic_partition(all_tiles)      (see OQ-TB-3)
+    for tile in display_tiles:
+        tile_mosaic = render_mosaic(
+            tile_bbox_deg, img_mosaic_paths,
+            max_pixel_dim=_LOD_MAX_PIXEL_DIM[tile.lod],
+        )
+        tile_mosaics.append((tile, tile_mosaic))
+    export_gltf(tile_mosaics, gltf_path)                 (see §OQ-TB-5 Addendum)
     │
     ▼
 return gltf_path
@@ -1310,6 +1385,126 @@ OQ-TB-5 is resolved when:
 
 ---
 
+## OQ-TB-5 Addendum — Per-Tile Textures with NAIP Implemented
+
+### Why Option C Became Viable
+
+The original OQ-TB-5 analysis rejected Option C (per-tile textures) because it assumed
+the full set of L0 tiles across the terrain coverage area would be exported — 144 tiles
+for a 12 km KSBA build.  At 2048² per tile that is 2.3 GB of VRAM, which exceeds the
+4 GB GTX 1050 Ti budget when combined with other scene resources.
+
+OQ-TB-3 analysis revealed that **geographic partitioning** limits the number of exported
+tiles to roughly one per LOD level within the visibility-range cutoff radius.  For a
+KSBA build with seven LOD levels (L0–L6), the total exported tile count is
+approximately 7–10 tiles.  Per-tile texture VRAM is then:
+
+| LOD | Tile count | Max pixel dim | Approx VRAM per tile | Subtotal |
+| --- | --- | --- | --- | --- |
+| L0 | 1 | 2048 | ~12 MB | ~12 MB |
+| L1 | 1 | 4096 | ~48 MB | ~48 MB |
+| L2 | 1 | 8192 | ~192 MB | ~192 MB |
+| L3 | 1 | 8192 | ~192 MB | ~192 MB |
+| L4–L6 | 1–4 | 4096 | ~48 MB each | ~100 MB |
+| **Total** | **~7** | | | **~550 MB** |
+
+550 MB is 14% of the 4 GB budget — well within headroom alongside the aircraft mesh,
+render targets, and Godot overhead.
+
+### Why NAIP Makes Per-Tile Worth It
+
+Sentinel-2's 10 m/pixel native resolution means that a single-mosaic texture covering
+all LOD levels has no more inherent detail than 10 m/px regardless of the number of
+pixels allocated.  At LOD 0 (~1 km × 1 km tile footprint), a 2048² texture at
+Sentinel-2 native scales to ~0.5 m/px per tile — but this only resamples existing 10 m
+pixels; it does not recover sub-10 m features.
+
+NAIP provides **~0.6 m/pixel native resolution** — genuine sub-meter photographic
+detail.  An L0 tile (~1 km) at NAIP native fits in a 1667 × 1667 pixel texture, which
+is within the 2048 cap without clamping.  The KSBA runway (45 m wide) maps to
+approximately 75 pixels across in the L0 texture — sharp, unaliased, and visible at
+close range.
+
+The combination of geographic partitioning (few tiles) and NAIP native resolution
+(genuine sub-meter imagery) makes per-tile textures both feasible and the approach that
+delivers the most imagery detail for close-in LODs.
+
+### Per-LOD Texture Resolution Caps
+
+```python
+_LOD_MAX_PIXEL_DIM: list[int] = [
+    2048,   # L0  ~1 km footprint   → NAIP native ~1667 px, fits without clamping
+    4096,   # L1  ~3 km footprint   → NAIP native ~5000 px → 4096 cap (~0.73 m/px)
+    8192,   # L2  ~10 km footprint  → NAIP native ~16 k px → 8192 cap (~1.2 m/px)
+    8192,   # L3  ~30 km footprint  → 8192 cap (~3.7 m/px)
+    4096,   # L4  ~100 km footprint → Sentinel-2 native ~10 k px → 4096 cap
+    4096,   # L5  same as L4
+    4096,   # L6  same as L4
+]
+```
+
+L4–L6 tiles cover 100 km+ footprints where NAIP's quarter-quad tiles would require
+assembling hundreds of source tiles; Sentinel-2 is appropriate at those scales.
+
+### Implementation
+
+`build_terrain.py` renders one mosaic per exported tile and passes the list of
+`(TerrainTileData, MosaicDescriptor)` pairs to `export_gltf`:
+
+```python
+tile_mosaics: list[tuple[TerrainTileData, MosaicDescriptor]] = []
+for tile in display_tiles:
+    tile_bbox_deg = (
+        math.degrees(tile.lon_min_rad),
+        math.degrees(tile.lat_min_rad),
+        math.degrees(tile.lon_max_rad),
+        math.degrees(tile.lat_max_rad),
+    )
+    tile_mosaic = render_mosaic(
+        tile_bbox_deg, img_mosaic_paths,
+        max_pixel_dim=_LOD_MAX_PIXEL_DIM[tile.lod],
+    )
+    tile_mosaics.append((tile, tile_mosaic))
+export_gltf(tile_mosaics, gltf_path, world_origin=world_origin)
+```
+
+`export_gltf` creates one `Image`, `Texture`, and `Material` per tile inside the tile
+loop.  All primitives share a single `Sampler` (linear filtering, clamp-to-edge).
+Each tile's `MeshPrimitive` references its own material index.  Per-vertex
+`TEXCOORD_0` maps each vertex's geodetic position to the tile's own mosaic bounds
+(`u=0` at tile west edge, `u=1` at tile east edge; `v=0` at tile north edge,
+`v=1` at tile south edge).
+
+### Updated Performance Table
+
+For a KSBA build (~7 exported tiles):
+
+| Aspect | Old baseline (Option A — per-facet color) | Implemented (per-tile NAIP texture) |
+| --- | --- | --- |
+| Imagery resolution | 10 m/px (Sentinel-2) | 0.6 m/px (NAIP) |
+| Runway visible in Godot | No (45 m feature, speckle alias) | Yes (~75 px wide at L0) |
+| Tex VRAM | 0 | ~550 MB |
+| GPU geometry | 3× duplicated vertices (COLOR_0) | 1× deduplicated vertices |
+| GLB texture data | 0 | ~10–30 MB JPEG |
+| Godot material count | 1 (shared terrain material) | ~7 (one per exported tile) |
+| Seams | None (vertex color) | None (one texture per tile; UV clamped) |
+
+### Resolution Criterion — OQ-TB-5 (Revised)
+
+OQ-TB-5 is resolved when:
+
+1. A KSBA terrain build produces a GLB with one JPEG texture per exported tile;
+   `COLOR_0` is absent from all primitives.
+2. `TEXCOORD_0` maps each vertex's geodetic position correctly to that tile's own
+   mosaic bounds.
+3. The KSBA runway is visible as a continuous strip in the Godot view when the
+   camera is within the L0 tile's visibility range (≤ 345 m slant).
+4. Total terrain texture VRAM is under 1 GB on the reference GTX 1050 Ti (4 GB).
+5. The pipeline detects `imagery_source="naip"` and bypasses `mosaic_imagery`,
+   passing NAIP tile paths directly to `render_mosaic`.
+
+---
+
 ## Roadmap Item
 
 This design is associated with roadmap item **TB-1** in
@@ -1317,11 +1512,11 @@ This design is associated with roadmap item **TB-1** in
 
 **TB-1** depends on:
 
-- OQ-TB-1, OQ-TB-2, and OQ-TB-3 are resolved by this document.  Implementation may begin.
-- OQ-TB-4 (triangulation mesh quality) is open.  It does not block the current implementation
-  but must be resolved before the terrain pipeline is considered production-ready.
-- OQ-TB-5 (UV-mapped imagery textures) is open.  Resolution defines the texturing
-  approach; implementation is gated on user approval of this design.
+- OQ-TB-1, OQ-TB-2, OQ-TB-3, and OQ-TB-5 are resolved by this document.
+  Implementation is complete for all four.
+- OQ-TB-4 (triangulation mesh quality) is open.  It does not block the current
+  implementation but must be resolved before the terrain pipeline is considered
+  production-ready.
 - All existing terrain ingestion tools in `python/tools/terrain/` (Steps 14–21 of
   [terrain-implementation-plan.md](../roadmap/terrain-implementation-plan.md)) — all
   complete.
