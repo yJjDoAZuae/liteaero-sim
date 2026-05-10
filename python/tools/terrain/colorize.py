@@ -27,6 +27,7 @@ SCALE_FACTORS: dict[str, float] = {
     "sentinel2": 1.0 / 10000.0,  # Sentinel-2 L2A surface reflectance × 10000
     "landsat9":  1.0 / 55000.0,  # Landsat C2L2 surface reflectance × 55000
     "modis":     1.0 / 32767.0,  # MODIS MCD43A4 BRDF-adjusted reflectance × 32767
+    "naip":      1.0 / 255.0,    # NAIP 8-bit uint8, already display-calibrated
 }
 
 # Brightness gain applied to linear reflectance before gamma correction.
@@ -37,6 +38,7 @@ DISPLAY_GAIN: dict[str, float] = {
     "sentinel2": 3.5,
     "landsat9":  3.5,
     "modis":     3.5,
+    "naip":      1.0,  # already display-calibrated; no additional gain applied
 }
 
 # Display gamma (sRGB standard: 2.2).
@@ -45,13 +47,15 @@ DISPLAY_GAMMA: dict[str, float] = {
     "sentinel2": 2.2,
     "landsat9":  2.2,
     "modis":     2.2,
+    "naip":      1.0,  # already gamma-corrected in the source imagery
 }
 
 # Band indices (1-indexed, as used by rasterio) for R, G, B mapping.
 BAND_ORDER: dict[str, tuple[int, int, int]] = {
     "sentinel2": (4, 3, 2),  # B04 (Red), B03 (Green), B02 (Blue)
-    "landsat9": (4, 3, 2),  # Band 4, 3, 2
-    "modis": (1, 4, 3),  # Band 1 (Red), Band 4 (Green), Band 3 (Blue)
+    "landsat9":  (4, 3, 2),  # Band 4, 3, 2
+    "modis":     (1, 4, 3),  # Band 1 (Red), Band 4 (Green), Band 3 (Blue)
+    "naip":      (1, 2, 3),  # Band 1=R, Band 2=G, Band 3=B (4=NIR, unused)
 }
 
 _DEFAULT_GREY = np.array([128, 128, 128], dtype=np.uint8)

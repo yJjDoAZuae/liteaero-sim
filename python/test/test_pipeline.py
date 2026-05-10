@@ -124,7 +124,7 @@ def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
     from mosaic_render import render_mosaic
 
     img_bbox = (lon_min - 0.001, lat_min - 0.001, lon_max + 0.001, lat_max + 0.001)
-    mosaic_desc = render_mosaic(img_bbox, imagery_path, source="sentinel2")
+    mosaic_desc = render_mosaic(img_bbox, [(imagery_path, "sentinel2")])
 
     glb_path = tmp_path / "terrain.glb"
     export_gltf([tile_l0, tile_colored], glb_path, mosaic=mosaic_desc)

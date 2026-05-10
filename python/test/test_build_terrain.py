@@ -687,3 +687,97 @@ class TestBuildTerrainConfig:
             center_h_m=0.0,
         )
         assert Path(result["las_terrain_path"]).is_absolute()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — CONUS detection and imagery source selection
+# ---------------------------------------------------------------------------
+
+class TestBboxIntersectsConus:
+    def test_ksba_bbox_intersects_conus(self) -> None:
+        import build_terrain as bt
+
+        # KSBA (Santa Barbara) — well inside CONUS.
+        bbox = (-120.2, 34.1, -119.5, 34.7)
+        assert bt._bbox_intersects_conus(bbox) is True
+
+    def test_equator_bbox_does_not_intersect_conus(self) -> None:
+        import build_terrain as bt
+
+        # Equator, over the Pacific — outside CONUS.
+        bbox = (-120.0, -1.0, -119.0, 1.0)
+        assert bt._bbox_intersects_conus(bbox) is False
+
+    def test_europe_bbox_does_not_intersect_conus(self) -> None:
+        import build_terrain as bt
+
+        # Central Europe — no overlap with CONUS.
+        bbox = (8.0, 47.0, 15.0, 52.0)
+        assert bt._bbox_intersects_conus(bbox) is False
+
+    def test_bbox_straddling_conus_west_coast_intersects(self) -> None:
+        import build_terrain as bt
+
+        # Bbox centred on the Pacific coast, partially offshore.
+        bbox = (-127.0, 34.0, -121.0, 38.0)
+        assert bt._bbox_intersects_conus(bbox) is True
+
+    def test_bbox_east_of_conus_does_not_intersect(self) -> None:
+        import build_terrain as bt
+
+        # Atlantic Ocean east of the US coast.
+        bbox = (-60.0, 35.0, -55.0, 40.0)
+        assert bt._bbox_intersects_conus(bbox) is False
+
+    def test_alaska_bbox_does_not_intersect_conus(self) -> None:
+        import build_terrain as bt
+
+        # Alaska — not part of CONUS (lat 49–71°N, lon 141–180°W).
+        bbox = (-160.0, 60.0, -150.0, 65.0)
+        assert bt._bbox_intersects_conus(bbox) is False
+
+
+class TestSelectImagerySources:
+    def test_auto_conus_returns_sentinel2_and_naip(self) -> None:
+        import build_terrain as bt
+
+        bbox = (-120.2, 34.1, -119.5, 34.7)  # KSBA
+        sources = bt._select_imagery_sources(bbox, "auto")
+        assert sources == ["sentinel2", "naip"]
+
+    def test_auto_non_conus_returns_sentinel2_only(self) -> None:
+        import build_terrain as bt
+
+        bbox = (8.0, 47.0, 15.0, 52.0)  # Europe
+        sources = bt._select_imagery_sources(bbox, "auto")
+        assert sources == ["sentinel2"]
+
+    def test_explicit_sentinel2_overrides_conus(self) -> None:
+        import build_terrain as bt
+
+        bbox = (-120.2, 34.1, -119.5, 34.7)  # CONUS, but override forces single source
+        sources = bt._select_imagery_sources(bbox, "sentinel2")
+        assert sources == ["sentinel2"]
+
+    def test_explicit_naip_override(self) -> None:
+        import build_terrain as bt
+
+        bbox = (8.0, 47.0, 15.0, 52.0)  # Europe, but forced to naip
+        sources = bt._select_imagery_sources(bbox, "naip")
+        assert sources == ["naip"]
+
+    def test_explicit_modis_override(self) -> None:
+        import build_terrain as bt
+
+        bbox = (-120.2, 34.1, -119.5, 34.7)
+        sources = bt._select_imagery_sources(bbox, "modis")
+        assert sources == ["modis"]
+
+    def test_naip_is_highest_priority_last_in_list(self) -> None:
+        import build_terrain as bt
+
+        # The list is ordered lowest-to-highest priority; NAIP must be last.
+        bbox = (-120.2, 34.1, -119.5, 34.7)
+        sources = bt._select_imagery_sources(bbox, "auto")
+        assert sources[-1] == "naip"
+        assert sources[0] == "sentinel2"

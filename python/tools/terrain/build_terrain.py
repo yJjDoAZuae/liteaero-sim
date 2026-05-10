@@ -21,7 +21,7 @@ from export_gltf import export_gltf
 from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
 from mosaic import mosaic_dem, mosaic_imagery
-from mosaic_render import MosaicTooLargeError, render_mosaic
+from mosaic_render import render_mosaic
 from terrain_paths import (
     derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir,
     terrain_config_path,
@@ -80,6 +80,13 @@ _VIS_END_M: list[float | None] = [345.0, 1_035.0, 3_105.0, 9_315.0, 27_945.0, 83
 # Project root: parents[3] of python/tools/terrain/build_terrain.py = liteaero-sim/
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
+# Approximate bounding box of the contiguous United States (CONUS).
+# Used to decide whether NAIP imagery is available as a high-resolution source.
+_CONUS_LON_MIN: float = -124.85
+_CONUS_LON_MAX: float = -66.88
+_CONUS_LAT_MIN: float = 24.39
+_CONUS_LAT_MAX: float = 49.38
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -93,7 +100,7 @@ def build_terrain(
     center_lon_deg: float | None = None,
     radius_m: float | None = None,
     dem_source: str = "copernicus_dem_glo30",
-    imagery_source: str = "sentinel2",
+    imagery_source: str = "auto",
     force: bool = False,
 ) -> Path:
     """Build a complete terrain dataset for a live-sim aircraft configuration.
@@ -117,8 +124,11 @@ def build_terrain(
     dem_source:
         DEM data source.  One of ``"copernicus_dem_glo30"``, ``"nasadem"``, ``"srtm"``.
     imagery_source:
-        Imagery source for facet colorization.  One of ``"sentinel2"``,
-        ``"landsat9"``, ``"modis"``.
+        Imagery source selection.  ``"auto"`` (default) picks the best available
+        source(s) by location: NAIP (~1 m/pixel) where available (CONUS), with
+        Sentinel-2 (~10 m/pixel) as a global fallback.  Explicit values
+        ``"sentinel2"``, ``"landsat9"``, ``"modis"``, or ``"naip"`` force a single
+        source regardless of location.
     force:
         If True, delete all derived outputs and rebuild from scratch.  Cached
         DEM/imagery files in ``python/cache/terrain/`` are retained.
@@ -215,22 +225,38 @@ def build_terrain(
         _log.info("%s: DEM chunk %d/%d ...", dataset_name, i, len(chunks))
         dem_chunk_paths.extend(download_dem(chunk, output_dir=cache_dir / "dem", source=dem_source))
 
-    _log.info("%s: downloading imagery  %d chunk(s) ...", dataset_name, len(chunks))
-    img_chunk_paths: list[Path] = []
-    for i, chunk in enumerate(chunks, 1):
-        _log.info("%s: imagery chunk %d/%d ...", dataset_name, i, len(chunks))
-        img_chunk_paths.extend(
-            download_imagery(chunk, output_dir=cache_dir / "imagery", source=imagery_source)
-        )
+    # Select imagery sources based on bbox location and the caller's override.
+    selected_sources = _select_imagery_sources(bbox_deg, imagery_source)
+    _log.info("%s: imagery sources: %s", dataset_name, selected_sources)
+
+    _log.info(
+        "%s: downloading imagery  %d chunk(s) × %d source(s) ...",
+        dataset_name, len(chunks), len(selected_sources),
+    )
+    img_mosaic_paths: list[tuple[Path, str]] = []
+    for src_name in selected_sources:
+        src_chunk_paths: list[Path] = []
+        for i, chunk in enumerate(chunks, 1):
+            _log.info(
+                "%s: imagery chunk %d/%d [%s] ...", dataset_name, i, len(chunks), src_name
+            )
+            src_chunk_paths.extend(
+                download_imagery(
+                    chunk,
+                    output_dir=cache_dir / "imagery" / src_name,
+                    source=src_name,
+                )
+            )
+        mosaic_path = s_dir / f"img_mosaic_{src_name}.tif"
+        mosaic_imagery(src_chunk_paths, mosaic_path)
+        img_mosaic_paths.append((mosaic_path, src_name))
 
     # -------------------------------------------------------------------
-    # Step 2: Mosaic all chunks into seamless source rasters
+    # Step 2: Mosaic DEM chunks into a seamless source raster
     # -------------------------------------------------------------------
-    _log.info("%s: mosaicking ...", dataset_name)
+    _log.info("%s: mosaicking DEM ...", dataset_name)
     dem_mosaic_path = s_dir / "dem_mosaic.tif"
-    img_mosaic_path = s_dir / "img_mosaic.tif"
     mosaic_dem(dem_chunk_paths, dem_mosaic_path)
-    mosaic_imagery(img_chunk_paths, img_mosaic_path)
 
     # -------------------------------------------------------------------
     # Step 2a: Apply geoid correction (orthometric -> WGS84 ellipsoidal).
@@ -260,21 +286,24 @@ def build_terrain(
     )
 
     # -------------------------------------------------------------------
-    # Step 2b: Render JPEG mosaic texture (TB-T1)
+    # Step 2b: Render composite JPEG mosaic texture (TB-T1)
     #
-    # Covers the full bbox at imagery-native pixel density, rounded up to
-    # the nearest power of two.  All tile GLB mesh primitives share this
-    # texture; per-vertex TEXCOORD_0 maps each vertex to the mosaic.
+    # All sources are composited at the native resolution of the highest-priority
+    # source, capped at max_pixel_dim.  All tile GLB mesh primitives share this
+    # single texture; per-vertex TEXCOORD_0 maps each vertex to the mosaic.
     # -------------------------------------------------------------------
     _log.info("%s: rendering mosaic texture ...", dataset_name)
-    mosaic_desc = render_mosaic(
-        bbox_deg, img_mosaic_path, imagery_source, max_pixel_dim=8192
-    )
+    mosaic_desc = render_mosaic(bbox_deg, img_mosaic_paths, max_pixel_dim=8192)
     _log.info(
-        "%s: mosaic texture %d×%d px  %.1f kB JPEG",
+        "%s: mosaic texture %d×%d px  %.1f kB JPEG  (sources: %s)",
         dataset_name, mosaic_desc.width_pixels, mosaic_desc.height_pixels,
         len(mosaic_desc.jpeg_bytes) / 1024.0,
+        [s for _, s in img_mosaic_paths],
     )
+
+    # Highest-priority source (last in img_mosaic_paths) is used for per-facet
+    # colorization — secondary data stored in las_terrain alongside the geometry.
+    best_img_path, best_img_source = img_mosaic_paths[-1]
 
     # -------------------------------------------------------------------
     # Step 3: Triangulate and colorize all LOD levels
@@ -289,7 +318,7 @@ def build_terrain(
         for row, col, cell_bbox in cells:
             _log.debug("%s: LOD %d  row=%d col=%d ...", dataset_name, lod, row, col)
             tile = triangulate(dem_ellipsoidal_path, cell_bbox, lod=lod)
-            tile = colorize(tile, img_mosaic_path, source=imagery_source)
+            tile = colorize(tile, best_img_path, source=best_img_source)
             check(tile)
             all_tiles.append(tile)
 
@@ -350,7 +379,7 @@ def build_terrain(
         "lod_range": [0, 6],
         "dem_source": dem_source,
         "dem_geoid": geoid,
-        "imagery_source": imagery_source,
+        "imagery_sources": selected_sources,
         "dem_resolution_deg": _L0_RESOLUTION_DEG,
         "bbox_deg": list(bbox_deg),
         "build_timestamp_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -520,6 +549,37 @@ def _select_display_tiles(
     return display
 
 
+def _bbox_intersects_conus(bbox_deg: tuple[float, float, float, float]) -> bool:
+    """Return True if any part of bbox_deg overlaps the CONUS bounding box."""
+    lon_min, lat_min, lon_max, lat_max = bbox_deg
+    return (
+        lon_min < _CONUS_LON_MAX and lon_max > _CONUS_LON_MIN
+        and lat_min < _CONUS_LAT_MAX and lat_max > _CONUS_LAT_MIN
+    )
+
+
+def _select_imagery_sources(
+    bbox_deg: tuple[float, float, float, float],
+    source_override: str,
+) -> list[str]:
+    """Return ordered imagery source list (lowest to highest priority).
+
+    With ``source_override="auto"``, the selection is based on location:
+
+    - CONUS bbox: ``["sentinel2", "naip"]`` — Sentinel-2 as global fallback,
+      NAIP (~1 m/pixel) as highest-priority source for land areas.
+    - Elsewhere:  ``["sentinel2"]`` — Sentinel-2 only.
+
+    Any explicit source name (``"sentinel2"``, ``"landsat9"``, ``"modis"``,
+    ``"naip"``) bypasses auto-selection and returns a single-element list.
+    """
+    if source_override != "auto":
+        return [source_override]
+    if _bbox_intersects_conus(bbox_deg):
+        return ["sentinel2", "naip"]
+    return ["sentinel2"]
+
+
 _DEFAULT_MESH_RES_PATH = "res://assets/aircraft_lp.glb"
 
 
@@ -670,9 +730,12 @@ def _main() -> None:
     parser.add_argument(
         "--imagery-source",
         metavar="SOURCE",
-        default="sentinel2",
-        choices=["sentinel2", "landsat9", "modis"],
-        help="satellite imagery source for terrain colorization (default: sentinel2)",
+        default="auto",
+        choices=["auto", "sentinel2", "landsat9", "modis", "naip"],
+        help=(
+            "imagery source (default: auto — selects NAIP for CONUS, "
+            "Sentinel-2 elsewhere)"
+        ),
     )
     parser.add_argument(
         "--force",
@@ -706,7 +769,7 @@ def _main() -> None:
             imagery_source=args.imagery_source,
             force=args.force,
         )
-    except (FileNotFoundError, ValueError, MosaicTooLargeError) as exc:
+    except (FileNotFoundError, ValueError, DownloadError) as exc:
         parser.error(str(exc))
 
     print(f"terrain ready → {glb_path}")
