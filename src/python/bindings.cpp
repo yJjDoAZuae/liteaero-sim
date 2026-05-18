@@ -10,6 +10,7 @@
 
 namespace py = pybind11;
 
+void bind_terrain(py::module_& m);
 void bind_aircraft(py::module_& m);
 void bind_runner(py::module_& m);
 void bind_ring_buffer(py::module_& m);
@@ -19,10 +20,12 @@ void bind_broadcaster(py::module_& m);
 PYBIND11_MODULE(liteaero_sim_py, m)
 {
     m.doc() = "LiteAero Sim Python bindings";
+    // Terrain must be registered first — Aircraft.set_terrain() accepts a Terrain*.
     // Aircraft and KinematicState must be registered before runner and
     // manual input so that argument-type matching works correctly.
     // bind_ring_buffer adds channel_registry() to the already-registered
     // SimRunner type, so it must run after bind_runner.
+    bind_terrain(m);
     bind_aircraft(m);
     bind_runner(m);
     bind_ring_buffer(m);

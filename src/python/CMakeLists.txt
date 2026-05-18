@@ -14,6 +14,7 @@ find_package(pybind11 REQUIRED)
 
 pybind11_add_module(liteaero_sim_py
     bindings.cpp
+    bind_terrain.cpp
     bind_aircraft.cpp
     bind_runner.cpp
     bind_ring_buffer.cpp
@@ -29,17 +30,20 @@ target_include_directories(liteaero_sim_py PRIVATE
 
 target_compile_features(liteaero_sim_py PRIVATE cxx_std_17)
 
-# On MinGW, pybind11_add_module does not inherit the root-level
-# -Wl,-Bstatic,-lwinpthread,-Bdynamic link option.  Apply it explicitly so
-# that libwinpthread-1.dll is statically linked into the .pyd and the module
-# can be imported without C:/msys64/ucrt64/bin on PATH.
-target_link_options(liteaero_sim_py PRIVATE
-    $<$<BOOL:${MINGW}>:-Wl,-Bstatic,-lwinpthread,-Bdynamic>
-)
-
 # After each build, copy the .pyd into python/ so that `uv run python` finds
 # it automatically (python/ is the working directory for uv invocations and
 # files placed there are importable without PYTHONPATH manipulation).
+#
+# The .pyd target name is derived from the Python3_EXECUTABLE passed at
+# configure time.  Pass the uv-managed Python so the suffix matches what
+# uv's .venv expects (cp312-win_amd64 on Windows):
+#
+#   cmake ... -DPython3_EXECUTABLE=<uv-python-path>
+#
+# libwinpthread-1.dll is a residual dynamic dependency brought in via
+# -lmingw32 from the SDL Conan package.  The notebook import cell calls
+# os.add_dll_directory('C:/msys64/ucrt64/bin') before importing the module
+# to ensure Windows can find it at runtime.
 add_custom_command(TARGET liteaero_sim_py POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:liteaero_sim_py>

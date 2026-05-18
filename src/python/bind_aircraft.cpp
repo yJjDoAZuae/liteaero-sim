@@ -12,17 +12,23 @@
 
 #include "py_aircraft_types.hpp"
 #include "KinematicState.hpp"
+#include "physics/ContactForces.hpp"
+#include "landing_gear/StrutState.hpp"
+#include "landing_gear/LandingGear.hpp"
 #include "propulsion/PropulsionJet.hpp"
 #include "propulsion/PropulsionEDF.hpp"
 #include "propulsion/PropulsionProp.hpp"
 #include "propulsion/MotorElectric.hpp"
 #include "propulsion/MotorPiston.hpp"
+#include <liteaero/terrain/Terrain.hpp>
 #include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
+#include <array>
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace py = pybind11;
 using namespace liteaero::simulation;
@@ -132,6 +138,34 @@ static std::unique_ptr<Propulsion> make_propulsion(const nlohmann::json& config)
 
 void bind_aircraft(py::module_& m)
 {
+    // --- ContactForces ---
+    py::class_<ContactForces>(m, "ContactForces")
+        .def_property_readonly("force_body_n",
+            [](const ContactForces& cf) -> std::array<float, 3> {
+                return {cf.force_body_n.x(), cf.force_body_n.y(), cf.force_body_n.z()};
+            },
+            "Body-frame contact force [Fx, Fy, Fz] (N).  +X forward, +Y right, +Z down.")
+        .def_property_readonly("moment_body_nm",
+            [](const ContactForces& cf) -> std::array<float, 3> {
+                return {cf.moment_body_nm.x(), cf.moment_body_nm.y(), cf.moment_body_nm.z()};
+            },
+            "Body-frame contact moment [Mx, My, Mz] (N·m).")
+        .def_property_readonly("weight_on_wheels",
+            [](const ContactForces& cf) { return cf.weight_on_wheels; },
+            "True when at least one wheel is in contact with terrain.");
+
+    // --- StrutState ---
+    py::class_<StrutState>(m, "StrutState")
+        .def_property_readonly("deflection_m",
+            [](const StrutState& s) { return s.strut_deflection_m; },
+            "Strut spring compression (m).  0 = fully extended; travel_max = fully compressed.")
+        .def_property_readonly("deflection_rate_mps",
+            [](const StrutState& s) { return s.strut_deflection_rate_mps; },
+            "Rate of strut compression (m/s).  Positive = compressing.")
+        .def_property_readonly("wheel_speed_rps",
+            [](const StrutState& s) { return s.wheel_speed_rps; },
+            "Wheel angular speed (rad/s).");
+
     // --- KinematicState (read-only; returned by Aircraft.state()) ---
     py::class_<KinematicState>(m, "KinematicState")
         .def_property_readonly("time_s",
@@ -176,6 +210,36 @@ void bind_aircraft(py::module_& m)
         .def_property_readonly("roll_rate_rad_s",
             [](const KinematicState& s) {
                 return static_cast<double>(s.rollRate_Wind_rps()); })
+        .def_property_readonly("pitch_rate_rad_s",
+            [](const KinematicState& s) {
+                return static_cast<double>(s.pitchRate_rps()); })
+        .def_property_readonly("yaw_rate_rad_s",
+            [](const KinematicState& s) {
+                return static_cast<double>(s.headingRate_rps()); })
+        .def_property_readonly("acceleration_ned_mps2",
+            [](const KinematicState& s) -> std::array<double, 3> {
+                const auto a = s.acceleration_NED_mps();
+                return {static_cast<double>(a.x()),
+                        static_cast<double>(a.y()),
+                        static_cast<double>(a.z())};
+            },
+            "NED-frame acceleration [aN, aE, aD] (m/s²).  +D = downward.")
+        .def_property_readonly("velocity_body_mps",
+            [](const KinematicState& s) -> std::array<double, 3> {
+                const auto v = s.velocity_Body_mps();
+                return {static_cast<double>(v.x()),
+                        static_cast<double>(v.y()),
+                        static_cast<double>(v.z())};
+            },
+            "Body-frame velocity [u, v, w] (m/s).  +X forward, +Y right, +Z down.")
+        .def_property_readonly("rates_body_rad_s",
+            [](const KinematicState& s) -> std::array<double, 3> {
+                const auto r = s.rates_Body_rps();
+                return {static_cast<double>(r.x()),
+                        static_cast<double>(r.y()),
+                        static_cast<double>(r.z())};
+            },
+            "Body-frame angular rates [p, q, r] (rad/s).")
         .def("__repr__", [](const KinematicState& s) {
             return "KinematicState(altitude_m="
                  + std::to_string(s.positionDatum().height_WGS84_m())
@@ -228,5 +292,46 @@ void bind_aircraft(py::module_& m)
                  return self.aircraft->state();
              },
              py::return_value_policy::reference_internal,
-             "Return the current kinematic state (read-only reference).");
+             "Return the current kinematic state (read-only reference).")
+        .def("set_terrain",
+             [](PyAircraft& self, const liteaero::terrain::Terrain* terrain) {
+                 self.aircraft->setTerrain(terrain);
+             },
+             py::arg("terrain"),
+             py::keep_alive<1, 2>(),  // keep terrain alive as long as this Aircraft is alive
+             "Set the terrain model used by LandingGear and BodyCollider each step.\n\n"
+             "Must be called before the first step() if landing-gear contact forces are\n"
+             "needed.  Pass None (or do not call) to disable gear contact.")
+        .def("contact_forces",
+             [](const PyAircraft& self) -> const ContactForces& {
+                 return self.aircraft->contactForces();
+             },
+             py::return_value_policy::reference_internal,
+             "Landing gear + body-collider contact forces from the most recent step().")
+        .def_property_readonly("weight_on_wheels",
+             [](const PyAircraft& self) {
+                 return self.aircraft->weightOnWheels();
+             },
+             "True when at least one wheel was in contact on the most recent step().")
+        .def("agl_m",
+             [](const PyAircraft& self) {
+                 return self.aircraft->agl_m();
+             },
+             "Height above ground level (m) at the current CG position.\n\n"
+             "Returns -1 if no terrain has been set via set_terrain().")
+        .def("gear_strut_states",
+             [](const PyAircraft& self) -> std::vector<StrutState> {
+                 if (!self.aircraft->hasLandingGear()) return {};
+                 const auto& units = self.aircraft->landingGear().wheelUnits();
+                 std::vector<StrutState> out;
+                 out.reserve(units.size());
+                 for (const auto& wu : units)
+                     out.push_back(wu.strutState());
+                 return out;
+             },
+             "Per-wheel strut states from the most recent step().\n\n"
+             "Returns a list of StrutState objects in the same order as\n"
+             "the wheel_units array in the aircraft config.  Returns an empty\n"
+             "list when no landing gear is configured.");
 }
+

@@ -85,6 +85,10 @@ public:
     // Returns -1 if no terrain has been set via setTerrain().
     float agl_m() const;
 
+    // Read-only access to the LandingGear subsystem (for Python instrumentation).
+    const LandingGear& landingGear() const { return _landing_gear; }
+    bool hasLandingGear() const { return _has_landing_gear; }
+
     // Serialize / deserialize warm-start state.
     // Note: deserializeJson() restores _propulsion state via _propulsion->deserializeJson()
     // but does not reconstruct the propulsion model itself — the correct Propulsion

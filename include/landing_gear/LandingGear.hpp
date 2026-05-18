@@ -40,6 +40,10 @@ public:
 
     const ContactForces& contactForces() const { return _contact_forces; }
 
+    // Read-only access for Python instrumentation (bind_aircraft.cpp).
+    const std::vector<WheelUnit>&   wheelUnits() const { return _wheel_units; }
+    const LandingGearConfig&        config()     const { return _config; }
+
     [[nodiscard]] nlohmann::json       serializeJson()                               const;
     void                               deserializeJson(const nlohmann::json&          j);
     [[nodiscard]] std::vector<uint8_t> serializeProto()                              const;

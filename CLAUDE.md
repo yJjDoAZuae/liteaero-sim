@@ -33,9 +33,13 @@ export PATH="/c/msys64/ucrt64/bin:$PATH"
 PATH="/c/msys64/ucrt64/bin:$PATH" conan install . --output-folder=build --build=missing --profile=liteaero-gcc
 
 # Step 2: Configure:
+# Pass -DPython3_EXECUTABLE so the pybind11 extension links against the
+# uv-managed MSVC Python (python312.dll) rather than MSYS2's libpython3.12.dll.
+# Without this the .pyd cannot be imported by `uv run python`.
 PATH="/c/msys64/ucrt64/bin:$PATH" cmake -B build -G "MinGW Makefiles" \
     -DCMAKE_TOOLCHAIN_FILE=build/conan_toolchain.cmake \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE=Release \
+    "-DPython3_EXECUTABLE=$HOME/AppData/Roaming/uv/python/cpython-3.12.12-windows-x86_64-none/python.exe"
 
 # Step 3: Build and test — PATH required for ctest too; without it Windows
 # finds the wrong libstdc++ DLL and every test crashes with a dialog box:
