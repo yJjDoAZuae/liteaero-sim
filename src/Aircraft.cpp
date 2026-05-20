@@ -165,7 +165,8 @@ void Aircraft::reset() {
     _propulsion->reset();
     if (_has_landing_gear)  _landing_gear.reset();
     if (_has_body_collider) _body_collider.reset();
-    _contact_forces = ContactForces{};
+    _contact_forces   = ContactForces{};
+    _n_contact_z_filt = 0.f;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +206,61 @@ void Aircraft::step(double time_sec,
                             + _ny_filter.gamma() * n_y_cmd))(0, 0) / _cmd_filter_dt_s
                           - n_y_shaped / _cmd_filter_dt_s;
 
-    // 5. Solve for α and β
+    // Rotation matrices used both here and at step 10 (gear-to-wind transform).
+    // _state is not mutated between steps 5 and 10.
+    constexpr float kGravity_mps2    = 9.80665f;
+    constexpr float kContactFiltTau_s = 0.10f;   // lag τ for n_contact_z filter (s)
+    const Eigen::Matrix3f R_nb_mat = _state.q_nb().toRotationMatrix();
+    const Eigen::Matrix3f R_nw_mat = _state.q_nw().toRotationMatrix();
+
+    // 5a. Contact forces on the current pre-integration state.
+    //     Computed HERE — before the LFA — so step 5b can use the same-step
+    //     contact force for the n_z correction.  One-step lag (previous-step
+    //     forces) caused n_z_shaped to remain at 1 on the first step of ground
+    //     contact, allowing gear and full aerodynamic lift to both act
+    //     simultaneously and send the aircraft airborne.  Same-step forces
+    //     eliminate that lag: once the gear compresses, n_z_shaped drops to 0
+    //     in the same step.
+    ContactForces contact_forces;
+    if (_has_landing_gear && _terrain != nullptr) {
+        contact_forces = _landing_gear.step(
+            _state.snapshot(),
+            *_terrain,
+            0.0f,    // nose wheel steering angle (not yet wired to AircraftCommand)
+            0.0f,    // brake left demand
+            0.0f,    // brake right demand
+            _outer_dt_s);
+    }
+    if (_has_body_collider && _terrain != nullptr) {
+        const auto bc = _body_collider.step(_state.snapshot(), *_terrain);
+        contact_forces.force_body_n   += bc.force_body_n;
+        contact_forces.moment_body_nm += bc.moment_body_nm;
+        contact_forces.weight_on_wheels |= bc.weight_on_wheels;
+    }
+    _contact_forces = contact_forces;
+
+    // 5b. Subtract the current-step contact-force upward contribution from n_z
+    //     so the aerodynamic system only targets the share of normal load not
+    //     already provided by ground contact.
+    //
+    //     NED-frame projection (not wind-frame): the contact force is vertical
+    //     in NED regardless of aircraft pitch.  Wind-frame introduces a
+    //     cos(alpha) factor that causes a positive-feedback loop.
+    {
+        const Eigen::Vector3f F_contact_NED = R_nb_mat * contact_forces.force_body_n;
+        // NED +Z = down; upward contact force → F_contact_NED.z() < 0.
+        const float n_contact_z_raw =
+            -F_contact_NED.z() / (_inertia.mass_kg * kGravity_mps2);
+        // First-order lag on the contact-load correction.  The lag prevents
+        // the LFA from instantly restoring full aerodynamic lift when the gear
+        // briefly loses contact during a bounce, which would maintain the
+        // upward rebound velocity indefinitely.  τ = 0.10 s is roughly half
+        // the gear natural period (~0.35 s for this aircraft).
+        const float alpha = _outer_dt_s / (_outer_dt_s + kContactFiltTau_s);
+        _n_contact_z_filt += alpha * (n_contact_z_raw - _n_contact_z_filt);
+        n_z_shaped = std::max(0.0f, n_z_shaped - _n_contact_z_filt);
+    }
+
     LoadFactorInputs lfa_in;
     lfa_in.n_z      = n_z_shaped;
     lfa_in.n_y      = n_y_shaped;
@@ -224,32 +279,10 @@ void Aircraft::step(double time_sec,
     const AeroForces F =
         _aeroPerf->compute(lfa_out.alpha_rad, lfa_out.beta_rad, q_inf, cl);
 
-    // 8. Landing gear contact forces (computed before propulsion so terrain query
-    //    uses the pre-step kinematic state, consistent with quasi-static strut model).
-    ContactForces contact_forces;
-    if (_has_landing_gear && _terrain != nullptr) {
-        contact_forces = _landing_gear.step(
-            _state.snapshot(),
-            *_terrain,
-            0.0f,    // nose wheel steering angle (not yet wired to AircraftCommand)
-            0.0f,    // brake left demand
-            0.0f,    // brake right demand
-            _outer_dt_s);
-    }
-
-    // 8b. Body collider contact forces (accumulated into contact_forces for dynamics)
-    if (_has_body_collider && _terrain != nullptr) {
-        const auto bc = _body_collider.step(_state.snapshot(), *_terrain);
-        contact_forces.force_body_n   += bc.force_body_n;
-        contact_forces.moment_body_nm += bc.moment_body_nm;
-        contact_forces.weight_on_wheels |= bc.weight_on_wheels;
-    }
-    _contact_forces = contact_forces;
-
-    // 9. Advance propulsion
+    // 8. Advance propulsion
     const float T = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3);
 
-    // 10. Wind-frame specific force = aero + thrust + gravity.
+    // 9. Wind-frame specific force = aero + thrust + gravity.
     //    Thrust decomposition (Wind frame, X forward, Y right, Z down):
     //      Tx =  T·cos(α)·cos(β)
     //      Ty = -T·cos(α)·sin(β)
@@ -262,20 +295,33 @@ void Aircraft::step(double time_sec,
     const float cb = std::cos(lfa_out.beta_rad);
     const float sb = std::sin(lfa_out.beta_rad);
 
-    // Transform landing gear body-frame force to wind frame.
-    // R_body_to_wind = R_nw^T * R_nb  (body→NED→wind)
-    const Eigen::Matrix3f R_nb_mat = _state.q_nb().toRotationMatrix();
-    const Eigen::Matrix3f R_nw_mat = _state.q_nw().toRotationMatrix();
+    // Transform contact forces body→NED→wind.  R_nb_mat, R_nw_mat, kGravity_mps2
+    // are defined at step 5 above; _state has not been mutated since then.
     const Eigen::Vector3f F_gear_wind = R_nw_mat.transpose() * (R_nb_mat * contact_forces.force_body_n);
-
-    constexpr float kGravity_mps2 = 9.80665f;
     const Eigen::Vector3f g_wind = R_nw_mat.transpose() * Eigen::Vector3f{0.f, 0.f, kGravity_mps2};
+
+    // Clamp aerodynamic lift to the LFA's intended budget.
+    //
+    // Step 5 told the LFA to produce n_z_shaped worth of lift.  In steady flight
+    // the LFA achieves exactly this.  But when the aircraft is in contact and
+    // alpha is rate-limited, the wing can produce more lift than the LFA intended
+    // (residual lift from the previous high-alpha state).  Clamping prevents that
+    // excess from launching the aircraft off the ground.
+    //
+    // F.z_n is in wind-Z (positive = down); upward lift is negative.
+    // -n_z_shaped * m * g is the most-upward value the LFA intended.
+    // std::max(F.z_n, -(n_z_shaped * m * g)) keeps whichever is less upward,
+    // i.e., it clamps the lift to at most the LFA's target.
+    //
+    // When n_z_shaped == 0 (contact forces cover the full commanded load),
+    // the clamp reduces to max(F.z_n, 0) = 0 — zero aero lift, no launch.
+    const float F_z_aero = std::max(F.z_n, -(n_z_shaped * m * kGravity_mps2));
 
     const float ax = (T * ca * cb + F.x_n + F_gear_wind.x()) / m + g_wind.x();
     const float ay = (-T * ca * sb + F.y_n + F_gear_wind.y()) / m + g_wind.y();
-    const float az = (-T * sa      + F.z_n + F_gear_wind.z()) / m + g_wind.z();
+    const float az = (-T * sa      + F_z_aero + F_gear_wind.z()) / m + g_wind.z();
 
-    // 11. Advance position and velocity. Attitude is committed after the terrain
+    // 10. Advance position and velocity. Attitude is committed after the terrain
     //     constraint so that stepQnw always sees the truly final velocity.
     const float dt_s = static_cast<float>(time_sec - _state.time_sec());
     _state.stepPV(time_sec,
@@ -286,20 +332,36 @@ void Aircraft::step(double time_sec,
                   lfa_out.betaDot_rps,
                   wind_NED_mps);
 
-    // 12. Post-integration terrain hard constraint.
-    //     The spring-damper in BodyCollider handles low-speed contact physics
-    //     (requirement 1).  This separate pass guarantees the aircraft never
-    //     phases through terrain at any impact speed (requirement 2): if the
-    //     integrator left any corner below terrain, project altitude up by the
-    //     deepest penetration and zero the downward velocity component.
+    // 11. Post-integration terrain hard constraint.
+    //     If the integrator left any corner below terrain, project altitude up
+    //     by the deepest penetration and zero the downward velocity component.
+    //     Running the body collider on the penetrated post-integration state
+    //     captures the impact force and weight_on_wheels flag in _contact_forces
+    //     for monitoring; applyTerrainHardConstraint is called after so the
+    //     collider's pen_dot sees the impact velocity before it is zeroed.
     if (_has_body_collider && _terrain != nullptr) {
         const float pen = _body_collider.maxCornerPenetration_m(
             _state.snapshot(), *_terrain);
-        if (pen > 0.f)
+        if (pen > 0.f) {
+            const auto bc_impact = _body_collider.step(_state.snapshot(), *_terrain);
+            _contact_forces.force_body_n   += bc_impact.force_body_n;
+            _contact_forces.moment_body_nm += bc_impact.moment_body_nm;
+            _contact_forces.weight_on_wheels = true;
+            // Refresh the contact-load filter from the post-integration body impact.
+            // The pre-integration body collider (step 5a) sees zero penetration once
+            // the hard constraint has corrected the aircraft position, so without this
+            // update the filter decays freely next step and full aerodynamic lift
+            // resumes immediately, pitching the aircraft up to stall.
+            const Eigen::Vector3f F_bc_NED = R_nb_mat * bc_impact.force_body_n;
+            const float n_contact_z_bc =
+                -F_bc_NED.z() / (_inertia.mass_kg * kGravity_mps2);
+            const float alpha_bc = _outer_dt_s / (_outer_dt_s + kContactFiltTau_s);
+            _n_contact_z_filt += alpha_bc * (n_contact_z_bc - _n_contact_z_filt);
             _state.applyTerrainHardConstraint(pen);
+        }
     }
 
-    // 13. Commit attitude: q_nw sees the truly final velocity — after RK4 and
+    // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and
     //     after any terrain constraint modification.
     _state.commitAttitude(rollRate_filt_rps, dt_s);
 }
@@ -322,6 +384,7 @@ nlohmann::json Aircraft::serializeJson() const {
     j["ny_zeta_nd"]           = _ny_zeta_nd;
     j["roll_rate_wn_rad_s"]   = _roll_rate_wn_rad_s;
     j["roll_rate_zeta_nd"]    = _roll_rate_zeta_nd;
+    j["n_contact_z_filt"]     = _n_contact_z_filt;
     j["nz_filter"]            = _nz_filter.serializeJson();
     j["ny_filter"]            = _ny_filter.serializeJson();
     j["roll_rate_filter"]     = _roll_rate_filter.serializeJson();
@@ -363,6 +426,7 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _ny_zeta_nd          = j.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = j.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = j.at("roll_rate_zeta_nd").get<float>();
+    _n_contact_z_filt    = j.value("n_contact_z_filt", 0.f);
     _nz_filter.deserializeJson(j.at("nz_filter"));
     _ny_filter.deserializeJson(j.at("ny_filter"));
     _roll_rate_filter.deserializeJson(j.at("roll_rate_filter"));
@@ -410,6 +474,7 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.add_ny_filter_x(_ny_filter.x()(1, 0));
     proto.add_roll_rate_filter_x(_roll_rate_filter.x()(0, 0));
     proto.add_roll_rate_filter_x(_roll_rate_filter.x()(1, 0));
+    proto.set_n_contact_z_filt(_n_contact_z_filt);
 
     *proto.mutable_kinematic_state()  = parseSubMessage<las_proto::KinematicState>(_state.serializeProto());
     *proto.mutable_initial_state()    = parseSubMessage<las_proto::KinematicState>(_initial_state.serializeProto());
@@ -458,6 +523,7 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _ny_zeta_nd          = proto.ny_zeta_nd();
     _roll_rate_wn_rad_s  = proto.roll_rate_wn_rad_s();
     _roll_rate_zeta_nd   = proto.roll_rate_zeta_nd();
+    _n_contact_z_filt = proto.n_contact_z_filt();
     _nz_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
     _roll_rate_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);

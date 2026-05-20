@@ -222,6 +222,7 @@ message AircraftState {
     float          ny_zeta_nd           = 20;
     float          roll_rate_wn_rad_s   = 21;
     float          roll_rate_zeta_nd    = 22;
+    float          n_contact_z_filt     = 23;
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

@@ -118,6 +118,7 @@ private:
     liteaero::control::FilterSS2Clip _nz_filter;
     liteaero::control::FilterSS2Clip _ny_filter;
     liteaero::control::FilterSS2Clip _roll_rate_filter;
+    float                  _n_contact_z_filt      = 0.f;    // first-order lag on contact load correction
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

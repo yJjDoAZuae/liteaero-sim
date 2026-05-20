@@ -48,11 +48,17 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
     }
 
     // 1. Quasi-static strut deflection.
-    // delta_dot uses the kinematic contact-patch velocity projected onto the travel
-    // axis — this is constant across substeps and independent of δ accumulation,
-    // so damping is correctly present in every substep's output.
+    // delta = geometric penetration (vertical, in the terrain-normal direction).
+    // delta_dot = rate of penetration increase = contact-patch velocity projected
+    // onto the inward terrain normal (-surface_normal_body points into the terrain).
+    // Using the surface normal rather than the travel axis eliminates the phantom
+    // V_N·sin(α) term that appears when the aircraft is pitched: body-Z velocity
+    // has a forward-flight component when α ≠ 0, but the terrain penetration only
+    // changes due to the vertical (terrain-normal) velocity component.
+    // For a level aircraft (α = 0) surface_normal_body = -travel_axis_body, so
+    // this is identical to the previous formula.
     const float delta_new = std::clamp(penetration_m, 0.0f, _params.travel_max_m);
-    const float delta_dot = contact_vel_body_mps.dot(_params.travel_axis_body);
+    const float delta_dot = -contact_vel_body_mps.dot(surface_normal_body);
     _strut_deflection_rate_mps = delta_dot;
     _strut_deflection_m        = delta_new;
 
@@ -100,8 +106,13 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
     const float V_cy = contact_vel_body_mps.dot(wheel_right);
 
     // 5. Slip ratio (longitudinal)
-    const float kappa = (_params.tyre_radius_m * _wheel_speed_rps - V_cx)
-                        / (std::abs(V_cx) + kVeps);
+    //    Reference speed: max(|V_cx|, |ω·r|) + ε so kappa stays in [-1, 1] when
+    //    either speed approaches zero.  Using |V_cx| alone blows kappa up to
+    //    thousands near standstill (V_cx → 0, ω > 0), creating a fictitious
+    //    traction spike that injects energy and permanently accelerates the aircraft.
+    const float wheel_speed_mps = _params.tyre_radius_m * std::abs(_wheel_speed_rps);
+    const float V_ref  = std::max(std::abs(V_cx), wheel_speed_mps) + kVeps;
+    const float kappa = (_params.tyre_radius_m * _wheel_speed_rps - V_cx) / V_ref;
 
     // 6. Slip angle (lateral)
     const float alpha_t = -std::atan2(V_cy, std::abs(V_cx) + kVeps);
@@ -137,7 +148,16 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
 
     if (I_w > 0.0f) {
         const float omega_dot = (-r_w * F_x - tau_brake - tau_roll) / I_w;
-        _wheel_speed_rps += omega_dot * dt_s;
+        const float omega_new = _wheel_speed_rps + omega_dot * dt_s;
+        // Clamp: if the Euler step would cross the rolling condition in one substep,
+        // stop at rolling speed.  The Pacejka stiffness (B = 10) makes explicit
+        // Euler unstable at practical substep sizes — the wheel hunts across kappa = 0
+        // every substep, creating a limit cycle that injects fictitious traction energy.
+        const float omega_roll = V_cx / r_w;
+        if ((_wheel_speed_rps - omega_roll) * (omega_new - omega_roll) < 0.f)
+            _wheel_speed_rps = omega_roll;
+        else
+            _wheel_speed_rps = omega_new;
     }
 
     // 10. Force assembly in body frame
