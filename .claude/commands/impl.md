@@ -1,3 +1,7 @@
+---
+description: Create, update, and audit implementation plans in docs/implementation/. Usage: /impl new <name> [scope], /impl update <file> [reason], /impl check <file>, /impl check-all
+---
+
 # Implementation Plan — `/impl`
 
 Create, update, and maintain structured implementation plans in `docs/implementation/`.

@@ -1,3 +1,7 @@
+---
+description: Add or close a fully documented open question in a design document. Usage: /oq <document-path> [brief description]
+---
+
 # Open Question — `/oq`
 
 Add a fully documented open question to a design document.
