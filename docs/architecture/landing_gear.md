@@ -306,15 +306,28 @@ Contact is active only when $h_i > 0$; otherwise $F_{z_i} = 0$.
 
 Slip ratio $\kappa$ is defined as:
 
-$$\kappa = \frac{\omega_w\,r_w - V_{cx}}{V_{cx} + \epsilon}$$
+$$V_\text{ref} = \max\!\bigl(|V_{cx}|,\;|\omega_w\,r_w|\bigr) + \epsilon$$
+
+$$\kappa = \frac{\omega_w\,r_w - V_{cx}}{V_\text{ref}}$$
 
 where:
+
 - $\omega_w$ — wheel angular velocity (rad/s)
 - $r_w$ — tyre rolling radius (m)
 - $V_{cx}$ — contact-patch longitudinal velocity in the wheel plane (m/s)
 - $\epsilon = 0.01$ m/s — regularization to avoid division by zero at standstill
 
-For a locked wheel (braking), $\omega_w = 0$ and $\kappa = -1$.
+The combined reference speed $V_\text{ref}$ bounds $\kappa$ to $[-1, 1]$ throughout the
+contact phase. The naive denominator $|V_{cx}| + \epsilon$ causes $\kappa \to \omega_w r_w / \epsilon$
+(thousands) when $V_{cx} \to 0$ while $\omega_w$ is nonzero (e.g., the instant of first
+ground contact when the wheel begins spinning up from rest). That large slip ratio
+produces a full-friction traction spike that injects energy into the wheel and, through
+the aircraft equations of motion, permanently accelerates the aircraft — a non-physical
+runaway.
+
+For a locked wheel (braking), $\omega_w = 0$ and $V_\text{ref} = |V_{cx}| + \epsilon$,
+so $\kappa = -V_{cx} / (|V_{cx}| + \epsilon) \to -1$ at speed — the expected braking
+limit.
 
 #### 3c. Slip Angle
 
@@ -358,9 +371,10 @@ $$F_{x_i}' = F_{x_i}\,\frac{\mu F_{z_i}}{F_{t,i}}, \quad F_{y_i}' = F_{y_i}\,\fr
 Wheel angular velocity $\omega_w$ is integrated from the applied brake torque and tyre
 longitudinal traction reaction:
 
-$$I_w\,\dot{\omega}_w = r_w\,F_{x_i} - \tau_{\text{brake},i} - \tau_{\text{roll},i}$$
+$$I_w\,\dot{\omega}_w = -r_w\,F_{x_i} - \tau_{\text{brake},i} - \tau_{\text{roll},i}$$
 
 where:
+
 - $I_w$ — wheel polar moment of inertia (kg·m²). For this model, $I_w$ is approximated
   as $m_w r_w^2 / 2$ using a nominal wheel mass $m_w$ derived from the tyre radius via
   an empirical scaling $m_w \approx 0.3\,r_w$ (kg, with $r_w$ in m).
@@ -373,6 +387,65 @@ where:
 The wheel decelerates to a stop in finite time because rolling resistance grows with $F_z$
 and does not vanish as $\omega_w \to 0$ (the $\operatorname{sign}$ function is regularized
 with a deadband below $|\omega_w| < 0.01$ rad/s to avoid chatter).
+
+#### 4a. Integration Method and Stability
+
+The wheel ODE is integrated by explicit Euler:
+
+$$\omega_w^{k+1} = \omega_w^k + \dot{\omega}_w^k\,\Delta t_\text{inner}$$
+
+The Pacejka longitudinal stiffness ($B = 10$, $C = 1.9$) makes explicit Euler conditionally
+stable. The stability criterion for the linearized tyre torque feedback is approximately:
+
+$$\Delta t < \frac{2\,I_w}{r_w^2 \cdot B C D / V_\text{ref}}$$
+
+At $V_\text{ref} \sim 20$ m/s and typical small-UAS parameters ($r_w = 0.08$ m,
+$\mu F_z \sim 40$ N), this bound evaluates to $\sim 1.5$ ms. The inner substep at the
+default $N_\text{sub} = 4$ and outer $\Delta t = 0.02$ s is $\Delta t_\text{inner} = 5$ ms
+— roughly 3× above the stability limit. Increasing $N_\text{sub}$ to satisfy the criterion
+would require $N_\text{sub} \geq 14$, which is impractical for the targeted computational
+budget.
+
+The chosen fix is the **rolling-condition clamp** described in §4b. Implicit Euler
+(which would be unconditionally stable) is a future improvement (OQ-LG-5) but is not
+required once the clamp is in place.
+
+The `substeps` parameter was selected to improve $\dot{\delta}$ estimation accuracy in the
+spring-damper (§2c), not for wheel-spin stability. The two requirements are
+decoupled: the spring-damper benefits from 4 substeps; the wheel spin stability is
+guaranteed by the clamp independently of the substep count.
+
+#### 4b. Rolling-Condition Clamp (Event Detection)
+
+When the explicit Euler step would carry $\omega_w$ across the free-rolling condition
+$\omega_\text{roll} = V_{cx} / r_w$ in a single substep, the update is replaced by a
+snap-to-rolling:
+
+$$\text{if}\quad (\omega_w^k - \omega_\text{roll})\,(\omega_w^{k+1} - \omega_\text{roll}) < 0 \quad \Rightarrow \quad \omega_w^{k+1} \leftarrow \omega_\text{roll}$$
+
+This is the discrete equivalent of zero-crossing event detection for the slip-reversal
+event. It eliminates the limit cycle that arises when the Euler step hunts across
+$\kappa = 0$ every substep: at each substep the traction force reverses, driving $\omega_w$
+to the opposite side of $\omega_\text{roll}$, which reverses again next substep — a
+persistent oscillation that injects fictitious energy into the aircraft through a systematic
+non-zero mean traction force.
+
+The clamp is physically motivated: once the net torque would cross the free-rolling
+condition in one step, it means the wheel is transitioning between driven and braked
+regimes, and the physically correct state is free rolling (zero slip force) at that instant.
+
+The four canonical tyre events handled this way are:
+
+| Event | Condition | Action |
+| --- | --- | --- |
+| First contact | $h_i$ transitions $\leq 0 \to > 0$ | $\omega_w \leftarrow V_{cx}/r_w$ (spin-up to rolling) |
+| Liftoff | $h_i$ transitions $> 0 \to \leq 0$ | $\omega_w$ state retained; strut forces zero |
+| Rolling-condition crossing | $(\omega_w - \omega_\text{roll})$ sign change mid-step | $\omega_w \leftarrow \omega_\text{roll}$ (clamp) |
+| Lockup | $\omega_w \to 0$ under full braking | Regularized by rolling-resistance deadband |
+
+First-contact spin-up is not currently implemented as an explicit event (the wheel starts
+from its last known $\omega_w$, which may be zero for a fresh contact); this is captured
+as OQ-LG-6.
 
 ---
 
@@ -570,12 +643,337 @@ simulation rate.
 
 ## Open Questions
 
-| ID | Question | Blocking |
+| ID | Status | Blocking |
 | --- | --- | --- |
-| OQ-LG-1 | Pacejka coefficient sourcing — use a fixed generic set or introduce a parameter estimation pipeline from flight test data? | Not blocking initial implementation |
-| OQ-LG-2 | Richer friction model — continuous function of precipitation intensity vs. binary wet/dry multiplier? | Not blocking |
-| OQ-LG-3 | Runway geometry extension — planar inset patch vs. analytical runway primitive in `V_Terrain`? | Blocking for runway operations |
-| OQ-LG-4 | Unsprung mass and tyre spring compliance — relevant only for `Aircraft6DOF` (full 6DOF EOM). Not applicable to the `Aircraft` load-factor model where quasi-static strut is correct. | Not blocking for `Aircraft`; deferred to `Aircraft6DOF` design |
+| OQ-LG-1 | Pacejka coefficient sourcing | Not blocking |
+| OQ-LG-2 | Richer surface friction model | Not blocking |
+| OQ-LG-3 | Runway geometry extension | Blocking for runway operations |
+| OQ-LG-4 | Unsprung mass and tyre spring compliance | Not blocking for `Aircraft`; deferred to `Aircraft6DOF` |
+| OQ-LG-5 | ~~Integration method for wheel spin ODE~~ **Resolved: Tustin; substep count by 3× Nyquist rule** | — |
+| OQ-LG-6 | ~~Airborne wheel spin-down model~~ **Resolved: linear + quadratic bearing drag; spindown-time parametrization** | — |
+| OQ-LG-7 | ~~First-contact wheel speed initial condition~~ **Resolved: no special action; Tustin integrator handles spin-up** | — |
+
+---
+
+### OQ-LG-1 — Pacejka Coefficient Sourcing
+
+**Question:** Should the Pacejka coefficients ($B$, $C$, $D$, $E$) for longitudinal and
+lateral force be fixed at generic bias-ply values (Bakker et al. 1987), or should a
+parameter estimation pipeline from flight test data be introduced?
+
+**Current state:** The model uses fixed coefficients from Table 3d (§3d). These are
+representative for generic small-aircraft bias-ply tyres but have not been validated
+against any specific tyre used on a liteaero aircraft. $D = \mu F_z$ preserves the
+friction-circle invariant regardless of $\mu$, so the dominant uncertainty is in the
+shape parameters $B$, $C$, $E$ — which control the slope and sharpness of the
+force-vs-slip curve.
+
+**Why it matters:** The shape parameters govern the deceleration distance during rollout
+and the lateral force build-up during a crab landing. An incorrect $B$ makes the tyre
+appear too stiff or too progressive. For autolanding validation the error is partially
+masked by the friction-circle saturation, but a wrong rollout distance or heading excursion
+budget could produce a misleading pass/fail verdict.
+
+**Options considered:**
+
+1. **Fixed generic set (current).** Simple, no flight test data required. Acceptable for
+   development verification where absolute deceleration distance tolerances are wide.
+2. **Lookup table per aircraft type.** Coefficients stored in the aircraft JSON config
+   alongside spring stiffness and geometry. No pipeline needed; updated manually from
+   test data or manufacturer specs.
+3. **Automated identification from logged rollout data.** A Python-side optimizer fits
+   $B$, $C$, $E$ to measured wheel speed and deceleration from a set of rollout runs.
+   Requires instrumented rollout data (wheel speed sensor, inertial deceleration) — not
+   yet available.
+
+**Resolution criteria:** Option 2 (per-type config lookup) is the minimum acceptable for
+production use. Option 3 is reserved until instrumented flight test data exist. Until
+then the fixed set is used and any deceleration distance figures in scenario test pass
+criteria are treated as order-of-magnitude estimates only.
+
+---
+
+### OQ-LG-2 — Richer Surface Friction Model
+
+**Question:** Should surface friction $\mu$ be a continuous function of precipitation
+intensity (and possibly surface contamination depth), or is the current binary wet/dry
+multiplier sufficient?
+
+**Current state:** `V_Terrain::frictionAt()` returns one of four `SurfaceType` values
+(§5). The wet multiplier is applied when `precipitation > 0` — a binary step. There is no
+model for water depth, rubber contamination, or the transition from dry to fully wet.
+
+**Why it matters:** The friction coefficient on a contaminated runway can vary from 0.80
+(dry pavement) to 0.05 (standing water, aquaplaning). The landing distance and crosswind
+limit are both sensitive to $\mu$. The binary model produces a discontinuous step in
+contact force when precipitation transitions on/off during a simulation run, which is
+unphysical and can excite the strut spring.
+
+**Options considered:**
+
+1. **Binary wet/dry (current).** Sufficient for the autotakeoff/autoland development use
+   case where the scenario either rains or it does not.
+2. **Linear interpolation by precipitation intensity.** `precipitation_mm_hr` drives a
+   blending factor between $\mu_\text{dry}$ and $\mu_\text{wet}$. Avoids the binary
+   step; requires `Atmosphere` to expose precipitation rate.
+3. **Aquaplaning threshold.** Below the aquaplaning speed ($V_{aq} \approx 9\sqrt{p_t}$
+   where $p_t$ is tyre pressure in psi) full $\mu_\text{wet}$ applies; above it $\mu$
+   drops sharply. Requires tyre pressure as a config parameter.
+
+**Resolution criteria:** Option 1 remains in place until a scenario requires differentiated
+friction during a precipitation transition. The `SurfaceType` table in §5 covers the
+current use cases. OQ-LG-2 becomes blocking if an aquaplaning or wet-runway crosswind
+limit scenario is added to the test matrix.
+
+---
+
+### OQ-LG-3 — Runway Geometry Extension
+
+**Question:** How should a paved runway be represented in `V_Terrain` to support precise
+runway operations — as a planar patch inset into `TerrainMesh`, or as a new analytical
+runway primitive added to the `V_Terrain` interface?
+
+**Current state:** `TerrainMesh` represents terrain as a triangulated mesh loaded from
+a `.las` point cloud (§6). A runway can be approximated by the mesh, but the mesh
+resolution and triangulation quality are determined by the LiDAR survey density, not by
+the runway geometry. Mesh-based runways exhibit residual height noise ($\sim 0.02$ m RMS
+from LiDAR ground-return scatter) that produces spurious contact transitions during
+high-speed ground roll.
+
+**Why it matters:** Autolanding requires a clean, noise-free terrain surface in the
+flare and rollout zone. Residual height noise at touchdown produces spurious WOW
+oscillations and corrupts the AGL estimate used by the flare guidance. An analytical
+runway eliminates both problems.
+
+**Options considered:**
+
+1. **Planar inset patch.** A rectangular flat patch at a defined altitude is spliced into
+   `TerrainMesh` during tile generation, overriding the LiDAR-derived triangles inside
+   the runway boundary. The `V_Terrain` interface is unchanged. Requires a runway boundary
+   definition in the tile preprocessing pipeline.
+2. **Analytical runway primitive in `V_Terrain`.** `V_Terrain` gains a `RunwayPrimitive`
+   that overrides `heightAtPosition_m()` and `frictionAt()` inside the runway footprint.
+   The footprint is defined by threshold coordinates, heading, width, and length. Supports
+   longitudinal slope and lateral crown without mesh refinement.
+3. **Combined: analytical primitive + mesh blend.** The runway primitive provides height
+   and friction; the mesh provides everything else. A transition zone smoothly blends the
+   two in the overrun area. Most physically accurate but most complex.
+
+**Resolution criteria:** OQ-LG-3 is **blocking for runway operations**. Option 2
+(analytical primitive) is the preferred approach because it decouples runway geometry
+from mesh quality and enables precise threshold and centerline coordinates from published
+aeronautical data. Design must be resolved before implementing any autolanding scenario
+that uses a real or representative runway.
+
+---
+
+### OQ-LG-4 — Unsprung Mass and Tyre Spring Compliance
+
+**Question:** Should the wheel and tyre unsprung mass, and the tyre radial spring
+compliance, be modeled as separate degrees of freedom?
+
+**Current state:** The quasi-static strut approximation (§2c) sets strut deflection
+directly to terrain penetration depth, implicitly assuming zero unsprung mass and an
+infinitely stiff tyre. The strut force is transmitted instantaneously to the airframe.
+
+**Why it matters for `Aircraft6DOF`:** In a full 6DOF equations-of-motion model the
+airframe accelerations are computed from the net force, so the spring-mass system
+formed by the strut + airframe mass is the primary frequency of interest. The unsprung
+mass and tyre compliance introduce a second, higher-frequency mode. At small tyre radii
+(0.08 m, typical small UAS) the tyre spring stiffness is very high ($k_t \sim 50{,}000$
+N/m) and the unsprung mass is small ($m_u \sim 0.1$ kg), giving a natural frequency
+$\omega_n = \sqrt{k_t/m_u} \approx 700$ rad/s — well above the 50 Hz outer rate.
+The quasi-static approximation remains valid for `Aircraft6DOF` in this frequency range.
+
+**Why it does not matter for `Aircraft`:** The `Aircraft` load-factor model sets attitude
+and alpha from commanded load factors via the allocator. The strut force enters as a
+disturbance to the allocator, not as a direct force in Newton's second law. The
+structural dynamics of the strut are not observable in the outputs of the load-factor
+model.
+
+**Resolution:** Deferred indefinitely for `Aircraft`. For `Aircraft6DOF`, deferred until
+a scenario requires it — most likely a hard landing structural load assessment where peak
+strut force is a design driver. The quasi-static strut is correct for all autolanding
+verification use cases at the current fidelity target.
+
+---
+
+### OQ-LG-5 — Integration Method for Wheel Spin ODE *(Resolved)*
+
+**Resolution:** Use Tustin (bilinear) discretization for the wheel angular velocity ODE.
+Set the substep count so that the Nyquist frequency of the inner timestep exceeds the
+linearized tyre-dynamics pole frequency by at least 3×.
+
+**Chosen alternative:** Tustin discretization (alternative 3 from the open question).
+The trapezoidal update
+
+$$\omega_w^{k+1} = \omega_w^k + \frac{\Delta t}{2}\bigl(\dot{\omega}_w^k + \dot{\omega}_w(\omega_w^{k+1})\bigr)$$
+
+is equivalent to applying the Tustin transform $s \leftarrow \frac{2}{\Delta t}\frac{z-1}{z+1}$
+to the linearized ODE. It is unconditionally stable for linear stiffness and second-order
+accurate in time, and uses the discretization pattern already established for filter design
+in this project ([`docs/algorithms/filters.md`](../algorithms/filters.md)).
+
+**Substep count rule:**
+
+The linearized tyre-dynamics pole frequency (rad/s) near the free-rolling condition is:
+
+$$\omega_\text{pole} = \frac{r_w^2\,k_\kappa}{I_w\,V_\text{ref}}, \quad k_\kappa = B C D = B C \mu F_z$$
+
+where $r_w$ is the tyre radius (m), $B$ and $C$ are the Pacejka shape factors (10.0 and
+1.9 for the longitudinal direction), $\mu$ is the surface friction coefficient, $F_z$ is
+the strut normal force (N), $I_w = 0.15\,r_w^3$ (kg·m²) is the wheel moment of inertia,
+and $V_\text{ref} = \max(|V_{cx}|, |\omega_w r_w|) + \epsilon$ (m/s) is the slip
+reference speed.
+
+The Nyquist frequency of the inner substep is $f_N = 1/(2\,\Delta t_\text{inner})$ (Hz).
+The 3× margin requirement is:
+
+$$f_N \geq 3\,\frac{\omega_\text{pole}}{2\pi}
+\quad\Longrightarrow\quad
+\Delta t_\text{inner} \leq \frac{\pi\,I_w\,V_\text{ref}}{3\,r_w^2\,k_\kappa}$$
+
+Substituting $I_w = 0.15\,r_w^3$ and $k_\kappa = B C \mu F_z$:
+
+$$N_\text{sub} \geq \frac{3\,\Delta t_\text{outer}\,B C \mu F_z}{\pi \times 0.15\,r_w\,V_\text{ref}}
+= \frac{20\,B C \mu F_z\,\Delta t_\text{outer}}{\pi\,r_w\,V_\text{ref}}$$
+
+The pole frequency is worst (largest, most demanding) at maximum $\mu F_z$ and minimum
+$V_\text{ref}$. The design operating point for $N_\text{sub}$ selection is **maximum
+expected gear load at approach speed**, which is when tyre dynamics are most active.
+Below taxi speed the tyre has already reached the free-rolling condition and residual
+dynamics are negligible; imposing the criterion at near-zero speed would require
+impractical substep counts because $V_\text{ref}$ decreases toward $\epsilon$.
+
+For the reference small-UAS configuration ($r_w = 0.08$ m, $\mu = 0.8$,
+$F_z = mg = 49$ N peak at 1g, $V_\text{ref} = 20$ m/s approach, $\Delta t_\text{outer}
+= 0.02$ s):
+
+$$N_\text{sub} \geq \frac{20 \times 10 \times 1.9 \times 0.8 \times 49 \times 0.02}{\pi \times 0.08 \times 20} \approx 59 \quad\Rightarrow\quad N_\text{sub} = 60$$
+
+The configured `substeps` value in the aircraft JSON must satisfy this bound for the
+specific aircraft's tyre radius, maximum gear load, and approach speed. It is not a
+single universal constant.
+
+**Effect on rolling-condition clamp:** The Tustin integrator is unconditionally stable
+and does not produce the limit cycle that the rolling-condition clamp (§4b) was designed
+to suppress. Once the Tustin integrator is implemented, the rolling-condition clamp is
+removed. Until implementation is complete, the clamp remains in place as the current
+workaround and §4a and §4b continue to describe the existing explicit-Euler + clamp
+behavior.
+
+*Implementation pending explicit instruction.*
+
+---
+
+### OQ-LG-6 — Airborne Wheel Spin-Down Model *(Resolved)*
+
+**Resolution:** Apply a combined linear + quadratic bearing drag torque during the
+airborne phase. Both coefficients are derived from a single user-specified spindown time
+parameter that defines how long the wheel takes to reach the rolling-resistance deadband
+speed starting from the free-rolling rate at minimum flight speed. No aerodynamic area or
+drag coefficient parameters are used.
+
+**Drag model:**
+
+During each substep in which `penetration_m` $\leq 0$ (wheel airborne), the wheel ODE is:
+
+$$I_w\,\dot{\omega}_w = -(c_1\,\omega_w + c_2\,|\omega_w|\,\omega_w)$$
+
+where $c_1$ (N·m·s/rad) is the linear (viscous) coefficient and $c_2$ (N·m·s²/rad²) is
+the quadratic coefficient. Both terms always oppose rotation. The linear term dominates at
+low spin rates (bearing viscous drag); the quadratic term dominates at high spin rates
+(hydrodynamic lubrication losses in the bearing). Neither term requires aerodynamic
+parameters or tyre frontal area.
+
+**Parametrization — single spindown time:**
+
+Both coefficients are derived from two config fields on `WheelUnitParams`:
+
+- `spindown_time_s` ($T_\text{sd}$, s) — the time for the wheel to spin down from the
+  reference angular velocity $\omega_\text{ref}$ to the rolling-resistance deadband speed
+  $\omega_\text{db} = 0.01$ rad/s (the same deadband already used in the on-ground rolling
+  resistance model).
+- `spindown_reference_speed_mps` ($V_\text{ref}$, m/s) — the minimum credible flight
+  speed of the aircraft (approximately stall speed). The reference angular velocity is
+  $\omega_\text{ref} = V_\text{ref} / r_w$.
+
+The coefficients are set so that at $\omega_\text{ref}$ both terms contribute equally
+($c_1\,\omega_\text{ref} = c_2\,\omega_\text{ref}^2$, i.e. $c_2 = c_1/\omega_\text{ref}$).
+This gives a single-parameter family in $c_1$, and the spindown time constraint determines
+$c_1$ uniquely. With $c_2 = c_1/\omega_\text{ref}$ the ODE factors as:
+
+$$I_w\,\dot{\omega}_w = -\frac{c_1}{\omega_\text{ref}}\,\omega_w(\omega_\text{ref} + \omega_w)$$
+
+This Bernoulli ODE has the closed-form solution (for $\omega_w \geq 0$):
+
+$$\omega_w(t) = \frac{\omega_\text{ref}\,e^{-K\,\omega_\text{ref}\,t}}{2 - e^{-K\,\omega_\text{ref}\,t}}, \quad K = \frac{c_1}{I_w\,\omega_\text{ref}}$$
+
+Applying the boundary condition $\omega_w(T_\text{sd}) = \omega_\text{db}$ and solving
+for $K$:
+
+$$K = \frac{1}{\omega_\text{ref}\,T_\text{sd}}\ln\!\frac{\omega_\text{ref} + \omega_\text{db}}{2\,\omega_\text{db}}$$
+
+Since $\omega_\text{ref} \gg \omega_\text{db}$ this simplifies to approximately:
+
+$$K \approx \frac{\ln(\omega_\text{ref} / 2\,\omega_\text{db})}{\omega_\text{ref}\,T_\text{sd}}$$
+
+The two model coefficients computed once at `initialize()` are:
+
+$$c_1 = K\,I_w\,\omega_\text{ref}, \qquad c_2 = K\,I_w$$
+
+**Example:** For the reference small-UAS configuration ($r_w = 0.08$ m, $I_w \approx
+7.7 \times 10^{-5}$ kg·m², $V_\text{ref} = 20$ m/s → $\omega_\text{ref} = 250$ rad/s,
+$T_\text{sd} = 5$ s):
+
+$$K \approx \frac{\ln(250/0.02)}{250 \times 5} = \frac{9.43}{1250} \approx 7.5 \times 10^{-3} \text{ rad}^{-1}\text{s}^{-1}$$
+
+$$c_1 \approx 7.5\times10^{-3} \times 7.7\times10^{-5} \times 250 \approx 1.45 \times 10^{-4} \text{ N·m·s/rad}$$
+
+$$c_2 \approx 7.5\times10^{-3} \times 7.7\times10^{-5} \approx 5.8 \times 10^{-7} \text{ N·m·s}^2/\text{rad}^2$$
+
+At these values the wheel starting from 250 rad/s reaches the 0.01 rad/s deadband in
+5 s; a bounce with 0.1 s airborne time retains $\approx 96\%$ of its liftoff speed.
+
+**Integration:** The bearing drag ODE is non-stiff ($\tau_\text{eff} \approx T_\text{sd}/
+\ln(\omega_\text{ref}/\omega_\text{db}) \sim 0.5$ s $\gg \Delta t_\text{inner}$), so the
+Tustin integrator from OQ-LG-5 applies with no substep count constraint. Once
+$|\omega_w| < \omega_\text{db}$, $\omega_w$ is snapped to zero by the existing deadband
+logic, satisfying the finite-time-to-zero requirement.
+
+**New config parameters on `WheelUnitParams`:**
+
+| Field | Type | Units | Description |
+| --- | --- | --- | --- |
+| `spindown_time_s` | float | s | Time to decay from $V_\text{ref}/r_w$ to deadband |
+| `spindown_reference_speed_mps` | float | m/s | Minimum flight speed reference ($V_\text{ref}$) |
+
+*Implementation pending explicit instruction.*
+
+---
+
+### OQ-LG-7 — First-Contact Wheel Speed Initial Condition *(Resolved)*
+
+**Resolution:** No special action at first contact. The Tustin integrator running at the
+3× Nyquist substep count (OQ-LG-5) integrates $\omega_w$ from the value produced by the
+airborne bearing drag model (OQ-LG-6) toward free-rolling naturally, driven by the tyre
+Pacejka force. No contact-transition detection, snap logic, or per-wheel event state is
+added.
+
+**Rationale:** After a long airborne phase, OQ-LG-6 ensures $\omega_w \approx 0$ at
+touchdown. The wheel therefore starts the first contact substep at maximum braking slip
+($\kappa_0 \approx -1$) and the Pacejka formula applies full braking traction
+$F_x \approx -\mu F_z$. This is physically correct: a non-spinning wheel scrubbing onto
+a moving surface genuinely generates maximum braking friction during the spin-up transient.
+The Tustin integrator at the substep size set by the 3× Nyquist rule resolves the
+spin-up time constant $\tau \approx 0.3$–$0.4$ ms accurately, so the simulated braking
+impulse is a faithful representation of the physical event rather than a numerical
+artifact.
+
+No code change is required beyond the OQ-LG-5 and OQ-LG-6 implementations. The
+first-contact case is handled identically to every other contact substep.
+
+*Implementation: no action required beyond OQ-LG-5 and OQ-LG-6.*
 
 ---
 
