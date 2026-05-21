@@ -7,7 +7,7 @@ are structured as functions of state and control, and which aircraft configurati
 used to validate the format before implementation begins.
 
 This study resolves OQ-16(c) from
-[`docs/architecture/system/future/decisions.md`](system/future/decisions.md) and is a
+[`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) and is a
 prerequisite for [`Aircraft6DOF` design and implementation (roadmap item 7)](../../roadmap/aircraft.md).
 
 **Scope:** fixed-wing aircraft, subsonic ($M < 0.3$), rigid airframe, no aeroelasticity,
@@ -456,7 +456,7 @@ additive and computed inside `Aircraft6DOF` alongside the aerodynamic moments.
 
 ## Open Questions
 
-| ID | Question | Blocking | Resolution path |
+| ID | Summary | Blocking | Recommendation |
 | --- | --- | --- | --- |
 | OQ-1 | **Nonlinear $C_L(\alpha)$ in body-axis form.** The trim model uses `LiftCurveModel` for the full stall region. Should `BodyAxisCoeffModel` use a tabular $C_{Z}(\alpha)$ breakpoint array, a re-parameterized `LiftCurveModel`, or a linear model clipped at stall? | `Aircraft6DOF` | Run Case B through all three options; compare predicted stall entry with published data. Decision required before item 7 begins. |
 | OQ-2 | **Drag polar vs. axial force derivative.** $C_{X_\alpha}$ from DATCOM is small and configuration-dependent. Is an explicit $C_X(\alpha)$ model worth the complexity, or is $C_X = -C_{D_0} - k C_Z^2$ (drag polar in body frame) sufficient for the target use cases? | `BodyAxisCoeffModel` format | Evaluate error in predicted drag for Cases A–C at high $\alpha$. |

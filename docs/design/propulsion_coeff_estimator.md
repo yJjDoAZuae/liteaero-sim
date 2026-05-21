@@ -453,7 +453,7 @@ ParametricAircraftConfig (includes PropulsionGeometry)
 
 ## Open Questions
 
-| ID | Question | Blocking | Resolution path |
+| ID | Summary | Blocking | Recommendation |
 | --- | --- | --- | --- |
 | OQ-P1 | **Propwash model complexity.** The propwash correction $\Delta C_{m_q}(\delta_T)$ assumes the tail is uniformly immersed in the slipstream. For most UAV configurations the tail is only partially in the wake. Should the overlap fraction $k_{slip}$ be a single scalar, or should the correction model account for the axial decay of the slipstream with distance? | `PropulsionCoeffEstimator.estimateCoupling()` | Use single scalar `prop_disk_overlap_ht` for initial implementation; document as a calibration parameter; revisit if propwash moment error is significant in design study validation. |
 | OQ-P2 | **P-factor model accuracy.** The linear $C_{n_P} \cdot \alpha$ model is a first-order approximation. For large propellers at high AoA (takeoff rotation, stall recovery), the effect may be significantly nonlinear. Should `BodyAxisCoeffModel` support a nonlinear P-factor term? | `BodyAxisCoeffModel` format | Evaluate P-factor magnitude for Cases A–C using the linear model; if residual is $> 5\%$ of $C_{n_\beta}\beta$ at representative AoA, extend the model. |

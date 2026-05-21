@@ -118,7 +118,7 @@ public:
     /// For higher-level components (KinematicState, Autopilot, Session) dt_s
     /// is passed at runtime. SISO dynamic elements use DynamicBlock instead,
     /// where dt_s is a fixed configuration parameter and step(float u) takes
-    /// only the input signal — see docs/architecture/dynamic_block.md.
+    /// only the input signal — see docs/design/dynamic_element.md.
     virtual void step(double dt_s) = 0;
 
     /// Return a complete snapshot of internal state (SI units throughout).

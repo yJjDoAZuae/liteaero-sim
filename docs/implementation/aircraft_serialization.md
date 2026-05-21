@@ -2,7 +2,7 @@
 
 Implementation notes for `Aircraft::serializeJson()` / `deserializeJson()` and
 `serializeProto()` / `deserializeProto()`.  For design intent, contract, and JSON schema,
-see [`docs/architecture/aircraft.md — Serialization`](../architecture/aircraft.md#serialization).
+see [`docs/design/aircraft.md — Serialization`](../design/aircraft.md#serialization).
 
 ---
 

@@ -43,15 +43,15 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `AirframePerformance` | `include/airframe/AirframePerformance.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `Inertia` | `include/airframe/Inertia.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `Propulsion` | `include/propulsion/Propulsion.hpp` | ✅ Implemented — derives from `DynamicElement`; replaces `V_Propulsion` |
-| `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
-| `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
-| `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
+| `PropulsionJet` | `include/propulsion/PropulsionJet.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../design/propulsion.md) |
+| `PropulsionEDF` | `include/propulsion/PropulsionEDF.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../design/propulsion.md) |
+| `PropellerAero` | `include/propulsion/PropellerAero.hpp` | ✅ Implemented — see [propulsion.md](../design/propulsion.md) |
 | `Motor` | `include/propulsion/Motor.hpp` | ✅ Implemented — stateless abstract interface; replaces `V_Motor` |
-| `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
-| `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ✅ Implemented — see [propulsion.md](../architecture/propulsion.md) |
-| `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../architecture/propulsion.md) |
+| `MotorElectric` | `include/propulsion/MotorElectric.hpp` | ✅ Implemented — see [propulsion.md](../design/propulsion.md) |
+| `MotorPiston` | `include/propulsion/MotorPiston.hpp` | ✅ Implemented — see [propulsion.md](../design/propulsion.md) |
+| `PropulsionProp` | `include/propulsion/PropulsionProp.hpp` | ✅ Implemented + serialization (JSON + proto) — see [propulsion.md](../design/propulsion.md) |
 | `Aircraft` | `include/Aircraft.hpp` | ✅ Implemented + serialization (JSON + proto) |
-| `SimRunner` | `include/runner/SimRunner.hpp` | ✅ Implemented — Batch / RealTime / ScaledRealTime; see [sim_runner.md](../architecture/sim_runner.md) |
+| `SimRunner` | `include/runner/SimRunner.hpp` | ✅ Implemented — Batch / RealTime / ScaledRealTime; see [sim_runner.md](../design/sim_runner.md) |
 | `Atmosphere` | `include/environment/Atmosphere.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `AtmosphericState` | `include/environment/AtmosphericState.hpp` | ✅ Implemented |
 | `Wind` | `include/environment/Wind.hpp` | ✅ Implemented + serialization (JSON + proto) |
@@ -61,7 +61,7 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `EnvironmentState` | `include/environment/EnvironmentState.hpp` | ✅ Implemented |
 | `SurfaceGeometry` / `AircraftGeometry` | `include/aerodynamics/AircraftGeometry.hpp` | ✅ Implemented |
 | `AeroCoeffEstimator` | `include/aerodynamics/AeroCoeffEstimator.hpp` | ✅ Implemented |
-| `DynamicElement` | `liteaero-flight/include/liteaero/control/DynamicElement.hpp` | → LiteAero Flight — see [dynamic_element.md](../architecture/dynamic_element.md) |
+| `DynamicElement` | `liteaero-flight/include/liteaero/control/DynamicElement.hpp` | → LiteAero Flight — see [dynamic_element.md](../design/dynamic_element.md) |
 | `SisoElement` | `liteaero-flight/include/liteaero/control/SisoElement.hpp` | → LiteAero Flight — NVI SISO wrapper over `DynamicElement` |
 | `SensorAirData` | `include/sensor/SensorAirData.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `SensorGnss` | `include/sensor/SensorGnss.hpp` | 🔲 Planned — stub not yet created |
@@ -73,15 +73,15 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 | `SensorRadAlt` | `include/sensor/SensorRadAlt.hpp` | 🔲 Stub only |
 | `SensorForwardTerrainProfile` | `include/sensor/SensorForwardTerrainProfile.hpp` | 🔲 Stub only |
 | `SensorTrackEstimator` | `include/sensor/SensorTrackEstimator.hpp` | 🔲 Stub only |
-| `WheelUnit` | `include/landing_gear/WheelUnit.hpp` | ✅ Implemented + serialization (JSON + proto) — see [landing_gear.md](../architecture/landing_gear.md) |
+| `WheelUnit` | `include/landing_gear/WheelUnit.hpp` | ✅ Implemented + serialization (JSON + proto) — see [landing_gear.md](../design/landing_gear.md) |
 | `StrutState` | `include/landing_gear/StrutState.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `ContactForces` | `include/physics/ContactForces.hpp` | ✅ Implemented + serialization (JSON + proto) |
 | `SurfaceFriction` | `include/landing_gear/SurfaceFriction.hpp` | ✅ Implemented |
 | `SurfaceFrictionUniform` | `include/landing_gear/SurfaceFrictionUniform.hpp` | ✅ Implemented (named constructors: pavement/grass/dirt/gravel, wet/dry) |
 | `LandingGear` | `include/landing_gear/LandingGear.hpp` | ✅ Implemented + serialization (JSON + proto); wired into `Aircraft::step()` |
-| `AeroModel` | `include/aerodynamics/AeroModel.hpp` | 🔲 Planned — abstract aero model interface; defined by item 6; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
-| `BodyAxisCoeffModel` | `include/aerodynamics/BodyAxisCoeffModel.hpp` | 🔲 Planned — body-axis stability derivative model; implements `AeroModel`; defined by item 5 + item 6; see [aero_coefficient_model.md](../architecture/aero_coefficient_model.md) |
-| `PropulsionCouplingCoefficients` | TBD | 🔲 Planned — propulsion-aero coupling coefficient struct; defined by item 5; see [propulsion_coeff_estimator.md](../architecture/propulsion_coeff_estimator.md) |
+| `AeroModel` | `include/aerodynamics/AeroModel.hpp` | 🔲 Planned — abstract aero model interface; defined by item 6; see [aero_coefficient_model.md](../design/aero_coefficient_model.md) |
+| `BodyAxisCoeffModel` | `include/aerodynamics/BodyAxisCoeffModel.hpp` | 🔲 Planned — body-axis stability derivative model; implements `AeroModel`; defined by item 5 + item 6; see [aero_coefficient_model.md](../design/aero_coefficient_model.md) |
+| `PropulsionCouplingCoefficients` | TBD | 🔲 Planned — propulsion-aero coupling coefficient struct; defined by item 5; see [propulsion_coeff_estimator.md](../design/propulsion_coeff_estimator.md) |
 | `FlightLogReader` | `python/tools/log_reader.py` | ✅ Reworked — per-field MCAP topic parsing (`source/field`), CSV `source_name` column, stateful `frames()` getter, `channel_names()` raises before load (DR-1, DR-9) |
 | `ModeEventSeries` | `python/tools/mode_overlay.py` | ✅ Reworked — initial value emitted as first event, `name_map` moved to constructor (DR-2) |
 | `TimeHistoryFigure` | `python/tools/time_history.py` | ✅ Reworked — `figure()` public accessor with caching, `_build()` internal (DR-3) |
@@ -104,7 +104,7 @@ project roadmap [README.md](README.md) for cross-cutting milestones.
 
 ## Delivered
 
-Design authority for all delivered items: [`docs/architecture/aircraft.md`](../architecture/aircraft.md).
+Design authority for all delivered items: [`docs/design/aircraft.md`](../design/aircraft.md).
 
 | # | Item | Tests |
 | --- | ------ | ------- |
@@ -114,9 +114,9 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 4 | `Aircraft::step()` — 9-step physics loop | `Aircraft_test.cpp` — 3 tests |
 | 5 | `Aircraft` serialization — JSON + proto round-trips, schema version checks | `Aircraft_test.cpp` — 4 tests |
 | 6 | JSON initialization — fixture-file tests (3 configs) and missing-field error path | `Aircraft_test.cpp` — 4 tests |
-| 7 | `Logger` design — architecture, data model, MCAP + CSV formats, C++ interface reference | [`docs/architecture/logger.md`](../architecture/logger.md) |
+| 7 | `Logger` design — architecture, data model, MCAP + CSV formats, C++ interface reference | [`docs/design/logger.md`](../design/logger.md) |
 | 8 | `Logger` implementation — `Logger`, `LogSource`, `LogReader`; MCAP + `FloatArray` proto; 6 tests | `test/Logger_test.cpp` — 6 tests |
-| 9 | Environment model design — `Atmosphere` (ISA + ∆ISA + humidity), `Wind`, `Turbulence` (Dryden), `Gust` (1-cosine); rotational turbulence coupling to trim aero model defined | [`docs/architecture/environment.md`](../architecture/environment.md) |
+| 9 | Environment model design — `Atmosphere` (ISA + ∆ISA + humidity), `Wind`, `Turbulence` (Dryden), `Gust` (1-cosine); rotational turbulence coupling to trim aero model defined | [`docs/design/environment.md`](../design/environment.md) |
 | 10 | Aerodynamic coefficient estimation — derivation of all trim aero model inputs from wing/tail/fuselage geometry; DATCOM lift slope, Hoerner Oswald, Raymer $C_{D_0}$ buildup, $C_{L_q}$, $C_{Y_\beta}$, $C_{Y_r}$ | [`docs/algorithms/aerodynamics.md`](../algorithms/aerodynamics.md) |
 | 11 | `Atmosphere` — ISA 3-layer + ΔT + humidity + density altitude; JSON + proto serialization | `Atmosphere_test.cpp` — 12 tests |
 | 12 | `Wind` (Constant/PowerLaw/Log), `Turbulence` (Dryden 6-filter, Tustin-discretized), `Gust` (1-cosine MIL-SPEC-8785C); JSON serialization | `Wind_test.cpp` — 6 tests, `Turbulence_test.cpp` — 5 tests, `Gust_test.cpp` — 6 tests |
@@ -125,25 +125,25 @@ Design authority for all delivered items: [`docs/architecture/aircraft.md`](../a
 | 15 | `DynamicElement` refactoring — unified root base for all stateful components; `SisoElement` NVI SISO wrapper; `Filter` → `SisoElement`; `Propulsion` / `Motor` bases; deleted `DynamicBlock`, `DynamicFilterBlock`, `DynamicLimitBlock`, `V_Sensor`, `V_Propulsion`, `V_Motor` | No new tests — all 378 pre-existing tests pass |
 | 16 | `SISOBlock` removal — deleted `SISOBlock.hpp`; `SisoElement` derives from `DynamicElement` only; `LimitBase`/`Limit`/`RateLimit`/`Integrator`/`Derivative`/`Unwrap` migrated to `SisoElement` with full `DynamicElement` lifecycle; `SisoElement::step()` NVI call order fixed (previous `in_` available during `onStep()`); `resetTo()` replaces `reset(float)` overloads | `Limit_test.cpp`, `RateLimit_test.cpp`, `Integrator_test.cpp`, `Derivative_test.cpp`, `Unwrap_test.cpp` — 10 new tests; all 394 tests pass |
 | 17 | `Antiwindup` redesign — `AntiwindupConfig` struct with `enum class Direction`; `update(float)` replaces `operator=(float)`; `configure()`, `reset()`, `serializeJson()`/`deserializeJson()` added; `name` field removed; uninitialized-boolean bug fixed; `Integrator` serialization extended to embed `"antiwindup"` array | `Antiwindup_test.cpp` — 12 tests; `Integrator_test.cpp` — 2 new tests; all 408 tests pass |
-| 18 | Control subsystem refactoring (Steps A–J, all nine issues in [`control_interface_review.md`](../architecture/control_interface_review.md)) — `FilterError`/`DiscretizationMethod` promoted to `enum class`; `LimitBase` deleted, `Limit`/`RateLimit` rebased to `SisoElement`; `Gain` API cleaned up (`set()`, `value()`, stubs removed); `FilterSS2Clip`, `FilterTF2`, `FilterTF`, `FilterFIR`, `FilterSS` migrated to NVI (`onStep()`/`onSerializeJson()`/`onDeserializeJson()`); shadow `_in`/`_out` members and no-op `Filter` defaults removed; `Unwrap` `ref_` field added (`setReference()`, NVI routing, serialization); `SISOPIDFF` derives from `DynamicElement` with full lifecycle, `snake_case_` member renames (`Kp`→`proportional_gain_`, `I`→`integrator_`, etc.), private limits, `ControlLoop` accessor renames (`out()`→`output()`, `pid`→`controller_`); `Integrator`/`Derivative` private member renames (`_dt`→`dt_s_`, `_Tau`→`tau_s_`, `limit`→`limit_`) | `FilterSS2Clip_test.cpp`, `FilterTF2_test.cpp`, `FilterFIR_test.cpp` (new), `FilterSS_test.cpp`, `Unwrap_test.cpp`, `SISOPIDFF_test.cpp` (new) — 29 new tests; 435 pass, 2 pre-existing `FilterTFTest` failures unchanged |
+| 18 | Control subsystem refactoring (Steps A–J, all nine issues in [`control_interface_review.md`](../design/control_interface_review.md)) — `FilterError`/`DiscretizationMethod` promoted to `enum class`; `LimitBase` deleted, `Limit`/`RateLimit` rebased to `SisoElement`; `Gain` API cleaned up (`set()`, `value()`, stubs removed); `FilterSS2Clip`, `FilterTF2`, `FilterTF`, `FilterFIR`, `FilterSS` migrated to NVI (`onStep()`/`onSerializeJson()`/`onDeserializeJson()`); shadow `_in`/`_out` members and no-op `Filter` defaults removed; `Unwrap` `ref_` field added (`setReference()`, NVI routing, serialization); `SISOPIDFF` derives from `DynamicElement` with full lifecycle, `snake_case_` member renames (`Kp`→`proportional_gain_`, `I`→`integrator_`, etc.), private limits, `ControlLoop` accessor renames (`out()`→`output()`, `pid`→`controller_`); `Integrator`/`Derivative` private member renames (`_dt`→`dt_s_`, `_Tau`→`tau_s_`, `limit`→`limit_`) | `FilterSS2Clip_test.cpp`, `FilterTF2_test.cpp`, `FilterFIR_test.cpp` (new), `FilterSS_test.cpp`, `Unwrap_test.cpp`, `SISOPIDFF_test.cpp` (new) — 29 new tests; 435 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 19 | `SensorAirData` — pitot-static air data computer; differential pressure ($q_c$) and static pressure ($P_s$) transducers with Gaussian noise, first-order Tustin lag, and fuselage crossflow pressure error (two-port symmetric crosslinked model); derives IAS, CAS, EAS, TAS, Mach, barometric altitude (Kollsman-referenced, troposphere + tropopause), OAT; RNG pimpl with seed + advance serialization; JSON + proto round-trips | `SensorAirData_test.cpp` — 19 tests; 454 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 20 | `LoadFactorAllocator` alpha-ceiling fix — Newton overshoot and fold guards corrected for positive-thrust case; the achievable-Nz ceiling is at $\alpha^*$ (where $f'(\alpha) = qSC_L'(\alpha) + T\cos\alpha = 0$), not at `alphaPeak()`, when $T > 0$; overshoot guard now clamps the proposed Newton step to the CL parabolic domain using `LiftCurveModel::alphaSep()` / `alphaSepNeg()` before checking $f'$, preventing escape into the flat separated plateau where $f' = T\cos\alpha$ stays positive until $\alpha > \pi/2$; bisects to locate $\alpha^*$ when the guard fires; fold guard stays at current iterate rather than snapping to `alphaPeak()`; `LiftCurveModel::alphaSep()` and `alphaSepNeg()` added to public interface; design documentation updated in [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) and [`docs/algorithms/equations_of_motion.md`](../algorithms/equations_of_motion.md) | 4 new tests in `LoadFactorAllocator_test.cpp`; 19 tests total; 458 pass, 2 pre-existing `FilterTFTest` failures unchanged |
 | 21 | **System architecture definition** — future-state system architecture model covering: originating requirements, use cases (UC-1 through UC-7), element registry (LiteAero Sim, LiteAero Flight, SimulationRunner, External Interface elements), data flow type and instance registries, interface control documents (ICD-8 through ICD-12), architectural decisions (30 recorded), open questions (all pre-design questions resolved; design-phase questions tracked); system boundary between LiteAero Sim simulation plant and LiteAero Flight established; Docker containerization model for SITL verification defined; `liteaero::` namespace structure and CMake target structure decided; repo split plan defined | No code tests — deliverable is the architecture document set under [`docs/architecture/system/future/`](../architecture/system/future/) |
 | 22 | `LoadFactorAllocator` branch-continuation predictor — first-order warm-start $\alpha_0 = \alpha_\text{prev} + \delta n_z \cdot mg / f'(\alpha_\text{prev})$ and symmetric $\beta_0$ formula added to `solve()`; predictor is skipped at the stall ceiling ($f' \approx 0$) or when the raw prediction would fall outside $[\alpha_\text{sep\_neg}, \alpha_\text{sep}]$ (domain guard prevents cross-branch jumps on cold-start excess-demand calls); `_n_z_prev` and `_n_y_prev` added as serialized state fields in both JSON (`n_z_prev_nd`, `n_y_prev_nd`) and proto (`LoadFactorAllocatorState` fields 6–7); `iterations` (alpha solver iteration count) added to `LoadFactorOutputs`; `reset()` clears all four warm-start fields; [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) §Warm-Starting updated | 3 new tests in `LoadFactorAllocator_test.cpp`: `PredictorReducesIterationsOnLinearStep` (iterations == 1 for an exact linear-region prediction), `PredictorJsonRoundTrip_IncludesNzPrevAndNyPrev`, `PredictorProtoRoundTrip_IncludesNzPrev`; 22 tests total |
 | 23 | `LoadFactorAllocator` test coverage extension — 8 new tests close continuity and domain-coverage gaps identified by code review. **White-box tests** (4): full positive and negative Nz sweeps through stall verifying the clamp value against `alphaPeak()`/`alphaTrough()`; fine-step sweep across the C¹ Linear→IncipientStall boundary confirming both segments are traversed; stall warm-start limitation test documenting that `reset()` is required after a discontinuous Nz jump. **Black-box tests** (4): uniform 500-step monotonicity sweeps from 0 to ±10 g for T = 0 (positive and negative) and T = `kLargeThrust` (positive); point-wise perturbation test at 37 grid points (T = 0, −9 g to +9 g) and 19 grid points (T > 0, 0 to +9 g) using fresh allocators. Stall warm-start limitation documented in [`docs/implementation/equations_of_motion.md`](../implementation/equations_of_motion.md) §Stall Warm-Start Limitation | 30 tests total in `LoadFactorAllocator_test.cpp` |
-| 24 | **Aircraft command processing redesign** — all three command axes (`_nz_filter`, `_ny_filter`, `_roll_rate_filter`) converted to `setLowPassSecondIIR` (2nd-order LP); config params replaced: `cmd_deriv_tau_s`/`cmd_roll_rate_tau_s` → `nz_wn_rad_s`/`nz_zeta_nd`/`ny_wn_rad_s`/`ny_zeta_nd`/`roll_rate_wn_rad_s`/`roll_rate_zeta_nd`; `n_z_dot`/`n_y_dot` computed analytically from filter state after substep loop (no derivative filter lag); allocator receives shaped commands instead of raw clamped commands; Nyquist constraint enforced per axis (`wn * cmd_filter_dt_s < π`) at `initialize()`; proto `AircraftState` updated; `aircraft_config_v1` schema doc updated; fixture JSON files updated; design authority: [`docs/architecture/aircraft.md`](../architecture/aircraft.md) §Command Processing Architecture | 3 new Nyquist violation tests in `Aircraft_test.cpp` (`NyquistViolation_Nz_Throws`, `_Ny_Throws`, `_RollRate_Throws`); 345 pre-existing tests pass |
-| 26 | **Post-processing tools design** — full design authority document covering: use case decomposition (UC-PP1 through UC-PP10); actors (Sim Developer, Integration Tester, Flight Analyst, Guidance/Autopilot Developer); module architecture (`FlightLogReader`, `AnomalyDetector`, `BehaviorVerifier`, `DataOverlay`, `ModeEventSeries`, `TimeHistoryFigure`, `RibbonTrail`, `HudOverlay`, `TrajectoryView`); ribbon trail geometry (body-to-world rotation, wing half-span vector, `Poly3DCollection`); HUD overlay layout; command/response time history encoding; `BehaviorVerifier` criterion library and multi-source DataFrame interface; library choices (pandas, matplotlib, Plotly, mcap, numpy); test strategy (8 test files, rendering non-invocation requirement) | [`docs/architecture/post_processing.md`](../architecture/post_processing.md) |
-| 25 | **Landing gear model design** — full design authority document covering: use case decomposition; class hierarchy (`LandingGear`, `WheelUnit`, `StrutState`, `ContactForces`, `SurfaceFriction`, `SurfaceFrictionUniform`); physical models (suspension spring-damper, Pacejka magic formula, wheel friction, surface friction parameterization, ground plane interface); force assembly; step interface; JSON + proto serialization contract; computational resource estimate; test strategy (unit, integration, scenario, serialization); visualization notebook designs (`landing_gear_contact_forces.ipynb`, `crab_landing_dynamics.ipynb`, `takeoff_roll.ipynb`, `terrain_contact_animation.ipynb`); touchdown animation design (`touchdown_animation.py` — pybind11 driver, layout, visual encoding, coordinate mapping, data flow) | [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) |
+| 24 | **Aircraft command processing redesign** — all three command axes (`_nz_filter`, `_ny_filter`, `_roll_rate_filter`) converted to `setLowPassSecondIIR` (2nd-order LP); config params replaced: `cmd_deriv_tau_s`/`cmd_roll_rate_tau_s` → `nz_wn_rad_s`/`nz_zeta_nd`/`ny_wn_rad_s`/`ny_zeta_nd`/`roll_rate_wn_rad_s`/`roll_rate_zeta_nd`; `n_z_dot`/`n_y_dot` computed analytically from filter state after substep loop (no derivative filter lag); allocator receives shaped commands instead of raw clamped commands; Nyquist constraint enforced per axis (`wn * cmd_filter_dt_s < π`) at `initialize()`; proto `AircraftState` updated; `aircraft_config_v1` schema doc updated; fixture JSON files updated; design authority: [`docs/design/aircraft.md`](../design/aircraft.md) §Command Processing Architecture | 3 new Nyquist violation tests in `Aircraft_test.cpp` (`NyquistViolation_Nz_Throws`, `_Ny_Throws`, `_RollRate_Throws`); 345 pre-existing tests pass |
+| 26 | **Post-processing tools design** — full design authority document covering: use case decomposition (UC-PP1 through UC-PP10); actors (Sim Developer, Integration Tester, Flight Analyst, Guidance/Autopilot Developer); module architecture (`FlightLogReader`, `AnomalyDetector`, `BehaviorVerifier`, `DataOverlay`, `ModeEventSeries`, `TimeHistoryFigure`, `RibbonTrail`, `HudOverlay`, `TrajectoryView`); ribbon trail geometry (body-to-world rotation, wing half-span vector, `Poly3DCollection`); HUD overlay layout; command/response time history encoding; `BehaviorVerifier` criterion library and multi-source DataFrame interface; library choices (pandas, matplotlib, Plotly, mcap, numpy); test strategy (8 test files, rendering non-invocation requirement) | [`docs/design/post_processing.md`](../design/post_processing.md) |
+| 25 | **Landing gear model design** — full design authority document covering: use case decomposition; class hierarchy (`LandingGear`, `WheelUnit`, `StrutState`, `ContactForces`, `SurfaceFriction`, `SurfaceFrictionUniform`); physical models (suspension spring-damper, Pacejka magic formula, wheel friction, surface friction parameterization, ground plane interface); force assembly; step interface; JSON + proto serialization contract; computational resource estimate; test strategy (unit, integration, scenario, serialization); visualization notebook designs (`landing_gear_contact_forces.ipynb`, `crab_landing_dynamics.ipynb`, `takeoff_roll.ipynb`, `terrain_contact_animation.ipynb`); touchdown animation design (`touchdown_animation.py` — pybind11 driver, layout, visual encoding, coordinate mapping, data flow) | [`docs/design/landing_gear.md`](../design/landing_gear.md) |
 | LG-1 | **LandingGear — C++ implementation** (Steps A–F) — `WheelUnit`, `StrutState`, `ContactForces`, `SurfaceFriction`, `SurfaceFrictionUniform`, `LandingGear`; quasi-static spring-damper strut; Pacejka magic formula tyre forces (longitudinal + lateral); friction-circle saturation; viscous wheel speed integration; nose wheel steering; differential braking; terrain elevation query via `V_Terrain`; wired into `Aircraft::step()` on the disturbance force path; `Aircraft::setTerrain()`, `contactForces()`, `weightOnWheels()` added; JSON + proto serialization throughout; `WheelUnitState`, `ContactForcesState`, `LandingGearState` proto messages added | `LandingGearTypes_test.cpp`, `SurfaceFriction_test.cpp`, `LandingGear_test.cpp`, `LandingGearTerrain_test.cpp` — 27 tests; `Aircraft_test.cpp` — 2 new tests; 388 total pass |
-| Sim-1 | **SimRunner — Execution Modes** — `ExecutionMode` enum (`Batch`, `RealTime`, `ScaledRealTime`); `RunnerConfig` struct (`dt_s` float — output step, adequate precision for timestep values; `duration_s` double — needed for long runs compared to accumulated sim time; `time_scale` float; `mode`); `SimRunner` class with `initialize()`, `start()`, `stop()`, `is_running()`, `elapsed_sim_time_s()`; Batch mode blocks caller; RealTime/ScaledRealTime spawn `std::thread`; `std::atomic<uint64_t> step_count_` for elapsed time; termination condition `sim_time_s > duration_s + time_initial_s` (direct time comparison — no precomputed step count); `dt_s` widened to `double` once at loop entry for all arithmetic; late-step policy: no compensation; design authority: [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md) | `SimRunner_test.cpp` — 10 tests |
-| PP-1 | **Post-processing visualization tools — first-pass TDD implementation** — `FlightLogReader` (CSV loading via `pd.read_csv`, JSON-encoded MCAP via `mcap.reader.make_reader`, per-source DataFrames keyed by filename stem / `channel.topic`); `ModeEventSeries` (step-channel transition parser, `from_dataframe()` classmethod, `name_map` parameter, initial value skipped); `TimeHistoryFigure` (Plotly multi-panel, `shared_xaxes=True`, secondary y-axis via `specs`, `Scattergl` above 50 000 points, `add_vline()` mode overlays, `load(frames)` + `build()` + `export_html()`); `RibbonTrail` (ZYX Euler rotation matrices, wing body vector `[0, half_width_m, 0]`, `Poly3DCollection` quads, RdBu_r roll colormap via `TwoSlopeNorm(±π/3)`, midpoint-roll quad color); `HudOverlay` (9 fixed-position `text2D` artists, fading mode-change banner, 60-frame countdown); `TrajectoryView` (ghost ribbon α=0.15, live ribbon last 200 quads, dual-source overlay, `FuncAnimation(blit=False)`); `conftest.py` Agg backend; all design decisions subsequently resolved in dedicated design sessions; see DR-1 through DR-13 in [`post_processing.md`](../architecture/post_processing.md) | `test_log_reader.py` — 4 tests; `test_mode_events.py` — 5 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 5 tests; 20 tests total |
-| PP-D | **Post-processing tools design — full architecture and decision records** — resolved all 28 design questions across both visualization and analysis layers; selections: Vispy (OpenGL, DR-8) for 3D rendering; PySide6 Qt window (DR-7) for playback and camera controls; Panel + Plotly (DR-10) for live time history; pre-generated glTF terrain via `pygltflib` (DR-11); offline terrain ingestion pipeline (DR-12); `terrain_paths.py` shared path module with `data/terrain/<dataset>/source/` + `derived/` repository structure (DR-13); per-field MCAP topic convention `"source/field_name"` (DR-9); `FlightLogReader` stateful API (DR-1); `ModeEventSeries` constructor name-map (DR-2); `TimeHistoryFigure.figure()` accessor (DR-3); ring buffer polling via pybind11 (DR-5, DR-6); camera modes FPV/Trailing/God's-eye/Local-top defined (PP-F28–PP-F32); terrain saturation runtime API (DR-13 area); document restructured from open-question tracking format to settled architecture with Decision Records appendix | [`docs/architecture/post_processing.md`](../architecture/post_processing.md) |
+| Sim-1 | **SimRunner — Execution Modes** — `ExecutionMode` enum (`Batch`, `RealTime`, `ScaledRealTime`); `RunnerConfig` struct (`dt_s` float — output step, adequate precision for timestep values; `duration_s` double — needed for long runs compared to accumulated sim time; `time_scale` float; `mode`); `SimRunner` class with `initialize()`, `start()`, `stop()`, `is_running()`, `elapsed_sim_time_s()`; Batch mode blocks caller; RealTime/ScaledRealTime spawn `std::thread`; `std::atomic<uint64_t> step_count_` for elapsed time; termination condition `sim_time_s > duration_s + time_initial_s` (direct time comparison — no precomputed step count); `dt_s` widened to `double` once at loop entry for all arithmetic; late-step policy: no compensation; design authority: [`docs/design/sim_runner.md`](../design/sim_runner.md) | `SimRunner_test.cpp` — 10 tests |
+| PP-1 | **Post-processing visualization tools — first-pass TDD implementation** — `FlightLogReader` (CSV loading via `pd.read_csv`, JSON-encoded MCAP via `mcap.reader.make_reader`, per-source DataFrames keyed by filename stem / `channel.topic`); `ModeEventSeries` (step-channel transition parser, `from_dataframe()` classmethod, `name_map` parameter, initial value skipped); `TimeHistoryFigure` (Plotly multi-panel, `shared_xaxes=True`, secondary y-axis via `specs`, `Scattergl` above 50 000 points, `add_vline()` mode overlays, `load(frames)` + `build()` + `export_html()`); `RibbonTrail` (ZYX Euler rotation matrices, wing body vector `[0, half_width_m, 0]`, `Poly3DCollection` quads, RdBu_r roll colormap via `TwoSlopeNorm(±π/3)`, midpoint-roll quad color); `HudOverlay` (9 fixed-position `text2D` artists, fading mode-change banner, 60-frame countdown); `TrajectoryView` (ghost ribbon α=0.15, live ribbon last 200 quads, dual-source overlay, `FuncAnimation(blit=False)`); `conftest.py` Agg backend; all design decisions subsequently resolved in dedicated design sessions; see DR-1 through DR-13 in [`post_processing.md`](../design/post_processing.md) | `test_log_reader.py` — 4 tests; `test_mode_events.py` — 5 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 5 tests; 20 tests total |
+| PP-D | **Post-processing tools design — full architecture and decision records** — resolved all 28 design questions across both visualization and analysis layers; selections: Vispy (OpenGL, DR-8) for 3D rendering; PySide6 Qt window (DR-7) for playback and camera controls; Panel + Plotly (DR-10) for live time history; pre-generated glTF terrain via `pygltflib` (DR-11); offline terrain ingestion pipeline (DR-12); `terrain_paths.py` shared path module with `data/terrain/<dataset>/source/` + `derived/` repository structure (DR-13); per-field MCAP topic convention `"source/field_name"` (DR-9); `FlightLogReader` stateful API (DR-1); `ModeEventSeries` constructor name-map (DR-2); `TimeHistoryFigure.figure()` accessor (DR-3); ring buffer polling via pybind11 (DR-5, DR-6); camera modes FPV/Trailing/God's-eye/Local-top defined (PP-F28–PP-F32); terrain saturation runtime API (DR-13 area); document restructured from open-question tracking format to settled architecture with Decision Records appendix | [`docs/design/post_processing.md`](../design/post_processing.md) |
 | PP-2 | **Post-processing visualization rework** (Tasks A–G, TDD) — `FlightLogReader`: per-field MCAP topic parsing (`"source/field_name"`), CSV `source_name` column, stateful `frames()` getter, `channel_names()` raises before load (DR-1, DR-9); `ModeEventSeries`: initial value emitted as first event, `name_map` moved to constructor (DR-2); `TimeHistoryFigure`: `figure()` public accessor with caching, `_build()` internal (DR-3); `RibbonTrail`: `wing_span_m` parameter, CCW quad winding, time-based α fade via `alpha_at()`, Vispy `MeshVisual` from `mesh()` (DR-8); `HudOverlay`: Vispy `Text` visuals in 2D overlay view, α-fading mode-change banner (DR-7, DR-8); `TrajectoryView`: `CameraMode` enum (FPV/TRAIL/GODS_EYE/LOCAL_TOP), Vispy `SceneCanvas` embedded in `QMainWindow`, `load_terrain()` via `pygltflib`, `set_terrain_saturation()`, headless `animate()` returns canvas (DR-7 through DR-13); `terrain_paths.py`: `get_terrain_data_root()`, `dataset_dir()`, `source_dir()`, `derived_dir()`, `las_terrain_dir()`, `gltf_path()`, `metadata_path()`; `vispy>=0.14`, `pyside6>=6.6`, `pygltflib`, `mcap-protobuf-support>=0.5` added to `pyproject.toml` | `test_log_reader.py` — 9 tests; `test_mode_events.py` — 6 tests; `test_time_history.py` — 6 tests; `test_ribbon_trail.py` — 9 tests; `test_terrain_paths.py` — 11 tests; `test_trajectory_view.py` — 14 tests; 55 tests total; full suite 150 pass |
-| SB-1 | **Aircraft and SimRunner — Python Bindings** — `KinematicState` (read-only class; 14 scalar attributes: `time_s`, `latitude_rad`, `longitude_rad`, `altitude_m`, `velocity_north/east/down_mps`, `heading_rad`, `pitch_rad`, `roll_rad`, `alpha_rad`, `beta_rad`, `airspeed_m_s`, `roll_rate_rad_s`); `Aircraft` Python class (wraps `PyAircraft` — owns `Propulsion` + `Aircraft`, tracks simulation time; `__init__(config, dt_s=0.02)` accepts JSON string or file path; `"propulsion"` section selects `PropulsionJet`, `PropulsionEDF`, or `PropulsionProp`+`MotorElectric`/`MotorPiston` — absent section uses zero-thrust stub; `reset()`, `step(cmd, dt_s, rho_kgm3)`, `state()`); `RunnerConfig(dt_s, duration_s, time_scale, mode)` — mode accepted as string (`"batch"`, `"realtime"`, `"scaled_realtime"`); `SimRunner` — `initialize(config, aircraft)`, `start()` / `stop()` (GIL released), `is_running()`, `elapsed_sim_time_s()`; `py::keep_alive<1,3>` on `initialize()` prevents Aircraft GC; `bind_aircraft.cpp`, `bind_runner.cpp`, `py_aircraft_types.hpp` added to `src/python/`; design authority: [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) — Aircraft and SimRunner section | `test_aircraft_bindings.py` — 12 tests; `test_runner_bindings.py` — 13 tests; 25 tests total; full Python suite 211 passed, 1 skipped |
-| SB-2 | **SimRunner Live Ring Buffer** — `Sample` struct (`time_s`, `value`); `ChannelSubscriber` (RAII, per-subscriber circular buffer, `channel_name()`, `drain()` returns batches and resets, `write()` called under registry mutex; silent overflow drops oldest; `~ChannelSubscriber()` calls `registry_->unsubscribe()`); `ChannelRegistry` (`register_channel(name, sample_rate_hz, depth_s)` idempotent; `subscribe(name)` → `shared_ptr<ChannelSubscriber>` empty buffer / no backfill (PP-F37); `publish(name, time_s, value)` fan-out to all subscribers (PP-F36); `available_channels()`; registry-mutex → subscriber-mutex lock ordering prevents deadlock); `SimRunner` extended with `ChannelRegistry registry_` member and `channel_registry()` accessor; `initialize()` registers 14 kinematic channels at `1/dt_s` Hz, 60 s depth; `runLoop()` publishes all 14 after each `Aircraft::step()`; channel names `kinematic/time_s` … `kinematic/roll_rate_rad_s`; pybind11: `Sample`, `ChannelSubscriber`, `ChannelRegistry` bound in `bind_ring_buffer.cpp`; `channel_registry()` added to `SimRunner` binding in `bind_runner.cpp` (re-opening `py::class_<SimRunner>` raises "already defined" — method added in the original binding instead); design authority: [`docs/architecture/ring_buffer.md`](../architecture/ring_buffer.md) | C++: `RingBuffer_test.cpp` — 19 tests (registration, subscribe, write/drain, overflow, late-join, multi-subscriber, RAII, thread-safety); Python: `test_ring_buffer_bindings.py` — 13 tests; full C++ suite 440 pass; full Python suite 224 passed, 1 skipped |
-| MI-1 | **Manual Input — Full Subsystem** — `ManualInput` abstract base; `KeyboardInput` (integrating keyboard adapter, configurable scancodes, action keys, injected key-state provider); `JoystickInput` (SDL2 adapter, axis pipeline: calibration/trim/normalization/dead-zone/scale, per-axis `raw_min`/`raw_max`/`raw_trim`, inversion, disconnect fallback, `captureTrim()`, `enumerateDevices()`); `ScriptedInput` (mutex-protected slot, `push(AircraftCommand)`); `SimRunner::setManualInput()` / `lastManualInputFrame()` with `SDL_WasInit` guard; `joystick_verify` tool (DEVICE/READY protocol, JSON lines + `--proto` output, `ManualInputFrameProto`/`AircraftCommandProto` added to `liteaerosim.proto`); MinGW runtime linked statically + SDL2.dll deployed alongside executable at build time; `manual_input_monitor.py` shared library + standalone Qt app (`InputMonitorConfig`, `InputMonitorFigure`, `InputMonitorWindow`, `_subprocess_env()`; persistent gauge artists — no `ax.clear()` on update); `manual_input_demo.ipynb` thin notebook using ipympl + `FuncAnimation`; `gx12_config.json` Radiomaster GX12 axis mapping; `liteaero_sim_py` pybind11 module (`AircraftCommand`, `ScriptedInput`, `JoystickInput.enumerate_devices()`); SDL2 and pybind11 added to `conanfile.txt` and dependency registry; `ipympl>=0.9` added to `pyproject.toml`; design authority: [`docs/architecture/manual_input.md`](../architecture/manual_input.md), [`docs/architecture/sim_runner.md`](../architecture/sim_runner.md), [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) | C++: `KeyboardInput_test.cpp` — 10 tests; `JoystickInput_test.cpp` — 15 tests; `ScriptedInput_test.cpp` — 4 tests; `SimRunner_test.cpp` — 4 new manual input tests; Python: `test_manual_input_bindings.py` — 7 tests; `test_manual_input_monitor.py` — 29 tests |
-| LS-1 | **Live Simulation Viewer** — `tools/live_sim.cpp` (C++ joystick launcher) implemented; loads `TerrainMesh` from `las_terrain_path` in `terrain_config.json` and calls `aircraft.setTerrain()`; `build_terrain.py` writes `las_terrain_path` to `terrain_config.json` (TDD — 3 new tests); `V_Terrain` renamed to `Terrain` across liteaero-flight and liteaero-sim (`Terrain.hpp` created; `V_Terrain.hpp` replaced with `#error` tombstone; all headers, sources, tests, and CMakeLists comments updated); design authority: [`docs/architecture/live_sim_view.md`](../architecture/live_sim_view.md) | Python: `test_build_terrain.py` — 3 new tests for `las_terrain_path` (field presence, dataset name in path, absolute path); all prior LS-1 tests unchanged |
-| GP-1 | **Godot Plugin GDExtension** — Steps 1–8: `visualization` section added to three aircraft config fixtures + `aircraft_config_v1.md` schema doc; `build_terrain.py` writes `aircraft_mesh_path` to `terrain_config.json` (TDD — tests written first); `TerrainLoader.gd` rewritten with `_load_aircraft_mesh()`, `_find_vehicle()`, dual-mode `_find_simulation_receiver()` (native GDExtension + GDScript placeholder) and `_set_world_origin()`; static `AircraftMesh` node removed from `World.tscn`; `register_types.hpp`, `register_types.cpp` (WSAStartup/WSACleanup + ClassDB registration), `SimulationReceiver.hpp`, `SimulationReceiver.cpp` (non-blocking UDP socket, `SimulationFrameProto::ParseFromArray`, ENU→Godot position + NED→Godot quaternion); `liteaero_sim.gdextension` manifest; `godot/assets/aircraft_lp.glb` copied; build system (`LITEAERO_SIM_BUILD_GODOT_PLUGIN=ON`) already in place; design authority: [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md) | Manual integration test checklist (see GP-1 §Tests); Python: `test_build_terrain.py` — 2 new integration tests + 4 new unit tests for `_build_terrain_config()` |
+| SB-1 | **Aircraft and SimRunner — Python Bindings** — `KinematicState` (read-only class; 14 scalar attributes: `time_s`, `latitude_rad`, `longitude_rad`, `altitude_m`, `velocity_north/east/down_mps`, `heading_rad`, `pitch_rad`, `roll_rad`, `alpha_rad`, `beta_rad`, `airspeed_m_s`, `roll_rate_rad_s`); `Aircraft` Python class (wraps `PyAircraft` — owns `Propulsion` + `Aircraft`, tracks simulation time; `__init__(config, dt_s=0.02)` accepts JSON string or file path; `"propulsion"` section selects `PropulsionJet`, `PropulsionEDF`, or `PropulsionProp`+`MotorElectric`/`MotorPiston` — absent section uses zero-thrust stub; `reset()`, `step(cmd, dt_s, rho_kgm3)`, `state()`); `RunnerConfig(dt_s, duration_s, time_scale, mode)` — mode accepted as string (`"batch"`, `"realtime"`, `"scaled_realtime"`); `SimRunner` — `initialize(config, aircraft)`, `start()` / `stop()` (GIL released), `is_running()`, `elapsed_sim_time_s()`; `py::keep_alive<1,3>` on `initialize()` prevents Aircraft GC; `bind_aircraft.cpp`, `bind_runner.cpp`, `py_aircraft_types.hpp` added to `src/python/`; design authority: [`docs/design/python_bindings.md`](../design/python_bindings.md) — Aircraft and SimRunner section | `test_aircraft_bindings.py` — 12 tests; `test_runner_bindings.py` — 13 tests; 25 tests total; full Python suite 211 passed, 1 skipped |
+| SB-2 | **SimRunner Live Ring Buffer** — `Sample` struct (`time_s`, `value`); `ChannelSubscriber` (RAII, per-subscriber circular buffer, `channel_name()`, `drain()` returns batches and resets, `write()` called under registry mutex; silent overflow drops oldest; `~ChannelSubscriber()` calls `registry_->unsubscribe()`); `ChannelRegistry` (`register_channel(name, sample_rate_hz, depth_s)` idempotent; `subscribe(name)` → `shared_ptr<ChannelSubscriber>` empty buffer / no backfill (PP-F37); `publish(name, time_s, value)` fan-out to all subscribers (PP-F36); `available_channels()`; registry-mutex → subscriber-mutex lock ordering prevents deadlock); `SimRunner` extended with `ChannelRegistry registry_` member and `channel_registry()` accessor; `initialize()` registers 14 kinematic channels at `1/dt_s` Hz, 60 s depth; `runLoop()` publishes all 14 after each `Aircraft::step()`; channel names `kinematic/time_s` … `kinematic/roll_rate_rad_s`; pybind11: `Sample`, `ChannelSubscriber`, `ChannelRegistry` bound in `bind_ring_buffer.cpp`; `channel_registry()` added to `SimRunner` binding in `bind_runner.cpp` (re-opening `py::class_<SimRunner>` raises "already defined" — method added in the original binding instead); design authority: [`docs/design/ring_buffer.md`](../design/ring_buffer.md) | C++: `RingBuffer_test.cpp` — 19 tests (registration, subscribe, write/drain, overflow, late-join, multi-subscriber, RAII, thread-safety); Python: `test_ring_buffer_bindings.py` — 13 tests; full C++ suite 440 pass; full Python suite 224 passed, 1 skipped |
+| MI-1 | **Manual Input — Full Subsystem** — `ManualInput` abstract base; `KeyboardInput` (integrating keyboard adapter, configurable scancodes, action keys, injected key-state provider); `JoystickInput` (SDL2 adapter, axis pipeline: calibration/trim/normalization/dead-zone/scale, per-axis `raw_min`/`raw_max`/`raw_trim`, inversion, disconnect fallback, `captureTrim()`, `enumerateDevices()`); `ScriptedInput` (mutex-protected slot, `push(AircraftCommand)`); `SimRunner::setManualInput()` / `lastManualInputFrame()` with `SDL_WasInit` guard; `joystick_verify` tool (DEVICE/READY protocol, JSON lines + `--proto` output, `ManualInputFrameProto`/`AircraftCommandProto` added to `liteaerosim.proto`); MinGW runtime linked statically + SDL2.dll deployed alongside executable at build time; `manual_input_monitor.py` shared library + standalone Qt app (`InputMonitorConfig`, `InputMonitorFigure`, `InputMonitorWindow`, `_subprocess_env()`; persistent gauge artists — no `ax.clear()` on update); `manual_input_demo.ipynb` thin notebook using ipympl + `FuncAnimation`; `gx12_config.json` Radiomaster GX12 axis mapping; `liteaero_sim_py` pybind11 module (`AircraftCommand`, `ScriptedInput`, `JoystickInput.enumerate_devices()`); SDL2 and pybind11 added to `conanfile.txt` and dependency registry; `ipympl>=0.9` added to `pyproject.toml`; design authority: [`docs/design/manual_input.md`](../design/manual_input.md), [`docs/design/sim_runner.md`](../design/sim_runner.md), [`docs/design/python_bindings.md`](../design/python_bindings.md) | C++: `KeyboardInput_test.cpp` — 10 tests; `JoystickInput_test.cpp` — 15 tests; `ScriptedInput_test.cpp` — 4 tests; `SimRunner_test.cpp` — 4 new manual input tests; Python: `test_manual_input_bindings.py` — 7 tests; `test_manual_input_monitor.py` — 29 tests |
+| LS-1 | **Live Simulation Viewer** — `tools/live_sim.cpp` (C++ joystick launcher) implemented; loads `TerrainMesh` from `las_terrain_path` in `terrain_config.json` and calls `aircraft.setTerrain()`; `build_terrain.py` writes `las_terrain_path` to `terrain_config.json` (TDD — 3 new tests); `V_Terrain` renamed to `Terrain` across liteaero-flight and liteaero-sim (`Terrain.hpp` created; `V_Terrain.hpp` replaced with `#error` tombstone; all headers, sources, tests, and CMakeLists comments updated); design authority: [`docs/design/live_sim_view.md`](../design/live_sim_view.md) | Python: `test_build_terrain.py` — 3 new tests for `las_terrain_path` (field presence, dataset name in path, absolute path); all prior LS-1 tests unchanged |
+| GP-1 | **Godot Plugin GDExtension** — Steps 1–8: `visualization` section added to three aircraft config fixtures + `aircraft_config_v1.md` schema doc; `build_terrain.py` writes `aircraft_mesh_path` to `terrain_config.json` (TDD — tests written first); `TerrainLoader.gd` rewritten with `_load_aircraft_mesh()`, `_find_vehicle()`, dual-mode `_find_simulation_receiver()` (native GDExtension + GDScript placeholder) and `_set_world_origin()`; static `AircraftMesh` node removed from `World.tscn`; `register_types.hpp`, `register_types.cpp` (WSAStartup/WSACleanup + ClassDB registration), `SimulationReceiver.hpp`, `SimulationReceiver.cpp` (non-blocking UDP socket, `SimulationFrameProto::ParseFromArray`, ENU→Godot position + NED→Godot quaternion); `liteaero_sim.gdextension` manifest; `godot/assets/aircraft_lp.glb` copied; build system (`LITEAERO_SIM_BUILD_GODOT_PLUGIN=ON`) already in place; design authority: [`docs/design/godot_plugin.md`](../design/godot_plugin.md) | Manual integration test checklist (see GP-1 §Tests); Python: `test_build_terrain.py` — 2 new integration tests + 4 new unit tests for `_build_terrain_config()` |
 
 ---
 
@@ -169,14 +169,14 @@ the vehicle actor transform each render frame. `JoystickInput` or `ScriptedInput
 commands at the FBW interface via Python `SimSession`.
 
 The renderer is Godot 4 (MIT license) — the architectural decision made during terrain
-mesh implementation; see [`docs/architecture/terrain.md §Game Engine Integration`](../architecture/terrain.md)
+mesh implementation; see [`docs/design/terrain.md §Game Engine Integration`](../design/terrain.md)
 and [`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md)
 decision row 26.
 
 ### Deliverables — Live Simulation Viewer Design Document
 
-~~Produce `docs/architecture/live_sim_view.md` — delivered; see
-[`docs/architecture/live_sim_view.md`](../architecture/live_sim_view.md).~~
+~~Produce `docs/design/live_sim_view.md` — delivered; see
+[`docs/design/live_sim_view.md`](../design/live_sim_view.md).~~
 
 **Open questions in the design document requiring resolution before implementation:**
 
@@ -236,7 +236,7 @@ scripted input wiring; CLI argument parsing.
 (`godot/terrain/terrain.glb` and `terrain_config.json` in place). `live_sim.exe`
 built.
 
-**Design authority:** [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md)
+**Design authority:** [`docs/design/godot_plugin.md`](../design/godot_plugin.md)
 
 The GDScript placeholder (`SimulationReceiver.gd`) is not used for the first live
 simulation test. The C++ GDExtension is implemented directly. The GDScript file
@@ -282,7 +282,7 @@ the mesh at runtime.
 
 #### ~~Step 5 — GDExtension C++ source files~~ ✅
 
-Per [`docs/architecture/godot_plugin.md`](../architecture/godot_plugin.md):
+Per [`docs/design/godot_plugin.md`](../design/godot_plugin.md):
 
 - `godot/addons/liteaero_sim/src/register_types.hpp`
 - `godot/addons/liteaero_sim/src/register_types.cpp` — `liteaero_sim_init` entry
@@ -361,7 +361,7 @@ must be complete before any roadmap item that introduces a Python-side live tele
 consumer (PP-3, PP-4, or any notebook that reads ring buffer position data). It is not
 required for the Godot 3D rendering path.
 
-**Design authority:** [`docs/architecture/ring_buffer.md`](../architecture/ring_buffer.md)
+**Design authority:** [`docs/design/ring_buffer.md`](../design/ring_buffer.md)
 (to be revised — the revised document is the primary deliverable of this item).
 
 The existing SB-2 ring buffer stores a scalar `float` value per sample (`Sample::value`).
@@ -375,7 +375,7 @@ these problems by choosing a type policy and specifying the migration path from 
 
 ### Deliverables — Ring Buffer Redesign
 
-Revised [`docs/architecture/ring_buffer.md`](../architecture/ring_buffer.md) covering:
+Revised [`docs/design/ring_buffer.md`](../design/ring_buffer.md) covering:
 
 - **Type policy decision:** choose between (a) upgrading `Sample::value` from `float` to
   `double` (simple, fixes precision, still scalar); (b) typed `Channel<T>` with type
@@ -404,7 +404,7 @@ Godot scene that consumes the terrain GLB). No open questions block implementati
 OQ-TB-1, OQ-TB-2, OQ-TB-3, and OQ-TB-5 are all resolved in the design authority
 document. OQ-TB-4 (triangulation mesh quality) is open but does not block this item.
 
-**Design authority:** [`docs/architecture/terrain_build.md`](../architecture/terrain_build.md).
+**Design authority:** [`docs/design/terrain_build.md`](../design/terrain_build.md).
 
 A single-function automation layer over the existing terrain ingestion tools
 (`python/tools/terrain/`). Given an aircraft configuration JSON path, it derives all
@@ -459,7 +459,7 @@ The four sensors whose only C++ dependencies are already available:
 
 For each sensor in the table above:
 
-- Design document in `docs/architecture/` with all open questions resolved.
+- Design document in `docs/design/` with all open questions resolved.
 - C++ header `include/sensor/Sensor<Name>.hpp` and implementation `src/sensor/Sensor<Name>.cpp`.
 - JSON + proto serialization and round-trip tests.
 - Wired into `Aircraft::step()` and registered in the `ChannelRegistry`.
@@ -478,7 +478,7 @@ trajectory), and serialization (JSON + proto round-trip).
 (sensor models subset — registry must reflect complete channel set including sensor
 channels).
 
-**Design authority:** `docs/architecture/channel_registry.md` (to be produced — the
+**Design authority:** `docs/design/channel_registry.md` (to be produced — the
 design document is the sole deliverable of this item).
 
 A formal specification of all `LogSource` registrations in the simulation loop. Required
@@ -488,7 +488,7 @@ the logger vocabulary (post_processing.md §DR-9).
 
 ### Deliverables — Logged Channel Registry
 
-Design document (`docs/architecture/channel_registry.md`) specifying:
+Design document (`docs/design/channel_registry.md`) specifying:
 
 - All `LogSource` instances registered by the simulation loop (e.g., `"aircraft"`,
   `"environment"`, `"landing_gear"`, `"sensors"`).
@@ -508,7 +508,7 @@ None — design-only item. Implementation of `LogSource` registrations is part o
 
 **Blocking dependencies:** None. This is a standalone design decision.
 
-**Design authority:** `docs/architecture/flight_log_format.md` (to be produced — the
+**Design authority:** `docs/design/flight_log_format.md` (to be produced — the
 design document is the sole deliverable of this item).
 
 A design decision document defining how real aircraft flight logs are loaded by
@@ -516,7 +516,7 @@ A design decision document defining how real aircraft flight logs are loaded by
 
 ### Deliverables — Real Flight Log Format
 
-Design document (`docs/architecture/flight_log_format.md`) covering:
+Design document (`docs/design/flight_log_format.md`) covering:
 
 - What log format(s) real aircraft produce (e.g., ArduPilot DataFlash, MAVLink ULOG,
   custom CSV, or a configurable adapter).
@@ -539,9 +539,9 @@ None — design-only item. Implementation of `DataOverlay` format adapter is par
 before item 5 (`Aircraft6DOF`) begins, and before Cfg-1 can be scoped.
 
 **Design authority:**
-- [`docs/architecture/aero_coefficient_model.md`](../architecture/aero_coefficient_model.md) — coefficient model format, sign conventions, propulsion integration
-- [`docs/architecture/aero_coeff_estimator.md`](../architecture/aero_coeff_estimator.md) — estimation methods and `AeroCoeffEstimator` extension
-- [`docs/architecture/propulsion_coeff_estimator.md`](../architecture/propulsion_coeff_estimator.md) — propulsion parameter estimation and propulsion-aero coupling
+- [`docs/design/aero_coefficient_model.md`](../design/aero_coefficient_model.md) — coefficient model format, sign conventions, propulsion integration
+- [`docs/design/aero_coeff_estimator.md`](../design/aero_coeff_estimator.md) — estimation methods and `AeroCoeffEstimator` extension
+- [`docs/design/propulsion_coeff_estimator.md`](../design/propulsion_coeff_estimator.md) — propulsion parameter estimation and propulsion-aero coupling
 
 A design study that resolves how aerodynamic and propulsion coefficients are specified
 for `Aircraft6DOF`. Defines `BodyAxisCoeffModel` format, sign conventions, and parameter
@@ -590,7 +590,7 @@ item. Architecture placeholders are defined in
 
 ### Deliverables — Aircraft6DOF
 
-- Design authority document (`docs/architecture/aircraft_6dof.md`) with all open
+- Design authority document (`docs/design/aircraft_6dof.md`) with all open
   questions resolved.
 - `AeroModel` abstract interface header and implementation skeleton.
 - `BodyAxisCoeffModel` implementing `AeroModel`; JSON + proto serialization.
@@ -613,7 +613,7 @@ substitution test).
 Format), and LiteAero Flight command channel schema (cross-repo dependency — track in
 LiteAero Flight roadmap).
 
-**Design authority:** [`docs/architecture/post_processing.md`](../architecture/post_processing.md)
+**Design authority:** [`docs/design/post_processing.md`](../design/post_processing.md)
 §Analysis Modules.
 
 A second design pass on the analysis modules in `post_processing.md` to replace
@@ -654,8 +654,8 @@ visualization tools exist for animation). PP-2 (rework) is delivered. No open qu
 block this item.
 
 **Design authority:**
-- [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md) §Steps G–H and §Scenario Tests
-- [`docs/architecture/python_bindings.md`](../architecture/python_bindings.md) §Landing Gear
+- [`docs/design/landing_gear.md`](../design/landing_gear.md) §Steps G–H and §Scenario Tests
+- [`docs/design/python_bindings.md`](../design/python_bindings.md) §Landing Gear
 
 Implements Steps G–H: expose `LandingGear`, `WheelUnit`, `StrutState`, and `ContactForces`
 to Python via pybind11, rewrite `touchdown_animation.py` to use the C++ bindings, and
@@ -693,7 +693,7 @@ Each element requires its own design document before implementation can begin.
 
 **Design authority:** No design documents yet for most elements. `VisualizationLink`
 transport and axis convention are decided — see
-[`docs/architecture/terrain.md`](../architecture/terrain.md) §Game Engine Integration
+[`docs/design/terrain.md`](../design/terrain.md) §Game Engine Integration
 and [`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md)
 §Game engine for real-time visualization.
 
@@ -804,11 +804,11 @@ liteaero-sim.
 ## Log-1. Logging Subsystem — Architecture Design
 
 **Blocking dependencies:** None. Resolves OQ-SR-3 in
-[`docs/architecture/sim_runner.md`](../architecture/sim_runner.md). Must be complete
+[`docs/design/sim_runner.md`](../design/sim_runner.md). Must be complete
 before item 2 (Logged Channel Registry) can finalize channel names, and before any
 `Logger`-wired `SimRunner` can be implemented.
 
-**Design authority:** `docs/architecture/logging_subsystem.md` (to be produced — the
+**Design authority:** `docs/design/logging_subsystem.md` (to be produced — the
 design document is the sole deliverable of this item).
 
 A formal specification of how all per-tick outputs from `SimRunner` are delivered to log
@@ -818,7 +818,7 @@ a single output type are prohibited by OQ-SR-3.
 
 ### Deliverables — Logging Subsystem Architecture
 
-Design document (`docs/architecture/logging_subsystem.md`) specifying:
+Design document (`docs/design/logging_subsystem.md`) specifying:
 
 - Delivery mechanism: push vs. pull; callback registration vs. ring buffer drain;
   relationship to SB-2 (ring buffer) and the existing `Logger` / `LogSource`
@@ -846,7 +846,7 @@ None — design-only item. Implementation is a separate follow-on item.
 subsystem design — channel names must be finalized before panel definitions can reference
 them).
 
-**Design authority:** [`docs/architecture/post_processing.md`](../architecture/post_processing.md)
+**Design authority:** [`docs/design/post_processing.md`](../design/post_processing.md)
 §`LiveTimeHistoryFigure` and §PP-F19–PP-F22.
 
 A Panel + Plotly rolling time-history display that polls the ring buffer (SB-2) and
@@ -873,7 +873,7 @@ panel layout consistency with `TimeHistoryFigure`.
 **Blocking dependencies:** Item 2 (Logged Channel Registry — concrete mode channel name
 required); PP-2 (delivered).
 
-**Design authority:** [`docs/architecture/post_processing.md`](../architecture/post_processing.md)
+**Design authority:** [`docs/design/post_processing.md`](../design/post_processing.md)
 §Mode segment coloring.
 
 Extend `RibbonTrail` and `TrajectoryView` to color each trajectory segment by the flight
@@ -898,7 +898,7 @@ entries, palette consistency with `tab10`.
 **Blocking dependencies:** LG-1 (delivered). Blocked on OQ-LG-3 — the open question
 must be resolved and documented in `landing_gear.md` before implementation begins.
 
-**Design authority:** [`docs/architecture/landing_gear.md`](../architecture/landing_gear.md)
+**Design authority:** [`docs/design/landing_gear.md`](../design/landing_gear.md)
 §OQ-LG-3.
 
 Resolve and implement the runway geometry extension deferred at OQ-LG-3: a planar runway
@@ -954,7 +954,7 @@ zero results.
 **Blocking dependencies:** Item 4 (Aerodynamic Coefficient Design Study) must be complete
 before this item can be scoped.
 
-**Design authority:** [`docs/architecture/aero_coeff_estimator.md`](../architecture/aero_coeff_estimator.md)
+**Design authority:** [`docs/design/aero_coeff_estimator.md`](../design/aero_coeff_estimator.md)
 §ParametricAircraftConfig.
 
 Design and implement `ParametricAircraftConfig` (Python dataclass) and `VspGeometryBuilder`

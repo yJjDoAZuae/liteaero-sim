@@ -157,7 +157,7 @@ Proto message definitions live in `proto/liteaerosim.proto`. Generated types mus
 - Serialization must be round-trip lossless (serialize then deserialize must yield identical state) for both formats.
 - A `schema_version` field (integer) is included in all serialized output. Deserialize throws `std::runtime_error` on version mismatch.
 - Serialization interfaces are covered by dedicated round-trip unit tests for both formats.
-- `DynamicBlock` subclasses use the NVI pattern (`onSerialize`/`onDeserialize`) for the JSON format; the base class injects `schema_version` and `type`. See [docs/architecture/dynamic_block.md](../architecture/dynamic_block.md) for details.
+- `DynamicElement` subclasses use the NVI pattern (`onSerialize`/`onDeserialize`) for the JSON format; the base class injects `schema_version` and `type`. See [docs/design/dynamic_element.md](../design/dynamic_element.md) for details.
 - Non-`DynamicBlock` classes (e.g., `KinematicState`, `LiftCurveModel`, `LoadFactorAllocator`) add the four methods as plain public member functions. Stateless classes use a static factory for deserialization: `static T deserializeJson(const nlohmann::json&)`.
 
 ---

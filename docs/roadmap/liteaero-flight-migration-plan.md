@@ -129,7 +129,7 @@ document it.
 | No forwarding aliases or backward-compat shims | Project is in initial development; no-backward-compat policy applies |
 | `KinematicStateSnapshot` requires a design step | The current `KinematicState` is a rich class with computed properties and serialization; converting it to a plain value struct requires deciding which fields to store vs. derive, and how the control subsystem accesses derived quantities |
 | Terrain type split requires a design step | `TerrainTile` currently bundles mesh data with serialization and file I/O; only the data elements migrate to `liteaero::terrain`; the serialization machinery stays in `liteaero::simulation`; a class-level split is needed before file moves begin |
-| Shared interface target name: `liteaero::nav` | Resolved in Step 6. `AircraftCommand`, `KinematicStateSnapshot`, `GeodeticPosition`, `NavigationState`, and sensor measurement structs all live in `namespace liteaero::nav` / CMake target `liteaero::nav`. The `liteaero_nav` stub target in `src/CMakeLists.txt` is promoted from INTERFACE to STATIC in Step 7. See [liteaero-flight/docs/architecture/kinematic_state_snapshot.md](../../liteaero-flight/docs/architecture/kinematic_state_snapshot.md) for rationale. |
+| Shared interface target name: `liteaero::nav` | Resolved in Step 6. `AircraftCommand`, `KinematicStateSnapshot`, `GeodeticPosition`, `NavigationState`, and sensor measurement structs all live in `namespace liteaero::nav` / CMake target `liteaero::nav`. The `liteaero_nav` stub target in `src/CMakeLists.txt` is promoted from INTERFACE to STATIC in Step 7. See [liteaero-flight/docs/design/kinematic_state_snapshot.md](../../liteaero-flight/docs/design/kinematic_state_snapshot.md) for rationale. |
 | Tests migrate alongside the code | The liteaero-flight repo includes its own test suite; tests are moved from LiteAero Sim in Phase 1 and deleted from LiteAero Sim at the sim-side cleanup of each step |
 | `ControlLoop` and `Control*` elements stay in LiteAero Sim | `ControlAltitude`, `ControlHeading`, `ControlHeadingRate`, `ControlLoadFactor`, `ControlRoll`, `ControlVerticalSpeed`, and `ControlLoop` are simulation-internal; they will use `liteaero::control` infrastructure after migration but remain in `liteaero::simulation` |
 | Estimation stubs (`NavigationFilter`, `WindEstimator`, `FlowAnglesEstimator`) are created in liteaero-flight | Create them in `liteaero-flight` at Step 9, not in LiteAero Sim; any LiteAero Sim stub files for these must be removed at Step 9 |
@@ -327,7 +327,7 @@ liteaero-flight/
     guidelines/           # general.md, cpp.md (Conan-adapted), python.md
     interfaces/
       icds.md             # stub — ICD entries deferred to Step 11
-    architecture/
+    design/
       README.md
     algorithms/
       README.md
@@ -599,7 +599,7 @@ Both halves verified:
 
 ### Step 6 — `KinematicStateSnapshot` Design Document
 
-**Deliverable:** `liteaero-flight/docs/architecture/kinematic_state_snapshot.md`
+**Deliverable:** `liteaero-flight/docs/design/kinematic_state_snapshot.md`
 
 All design questions resolved. See that document for full rationale.
 
@@ -615,7 +615,7 @@ All design questions resolved. See that document for full rationale.
 
 ### Step 7 — `liteaero::nav`: `GeodeticPosition`, `WGS84`, `KinematicStateSnapshot`, `KinematicStateUtil`
 
-Implement the architecture defined in `liteaero-flight/docs/architecture/kinematic_state_snapshot.md`.
+Implement the architecture defined in `liteaero-flight/docs/design/kinematic_state_snapshot.md`.
 The liteaero-flight half creates the value types and utility namespaces. The liteaero-sim
 half redesigns `KinematicState` and `WGS84_Datum` to use them via composition, closing the
 duplication window for all navigation math.

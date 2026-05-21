@@ -43,15 +43,37 @@ Open questions within design documents are managed with the [`/oq`](../../.claud
 ## Migration note
 
 Prior to 2026-05-21, subsystem design authority documents were stored in
-`docs/architecture/`. Files in that folder that describe a specific subsystem's class
-hierarchy, models, interface, and tests are design documents in this taxonomy, not
-architecture documents. Their current location in `docs/architecture/` is a nonconformance
-to be resolved in a dedicated migration task — they are fully valid design authority
-documents and remain the authoritative source until moved.
-
-The `/design check` skill warns when it finds a design document in `docs/architecture/`
-rather than here.
+`docs/architecture/`. Migration to `docs/design/` was completed on 2026-05-21.
 
 ## Current documents
 
-*(No documents yet — migration from `docs/architecture/` is a pending task.)*
+| Document | Subsystem |
+| --- | --- |
+| [`dynamic_element.md`](dynamic_element.md) | `DynamicElement` / `SisoElement` lifecycle contract; Filter and Propulsion hierarchies |
+| [`aircraft.md`](aircraft.md) | `Aircraft` — integration loop, use cases, serialization |
+| [`landing_gear.md`](landing_gear.md) | `LandingGear` — contact forces, wheel dynamics, serialization |
+| [`propulsion.md`](propulsion.md) | `V_Propulsion`, `PropulsionJet`, `PropulsionProp`, `PropulsionEDF` |
+| [`aero_coeff_estimator.md`](aero_coeff_estimator.md) | `AeroCoeffEstimator`, `AeroPerformance` |
+| [`aero_coefficient_model.md`](aero_coefficient_model.md) | Aerodynamic coefficient model |
+| [`sensor.md`](sensor.md) | Sensor base interface and hierarchy |
+| [`sensor_air_data.md`](sensor_air_data.md) | `SensorAirData` |
+| [`sensor_ins_sim.md`](sensor_ins_sim.md) | `SensorINS` (design doc; unreviewed) |
+| [`sensor_laser_alt.md`](sensor_laser_alt.md) | `SensorRadAlt` (design doc; unreviewed) |
+| [`sensor_gnss.md`](sensor_gnss.md) | `SensorGnss` |
+| [`sensor_mag.md`](sensor_mag.md) | `SensorMag` |
+| [`sim_runner.md`](sim_runner.md) | `SimRunner`, `RunnerConfig`, `ExecutionMode` |
+| [`terrain.md`](terrain.md) | `V_Terrain`, `TerrainMesh`, height query interface |
+| [`terrain_build.md`](terrain_build.md) | Python terrain ingestion pipeline |
+| [`godot_plugin.md`](godot_plugin.md) | GDExtension C++ plugin — `SimulationReceiver`, build system |
+| [`live_sim_view.md`](live_sim_view.md) | Live simulation viewer — UDP broadcast path, SimSession, Godot scene |
+| [`python_bindings.md`](python_bindings.md) | pybind11 module — binding strategy, exposed classes |
+| [`post_processing.md`](post_processing.md) | Python post-processing tools — `FlightLogReader`, `TimeHistoryFigure`, etc. |
+| [`ring_buffer.md`](ring_buffer.md) | Ring buffer — `ChannelRegistry`, `ChannelSubscriber` |
+| [`logger.md`](logger.md) | Logger subsystem |
+| [`environment.md`](environment.md) | `Atmosphere`, `Wind`, `Turbulence`, `Gust` |
+| [`manual_input.md`](manual_input.md) | `ManualInput`, `JoystickInput`, `KeyboardInput` |
+| [`navigation_filter.md`](navigation_filter.md) | Navigation filter |
+| [`flow_angles_estimator.md`](flow_angles_estimator.md) | `FlowAnglesEstimator` |
+| [`wind_estimator.md`](wind_estimator.md) | `WindEstimator` |
+| [`antiwindup.md`](antiwindup.md) | Anti-windup strategy |
+| [`propulsion_coeff_estimator.md`](propulsion_coeff_estimator.md) | `PropulsionCoeffEstimator` |

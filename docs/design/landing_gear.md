@@ -1548,6 +1548,6 @@ to `python/notebooks/landing_gear/output/`.
 | MIL-HDBK-1797A (1997). *Flying Qualities of Piloted Vehicles*. | Ground handling requirements, maximum crosswind, rollout |
 | [`docs/architecture/aircraft.md`](aircraft.md) | `Aircraft` step loop, `LoadFactorAllocator` disturbance interface |
 | [`docs/architecture/terrain.md`](terrain.md) | `V_Terrain` interface, `TerrainMesh`, height query API |
-| [`docs/architecture/system/future/decisions.md`](system/future/decisions.md) | §LandingGear integration model and fidelity target |
-| [`docs/architecture/system/future/element_registry.md`](system/future/element_registry.md) | `LandingGear` and `ContactForces` element entries |
+| [`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) | §LandingGear integration model and fidelity target |
+| [`docs/architecture/system/future/element_registry.md`](../architecture/system/future/element_registry.md) | `LandingGear` and `ContactForces` element entries |
 | [`docs/roadmap/aircraft.md`](../roadmap/aircraft.md) | Items 1 (design) and 8 (implementation) |

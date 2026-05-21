@@ -772,7 +772,7 @@ the external binary is available. They must never be mandatory for a CI build to
 
 ## Open Questions
 
-| ID | Question | Blocking | Resolution path |
+| ID | Summary | Blocking | Recommendation |
 | --- | --- | --- | --- |
 | OQ-E1 | **`ControlSurfaceGeometry` interface.** Where should this struct live — in `include/aerodynamics/AircraftGeometry.hpp` alongside `AircraftGeometry`, or in a separate header? Should it be an optional member of `AircraftGeometry` (with defaults representing no control surfaces)? | `AeroCoeffEstimator` extension | Decide before writing any control-effectiveness estimation code. Preferred: separate struct, passed explicitly to `estimateBodyAxis()`. |
 | OQ-E2 | **Flying-wing $C_{m_\alpha}$ without a horizontal tail.** The DATCOM tail-volume formula for $C_{m_\alpha}$ is undefined for a tailless aircraft. What formula is used for Case A? | Design study Case A | Apply the reflexed-trailing-edge or center-of-pressure method from Raymer §16.3; document explicitly. |

@@ -1072,19 +1072,6 @@ constraint modifications applied between `stepPV` and `commitAttitude`.
 
 ---
 
-## Implementation Notes
-
-- **Primary attitude quaternion:** `snapshot_.q_nw` (Wind-to-NED, `Eigen::Quaternionf`) — stored in `KinematicStateSnapshot`.
-- **`q_nb` is NOT stored.** It is derived on demand from `q_nw`, `alpha_rad`, and `beta_rad`.
-- **Body rates** `[p, q, r]` are derived each step from Wind-frame rates, α, β, α̇, β̇ — they are not integrated.
-- **NED velocity:** `snapshot_.velocity_ned_mps`
-- **NED acceleration:** `snapshot_.acceleration_ned_mps2`
-- **Position:** `snapshot_.position` (WGS84 lat/lon/alt via `liteaero::nav::GeodeticPosition`)
-- **Aerodynamic angles** α, β are inputs to `stepPV()` — computed by the aerodynamics subsystem each step.
-- **`v_prev`** is captured by `stepPV()` at step start and held until `commitAttitude()` consumes it. It is transient within a single step and is not persisted in `KinematicStateSnapshot`.
-
----
-
 ## Part 2 — 6DOF Model (Deferred)
 
 Both models are planned for this simulator. The trim aero model (Part 1) is the current

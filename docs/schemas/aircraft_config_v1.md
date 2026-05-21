@@ -68,7 +68,7 @@ natural frequencies must satisfy `wn * inner_dt < π` (Nyquist); `initialize()` 
 | `roll_rate_wn_rad_s` | float | rad/s | > 0; `wn·inner_dt < π` | Roll rate command response natural frequency. |
 | `roll_rate_zeta_nd` | float | — | > 0 | Roll rate command response damping ratio. |
 
-See [docs/architecture/aircraft.md §Command Processing Architecture](../architecture/aircraft.md#command-processing-architecture)
+See [docs/design/aircraft.md §Command Processing Architecture](../design/aircraft.md#command-processing-architecture)
 for the filter design, substep mechanics, analytical derivative sourcing, and Nyquist
 constraints.
 
@@ -145,7 +145,7 @@ The `visualization` section is optional. If absent, `build_terrain.py` uses the 
 
 To swap the aircraft mesh for a specific test case without rebuilding terrain, edit
 `godot/terrain/terrain_config.json` directly and change `aircraft_mesh_path`. See
-[`docs/architecture/godot_plugin.md §Aircraft Config Visualization Section`](../architecture/godot_plugin.md#aircraft-config-visualization-section).
+[`docs/design/godot_plugin.md §Aircraft Config Visualization Section`](../design/godot_plugin.md#aircraft-config-visualization-section).
 
 ---
 

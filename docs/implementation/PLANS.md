@@ -77,8 +77,8 @@ with `/impl new` before beginning implementation.
 - **Item 7 — LandingGear Python Bindings and Scenario Tests** — `bind_landing_gear.cpp`;
   `LandingGear`, `WheelUnit`, `StrutState`, `ContactForces` pybind11 bindings; rewrite
   `touchdown_animation.py`; four pytest scenario tests. Design authority:
-  [`landing_gear.md §Steps G–H`](../architecture/landing_gear.md),
-  [`python_bindings.md §Landing Gear`](../architecture/python_bindings.md). No blocking
+  [`landing_gear.md §Steps G–H`](../design/landing_gear.md),
+  [`python_bindings.md §Landing Gear`](../design/python_bindings.md). No blocking
   OQs.
 - **Arch-1 — `liteaero::` Namespace Migration** — single-step migration of all LiteAero
   Sim code to `liteaero::simulation`; coordinated with liteaero-flight repo split
@@ -93,22 +93,22 @@ resolved) before an implementation plan can be created:
 
 - **SB-3 — Ring Buffer Redesign** — type policy decision (scalar float→double vs.
   typed `Channel<T>`) must be documented in revised
-  [`ring_buffer.md`](../architecture/ring_buffer.md) before any implementation work.
+  [`ring_buffer.md`](../design/ring_buffer.md) before any implementation work.
 - **Item 1 — Sensor Models (implementable subset)** — `SensorMag`, `SensorGnss`,
   `SensorLaserAlt`, `SensorRadAlt` each require a design document before implementation.
 - **Items 2, 3, 4, 5, 6** — design documents required; see roadmap for blocking chain.
 - **Log-1 — Logging Subsystem Architecture** — design document
-  (`docs/architecture/logging_subsystem.md`) must be produced before implementation.
+  (`docs/design/logging_subsystem.md`) must be produced before implementation.
 - **TB-1 — Terrain Build Tool** — blocked on OQ-TB-1 and OQ-TB-2 in
-  [`terrain_build.md`](../architecture/terrain_build.md).
+  [`terrain_build.md`](../design/terrain_build.md).
 - **LG-2 — Runway Geometry Extension** — blocked on OQ-LG-3 in
-  [`landing_gear.md`](../architecture/landing_gear.md).
+  [`landing_gear.md`](../design/landing_gear.md).
 
 The following sensor headers are empty stubs (0 bytes). Design documents are needed before
 any implementation plan can be created:
 
-- `SensorINS` — design doc: `docs/architecture/sensor_ins_sim.md` (exists; unreviewed)
-- `SensorRadAlt` — design doc: `docs/architecture/sensor_laser_alt.md` (exists; unreviewed)
+- `SensorINS` — design doc: `docs/design/sensor_ins_sim.md` (exists; unreviewed)
+- `SensorRadAlt` — design doc: `docs/design/sensor_laser_alt.md` (exists; unreviewed)
 - `SensorAA`, `SensorAAR` — no design doc
 - `SensorForwardTerrainProfile`, `SensorTrackEstimator` — no design doc
 - `SensorGnss`, `SensorLaserAlt`, `SensorMag` — no header, no design doc (planned in

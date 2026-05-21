@@ -25,7 +25,7 @@ a fixed local port; a **Godot 4** scene receives the datagrams and updates the v
 actor transform and ribbon trail each render frame.
 
 Godot 4 is the selected real-time renderer — see
-[`docs/architecture/system/future/decisions.md`](system/future/decisions.md) decision
+[`docs/architecture/system/future/decisions.md`](../architecture/system/future/decisions.md) decision
 row 26 and [`docs/architecture/terrain.md §Game Engine Integration`](terrain.md#game-engine-integration).
 Rationale: MIT license, native glTF 2.0 / GLB import, Vulkan-based renderer, C++
 integration via GDExtension.
@@ -899,7 +899,7 @@ run. The mesh load may add several seconds of startup time for large datasets.
 
 Decided during terrain mesh implementation (Step 11/12); documented in
 [`terrain.md §Game Engine Integration`](terrain.md#game-engine-integration) and
-[`decisions.md` row 26](system/future/decisions.md). The live simulation viewer is a
+[`decisions.md` row 26](../architecture/system/future/decisions.md). The live simulation viewer is a
 Godot scene receiving UDP `SimulationFrame` datagrams from the C++ `SimRunner`.
 Vispy is used only for post-processing (`TrajectoryView`); it has no role in the live
 viewer.
@@ -1428,7 +1428,7 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 
 ## Open Questions — Status Summary
 
-| ID | Question | Status | Blocking |
+| ID | Summary | Status | Blocking |
 | --- | --- | --- | --- |
 | OQ-LS-1 | `LiveSimView` class relationship (Vispy) | Superseded — Vispy not used for live rendering; Godot 4 is the renderer (LS-DR-1) | N/A |
 | OQ-LS-2 | Incremental ribbon trail strategy (Vispy) | Superseded — ribbon trail is a Godot scene concern | N/A |

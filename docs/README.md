@@ -56,40 +56,38 @@ the reverse. A design document does not list which implementation plans referenc
 
 ### Design
 
-Design documents currently live in `docs/architecture/` pending migration to
-`docs/design/` (see [`docs/design/README.md`](design/README.md)). They are valid
-design authority documents regardless of their current location.
+Design documents live in `docs/design/` (see [`docs/design/README.md`](design/README.md)).
 
 | Document | Subsystem |
 | --- | --- |
-| [`architecture/dynamic_element.md`](architecture/dynamic_element.md) | `DynamicElement` / `SisoElement` lifecycle contract; Filter and Propulsion hierarchies |
-| [`architecture/aircraft.md`](architecture/aircraft.md) | `Aircraft` — integration loop, use cases, serialization |
-| [`architecture/landing_gear.md`](architecture/landing_gear.md) | `LandingGear` — contact forces, wheel dynamics, serialization |
-| [`architecture/propulsion.md`](architecture/propulsion.md) | `V_Propulsion`, `PropulsionJet`, `PropulsionProp`, `PropulsionEDF` |
-| [`architecture/aero_coeff_estimator.md`](architecture/aero_coeff_estimator.md) | `AeroCoeffEstimator`, `AeroPerformance` |
-| [`architecture/aero_coefficient_model.md`](architecture/aero_coefficient_model.md) | Aerodynamic coefficient model |
-| [`architecture/sensor.md`](architecture/sensor.md) | Sensor base interface and hierarchy |
-| [`architecture/sensor_air_data.md`](architecture/sensor_air_data.md) | `SensorAirData` |
-| [`architecture/sensor_ins_sim.md`](architecture/sensor_ins_sim.md) | `SensorINS` (design doc; unreviewed) |
-| [`architecture/sensor_laser_alt.md`](architecture/sensor_laser_alt.md) | `SensorRadAlt` (design doc; unreviewed) |
-| [`architecture/sensor_gnss.md`](architecture/sensor_gnss.md) | `SensorGnss` |
-| [`architecture/sensor_mag.md`](architecture/sensor_mag.md) | `SensorMag` |
-| [`architecture/sim_runner.md`](architecture/sim_runner.md) | `SimRunner`, `RunnerConfig`, `ExecutionMode` |
-| [`architecture/terrain.md`](architecture/terrain.md) | `V_Terrain`, `TerrainMesh`, height query interface |
-| [`architecture/terrain_build.md`](architecture/terrain_build.md) | Python terrain ingestion pipeline |
-| [`architecture/godot_plugin.md`](architecture/godot_plugin.md) | GDExtension C++ plugin — `SimulationReceiver`, build system |
-| [`architecture/live_sim_view.md`](architecture/live_sim_view.md) | Live simulation viewer — UDP broadcast path, SimSession, Godot scene |
-| [`architecture/python_bindings.md`](architecture/python_bindings.md) | pybind11 module — binding strategy, exposed classes |
-| [`architecture/post_processing.md`](architecture/post_processing.md) | Python post-processing tools — `FlightLogReader`, `TimeHistoryFigure`, etc. |
-| [`architecture/ring_buffer.md`](architecture/ring_buffer.md) | Ring buffer — `ChannelRegistry`, `ChannelSubscriber` |
-| [`architecture/logger.md`](architecture/logger.md) | Logger subsystem |
-| [`architecture/environment.md`](architecture/environment.md) | `Atmosphere`, `Wind`, `Turbulence`, `Gust` |
-| [`architecture/manual_input.md`](architecture/manual_input.md) | `ManualInput`, `JoystickInput`, `KeyboardInput` |
-| [`architecture/navigation_filter.md`](architecture/navigation_filter.md) | Navigation filter |
-| [`architecture/flow_angles_estimator.md`](architecture/flow_angles_estimator.md) | `FlowAnglesEstimator` |
-| [`architecture/wind_estimator.md`](architecture/wind_estimator.md) | `WindEstimator` |
-| [`architecture/antiwindup.md`](architecture/antiwindup.md) | Anti-windup strategy |
-| [`architecture/propulsion_coeff_estimator.md`](architecture/propulsion_coeff_estimator.md) | `PropulsionCoeffEstimator` |
+| [`design/dynamic_element.md`](design/dynamic_element.md) | `DynamicElement` / `SisoElement` lifecycle contract; Filter and Propulsion hierarchies |
+| [`design/aircraft.md`](design/aircraft.md) | `Aircraft` — integration loop, use cases, serialization |
+| [`design/landing_gear.md`](design/landing_gear.md) | `LandingGear` — contact forces, wheel dynamics, serialization |
+| [`design/propulsion.md`](design/propulsion.md) | `V_Propulsion`, `PropulsionJet`, `PropulsionProp`, `PropulsionEDF` |
+| [`design/aero_coeff_estimator.md`](design/aero_coeff_estimator.md) | `AeroCoeffEstimator`, `AeroPerformance` |
+| [`design/aero_coefficient_model.md`](design/aero_coefficient_model.md) | Aerodynamic coefficient model |
+| [`design/sensor.md`](design/sensor.md) | Sensor base interface and hierarchy |
+| [`design/sensor_air_data.md`](design/sensor_air_data.md) | `SensorAirData` |
+| [`design/sensor_ins_sim.md`](design/sensor_ins_sim.md) | `SensorINS` (design doc; unreviewed) |
+| [`design/sensor_laser_alt.md`](design/sensor_laser_alt.md) | `SensorRadAlt` (design doc; unreviewed) |
+| [`design/sensor_gnss.md`](design/sensor_gnss.md) | `SensorGnss` |
+| [`design/sensor_mag.md`](design/sensor_mag.md) | `SensorMag` |
+| [`design/sim_runner.md`](design/sim_runner.md) | `SimRunner`, `RunnerConfig`, `ExecutionMode` |
+| [`design/terrain.md`](design/terrain.md) | `V_Terrain`, `TerrainMesh`, height query interface |
+| [`design/terrain_build.md`](design/terrain_build.md) | Python terrain ingestion pipeline |
+| [`design/godot_plugin.md`](design/godot_plugin.md) | GDExtension C++ plugin — `SimulationReceiver`, build system |
+| [`design/live_sim_view.md`](design/live_sim_view.md) | Live simulation viewer — UDP broadcast path, SimSession, Godot scene |
+| [`design/python_bindings.md`](design/python_bindings.md) | pybind11 module — binding strategy, exposed classes |
+| [`design/post_processing.md`](design/post_processing.md) | Python post-processing tools — `FlightLogReader`, `TimeHistoryFigure`, etc. |
+| [`design/ring_buffer.md`](design/ring_buffer.md) | Ring buffer — `ChannelRegistry`, `ChannelSubscriber` |
+| [`design/logger.md`](design/logger.md) | Logger subsystem |
+| [`design/environment.md`](design/environment.md) | `Atmosphere`, `Wind`, `Turbulence`, `Gust` |
+| [`design/manual_input.md`](design/manual_input.md) | `ManualInput`, `JoystickInput`, `KeyboardInput` |
+| [`design/navigation_filter.md`](design/navigation_filter.md) | Navigation filter |
+| [`design/flow_angles_estimator.md`](design/flow_angles_estimator.md) | `FlowAnglesEstimator` |
+| [`design/wind_estimator.md`](design/wind_estimator.md) | `WindEstimator` |
+| [`design/antiwindup.md`](design/antiwindup.md) | Anti-windup strategy |
+| [`design/propulsion_coeff_estimator.md`](design/propulsion_coeff_estimator.md) | `PropulsionCoeffEstimator` |
 
 ### Algorithms
 

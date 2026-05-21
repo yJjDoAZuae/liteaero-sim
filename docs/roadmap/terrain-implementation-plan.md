@@ -3,7 +3,7 @@
 ## Context
 
 Implement the full terrain subsystem per the design authority
-`docs/architecture/terrain.md`. These are Domain Layer components; no I/O, all SI.
+`docs/design/terrain.md`. These are Domain Layer components; no I/O, all SI.
 The roadmap splits the work as:
 
 - Item 1a: `V_Terrain` + `FlatTerrain` (prerequisite for sensors and guidance)

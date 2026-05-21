@@ -72,7 +72,7 @@ flowchart TB
 
 ## Component Lifecycle
 
-Every dynamic simulation element follows this lifecycle. The interface is defined by `DynamicElement` — see [DynamicElement Design](dynamic_element.md) for the full specification.
+Every dynamic simulation element follows this lifecycle. The interface is defined by `DynamicElement` — see [DynamicElement Design](../design/dynamic_element.md) for the full specification.
 
 ```mermaid
 stateDiagram-v2
@@ -223,7 +223,7 @@ from either the flight code (autopilot) or a `ManualInput` adapter injected into
 `SimRunner`. The two sources are mutually exclusive per run: the scenario selects one
 by calling `SimRunner::setManualInput()` (manual) or leaving it unset (autopilot or
 scripted). `ManualInput` classes are Interface Layer components — see
-[`manual_input.md`](manual_input.md).
+[`manual_input.md`](../design/manual_input.md).
 
 ---
 

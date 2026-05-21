@@ -5,9 +5,13 @@
 `KinematicState::step()` uses a mixed first-order scheme:
 
 - **Velocity** is updated with a trapezoidal (average) acceleration:
-  `v_new = v_old + 0.5 * (a_old + a_new) * dt`
-- **Altitude** is updated with trapezoidal velocity:
-  `alt_new = alt_old + 0.5 * (vD_old + vD_new) * dt`
+
+$$\mathbf{v}_{k+1} = \mathbf{v}_k + \tfrac{\Delta t}{2}\left(\mathbf{a}_k + \mathbf{a}_{k+1}\right)$$
+
+- **Altitude** is updated with trapezoidal NED-down velocity:
+
+$$h_{k+1} = h_k + \tfrac{\Delta t}{2}\left(v_{D,k} + v_{D,k+1}\right)$$
+
 - **Latitude / longitude** are updated with forward Euler using the new velocity.
 
 Global truncation error: **O(h)**. One derivative evaluation per step. No error estimate.
@@ -64,67 +68,57 @@ not state variables.
 
 ### 3.2 Derivative Structure
 
-```cpp
-struct KinematicDerivative {
-    double          lat_dot_rps;       // d(lat)/dt
-    double          lon_dot_rps;       // d(lon)/dt
-    float           alt_dot_mps;       // d(alt)/dt
-    Eigen::Vector3f vel_dot_NED_mps2;  // d(vNED)/dt — total acceleration in NED
-    Eigen::Quaternionf q_nw_dot;       // quaternion kinematics: 0.5 * q * [0, ω]
-};
-```
+The derivative bundle groups the six geodetic rate components and the quaternion
+kinematic rate into a single value-type struct:
+
+$$
+\dot{\mathbf{x}} = \bigl(\dot\varphi,\; \dot\lambda,\; \dot h,\; \dot v_N,\; \dot v_E,\; \dot v_D,\; \dot{q}_{nw}\bigr)
+$$
+
+where $\dot{q}_{nw} = \tfrac{1}{2}\, q_{nw} \otimes [0,\; \boldsymbol{\omega}_{W/N}^W]^T$ is the quaternion kinematic equation.
 
 ### 3.3 Vehicle Dynamics Interface
 
-```cpp
-// Forward declaration — defined per vehicle model
-struct VehicleInputs;
+The vehicle dynamics interface maps a state and input tuple to the state derivative:
 
-class IVehicleDynamics {
-public:
-    virtual ~IVehicleDynamics() = default;
+$$
+f: (\mathbf{x},\; \mathbf{u},\; \Delta t) \mapsto \dot{\mathbf{x}}
+$$
 
-    // Compute state derivative at a given state and input.
-    // dt_s: time since last full step (used by some models for rate limiting).
-    virtual KinematicDerivative computeDerivative(
-        const KinematicState& state,
-        const VehicleInputs&  inputs,
-        float                 dt_s) const = 0;
-};
-```
+where $\mathbf{x}$ is the kinematic state, $\mathbf{u}$ is the vehicle input set, and $\Delta t$ is the elapsed time used by models with rate-limited internal state. Different vehicle models (trim aero, 6DOF) implement the same mapping — the integrator is vehicle-agnostic.
 
 ### 3.4 Generic RK4 Integrator
 
-```cpp
-// Apply a single RK4 step.
-// f: callable matching IVehicleDynamics::computeDerivative signature.
-template<typename DynamicsFn>
-KinematicState rk4Step(
-    const KinematicState& s0,
-    const VehicleInputs&  u,
-    float                 dt_s,
-    DynamicsFn            f);
-```
+A single RK4 step advances state $\mathbf{x}_k$ to $\mathbf{x}_{k+1}$ by evaluating $f$ at four points within $[t,\; t + \Delta t]$:
 
-The implementation evaluates `f` at four points in `[t, t+dt]`, combines the derivatives
-with the standard RK4 weights `(1/6, 1/3, 1/3, 1/6)`, and returns the updated state.
+$$
+k_1 = f(\mathbf{x}_k,\; \mathbf{u},\; \Delta t)
+$$
+
+$$
+k_2 = f\!\left(\mathbf{x}_k + \tfrac{\Delta t}{2}\,k_1,\; \mathbf{u},\; \Delta t\right)
+$$
+
+$$
+k_3 = f\!\left(\mathbf{x}_k + \tfrac{\Delta t}{2}\,k_2,\; \mathbf{u},\; \Delta t\right)
+$$
+
+$$
+k_4 = f\!\left(\mathbf{x}_k + \Delta t\,k_3,\; \mathbf{u},\; \Delta t\right)
+$$
+
+$$
+\mathbf{x}_{k+1} = \mathbf{x}_k + \frac{\Delta t}{6}\bigl(k_1 + 2k_2 + 2k_3 + k_4\bigr)
+$$
+
+The weights $(1/6, 1/3, 1/3, 1/6)$ are the standard Butcher tableau coefficients for the classic RK4 method.
 
 ### 3.5 Integration into KinematicState
 
-`KinematicState::step()` becomes a thin wrapper:
-
-```cpp
-void KinematicState::step(double time_sec,
-                          const IVehicleDynamics& dynamics,
-                          const VehicleInputs& inputs,
-                          float dt_s) {
-    *this = rk4Step(*this, inputs, dt_s, dynamics);
-    _time_sec = time_sec;
-}
-```
-
-Backward compatibility with the current scalar-input signature is intentionally not
-preserved (see project convention: no backward-compatibility shims).
+The kinematic state step function becomes a thin delegation to the RK4 integrator,
+passing the vehicle dynamics callable as $f$. The integrator evaluates $f$ four times per
+step and returns the updated state. No persistent buffer, startup history, or
+step-size adaptation is required.
 
 ---
 
@@ -140,30 +134,6 @@ The trim-aero model is appropriate for trajectory planning, guidance law develop
 scenarios where aerodynamic moments can be assumed in equilibrium at each step. Full 6DOF
 is required for dynamic maneuver modeling, departure analysis, and autopilot inner-loop
 design.
-
----
-
-## 5. Migration Path
-
-The following steps migrate from the current fused `step()` to the pluggable RK4
-architecture while maintaining a working codebase at each stage:
-
-1. **Extract `computeDerivative()`** — move the derivative calculation out of `step()`
-   into a free function or private method. `step()` calls it once (equivalent to forward
-   Euler at first). All existing tests continue to pass.
-
-2. **Implement `rk4Step()`** — write the generic template function and validate with a
-   simple test (e.g., constant-acceleration trajectory with known analytic solution).
-
-3. **Replace `step()` internals** — `step()` delegates to `rk4Step()`, passing the
-   extracted derivative function. Update all call sites to use the new `step()` signature.
-   Verify tests pass.
-
-4. **Introduce `IVehicleDynamics`** — define the interface and adapter for the existing
-   trim-aero model. This decouples the integrator from any specific vehicle model.
-
-5. **Extend with 6DOF** — implement `SixDofDynamics : public IVehicleDynamics` that adds
-   moment equations and integrates body angular rates. The integrator code does not change.
 
 ---
 

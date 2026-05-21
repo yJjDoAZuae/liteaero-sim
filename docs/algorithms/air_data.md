@@ -572,7 +572,7 @@ $$P_{Koll}^{updated} = P_s^{meas} \cdot \left(\frac{T_0}{T_0 + L\,h_{geo}^{ext}}
 
 where $h_{geo}^{ext}$ is the externally measured geometric altitude. When the INS applies
 this update, the altimeter's indicated altitude converges to the true MSL altitude (subject
-to remaining temperature error). See `docs/architecture/sensor_air_data.md §setKollsman()`
+to remaining temperature error). See `docs/design/sensor_air_data.md §setKollsman()`
 for the runtime interface.
 
 ---
