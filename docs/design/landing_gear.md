@@ -437,29 +437,38 @@ dynamic fidelity in the wheel spin-up transient. The configured value need not s
 the Nyquist bound; it should be the smallest value that produces acceptable rollout and
 braking behavior for the intended scenario.
 
-#### 4b. Rolling-Condition Clamp (Removed) and Quasi-Static Free-Roll Clamp (Present)
+#### 4b. Quasi-Static Free-Roll Clamp
 
-The rolling-condition clamp that was applied when explicit Euler was the integrator was
-removed when the Tustin integrator was introduced (OQ-LG-5). The Tustin integrator is
-unconditionally stable and does not produce the limit cycle — hunting across $\kappa = 0$
-— that the original clamp was designed to suppress.
+The rolling-condition clamp applied under explicit Euler (which snapped $\omega_w$ when
+the sign of $\kappa$ changed mid-substep) was removed when the Tustin integrator was
+introduced (OQ-LG-5).
 
-**Current code diverges from this description.** `WheelUnit::step()` currently contains
-a quasi-static free-roll clamp: when no brake is applied, $\omega_w$ is set directly to
-$V_{cx}/r_w$ (exact free-rolling condition), bypassing the Tustin ODE entirely. This
-prevents any $\kappa \neq 0$ during unbraked rolling and eliminates longitudinal
-Pacejka force during free roll. Whether this clamp is the correct long-term design, or
-whether the Tustin integrator should converge to free-roll naturally without clamping, is
-an open question (OQ-LG-11).
+A separate, deliberate **quasi-static free-roll clamp** is retained (OQ-LG-11
+resolution). When no brake torque is applied, `WheelUnit::step()` sets
 
-The four canonical tyre events are now handled as follows:
+$$\omega_w = \max\!\bigl(0,\; V_{cx}/r_w\bigr)$$
+
+exactly, bypassing the Tustin ODE for that substep. This enforces the exact free-rolling
+condition ($\kappa = 0$, $F_x = 0$) and ensures only rolling resistance $F_{rr}$
+decelerates the aircraft during free ground roll. It is correct defensive programming:
+wheel speed cannot physically exceed the contact-patch ground speed or go negative during
+free rolling (no brake applied).
+
+$V_{cx}$ is the forward component of the contact-patch velocity in the wheel rolling
+direction. It is computed as the projection of $\mathbf{v}^B_\text{CG} +
+\boldsymbol{\omega}^B \times \mathbf{c}^B$ onto the wheel-forward axis, where
+$\mathbf{c}^B$ is the tyre contact point in body frame (origin at CG). During a turning
+rollout the outer and inner wheels therefore receive different $V_{cx}$ values,
+correctly reflecting the differential ground speed.
+
+The four canonical tyre events are handled as follows:
 
 | Event | Condition | Action |
 | --- | --- | --- |
-| First contact | `penetration_m` transitions $\leq 0 \to > 0$ | $\omega_w$ arrives from airborne bearing drag (OQ-LG-6); Tustin integrates spin-up naturally |
+| First contact | `penetration_m` transitions $\leq 0 \to > 0$ | $\omega_w$ arrives from airborne bearing drag (OQ-LG-6); clamp immediately sets $\omega_w = V_{cx}/r_w$ when no brake is applied |
 | Liftoff | `penetration_m` transitions $> 0 \to \leq 0$ | Strut resets to zero; airborne bearing drag ODE takes over |
-| Free-roll convergence | $\kappa \to 0$ over successive substeps | Tustin integrator converges without clamping |
-| Lockup | $\omega_w \to 0$ under full braking | Regularized by rolling-resistance deadband at $\lvert\omega_w\rvert < 0.01$ rad/s |
+| Free roll (no brake) | `brake_demand_nd` $< 10^{-4}$ | $\omega_w$ clamped to $V_{cx}/r_w$ exactly; $\kappa = 0$; $F_x = 0$ |
+| Lockup | $\omega_w \to 0$ under full braking | Tustin ODE integrates; regularized by rolling-resistance deadband at $\lvert\omega_w\rvert < 0.01$ rad/s |
 
 ---
 
@@ -682,6 +691,9 @@ simulation rate.
 | OQ-LG-9 | ~~moment_body_nm not applied in Aircraft~~ **Resolved: derive n_z, ay, and roll-rate perturbations from gear moments, mirroring the existing n_z suppression** | — |
 | OQ-LG-10 | ~~Wind-frame contact force decomposition: full transform vs. friction-only in wind-x~~ **Resolved: full transform retained; test parameters must use realistic ζ** | — |
 | OQ-LG-11 | ~~Quasi-static free-roll clamp vs. Tustin natural convergence~~ **Resolved: clamp retained; V_cx uses correct contact-point velocity including ω × r** | — |
+| OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
+| OQ-LG-13 | ~~High-pass filter design for moment perturbation paths: τ_hp value and config parameter name~~ **Resolved: second-order high-pass; reuse per-axis FBW filter parameters (ωn, ζ); no new config parameters needed** | — |
+| OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
 
 ---
 
@@ -1244,31 +1256,32 @@ moment in the wind frame (x forward, y right, z down). The three perturbations a
 **Wind-x (roll):** added to the commanded roll rate fed to `commitAttitude`:
 $$\Delta\Omega_{x} = \frac{M^W_x}{I_{xx}}\,\Delta t$$
 
-**Wind-z (pitch / lift axis):** produces an n_z perturbation analogous to
-$n_{\text{contact},z,\text{raw}}$, filtered and subtracted from $n_z$-shaped before the
-LFA solve:
-$$n_{z,\text{moment}} = \frac{M^W_z}{I_{zz}} \cdot \frac{V}{g}$$
+**Wind-y (pitch axis):** $q_W = \dot\gamma_a$ confirms wind-y is the pitch axis (see
+[EOM doc §Wind Frame Angular Velocity](../algorithms/equations_of_motion.md)). Produces
+an n_z perturbation injected through the high-pass moment filter before the LFA solve:
+$$n_{z,\text{moment}} = \frac{M^W_y}{I_{yy}} \cdot \frac{V}{g}$$
 
-**Wind-y (yaw / lateral axis):** produces a lateral specific force added to $a_y$:
-$$\Delta a_y = \frac{M^W_y}{I_{yy}} \cdot V$$
+**Wind-z (yaw axis):** $r_W = \dot\chi_a/\cos\gamma_a$ confirms wind-z is the yaw axis.
+Produces a lateral specific force added to $a_y$:
+$$\Delta a_y = \frac{M^W_z}{I_{zz}} \cdot V$$
 
-$n_{z,\text{moment}}$ and $\Delta a_y$ scale with $V$ and vanish at zero speed —
-physically correct. A velocity regularization floor (consistent with the Pacejka
-$V_\text{ref}$ floor in §3b) prevents division sensitivity at near-zero speed.
+$n_{z,\text{moment}}$ and $\Delta a_y$ scale with $V$. The gear forces themselves also
+vanish near standstill via the $k_{V\varepsilon}$ deadband, so both perturbations go as
+$V^2$ near zero — no velocity floor or gating is needed (OQ-LG-14 resolution).
 
 For scenarios requiring the nose-swing transient or fully coupled yaw/pitch/roll dynamics
 (independent heading rotation ahead of path curvature), `Aircraft6DOF` is the correct
 model.
 
-**Prerequisites for implementation:** wind-frame moment-axis sign convention verified;
-filter $\tau$ values for the pitch and yaw perturbations chosen; velocity regularization
-floor value decided.
+**Prerequisites for implementation:** all resolved. Wind-frame axis mapping confirmed
+(OQ-LG-12); filter design decided — second-order high-pass using per-axis FBW ωn and ζ
+(OQ-LG-13); no velocity floor needed (OQ-LG-14).
 
-*Implementation pending explicit instruction.*
+*Implementation pending explicit instruction (IP-AGF-4, IP-AGF-5).*
 
 ---
 
-### OQ-LG-10 — $F_z\sin\gamma$ Coupling During Gear Bounce
+### OQ-LG-10 — $F_z\sin\gamma$ Coupling During Gear Bounce *(Resolved)*
 
 **Question:** The current `Aircraft::step()` applies the full body contact force to the
 wind-frame EOM via $\mathbf{F}^W = R_{WN}\,R_{NB}\,\mathbf{f}^B$. When the flight-path
@@ -1359,7 +1372,7 @@ adding a special-case bypass would trade physical correctness for test convenien
 
 ---
 
-### OQ-LG-11 — Quasi-Static Free-Roll Clamp vs. Tustin Natural Convergence
+### OQ-LG-11 — Quasi-Static Free-Roll Clamp vs. Tustin Natural Convergence *(Resolved)*
 
 **Question:** Should `WheelUnit::step()` clamp $\omega_w$ to the exact free-rolling
 speed $V_{cx}/r_w$ when no brake is applied, or should the Tustin integrator converge
@@ -1447,7 +1460,97 @@ velocities are correctly identical in that scenario.
 Update §4b to describe the clamp as a deliberate quasi-static simplification retained in
 `Aircraft`; Alternative 2 is preferred for `Aircraft6DOF`.
 
-*Implementation pending explicit instruction (§4b doc update only).*
+*§4b updated (IP-AGF-1 complete).*
+
+---
+
+### OQ-LG-12 — Wind-Frame Moment-Axis Mapping for OQ-LG-9 Implementation *(Resolved)*
+
+**Resolution:** Alternative 1. The OQ-LG-9 resolution text had the y and z axis labels
+swapped. The correct assignment, confirmed from
+[`equations_of_motion.md §Wind Frame Angular Velocity`](../algorithms/equations_of_motion.md),
+is:
+
+- $M^W_x$ → roll → $\Delta\Omega_x$ (unchanged)
+- $M^W_y$ → **pitch** → $n_{z,\text{moment}}$ (corrected from OQ-LG-9's wind-z)
+- $M^W_z$ → **yaw** → $\Delta a_y$ (corrected from OQ-LG-9's wind-y)
+
+**Rationale from EOM doc:**
+
+The Wind frame has z in the body symmetry plane pointing **down** (lift acts in
+$-\hat{z}_W$). From the Path Angle Rates section:
+
+$$q_W = \dot\gamma_a \qquad r_W = \dot\chi_a / \cos\gamma_a$$
+
+$q_W$ (pitch rate, changes flight-path angle $\gamma_a$) is the angular velocity about
+the **y** axis; $r_W$ (yaw rate, changes track angle $\chi_a$) is about the **z** axis.
+A moment about wind-y therefore drives pitch → lift → $n_z$; a moment about wind-z drives
+yaw → lateral acceleration → $a_y$. The OQ-LG-9 text has been corrected accordingly.
+
+*Implemented: OQ-LG-9 resolution text updated.*
+
+---
+
+### OQ-LG-13 — Filter Design for Moment Perturbation Paths *(Resolved)*
+
+**Resolution:** Second-order high-pass filter; reuse the per-axis FBW command response
+filter parameters (ωn, ζ) for the corresponding moment perturbation axis. No new
+configuration parameters are introduced.
+
+**Filter type — high-pass.** Force contributions (gear contact force applied directly
+to the wind-frame acceleration sum) are unfiltered — they act on the equations of
+motion immediately and require no special treatment. Moment contributions model the
+emulated action of a fly-by-wire system that resists sustained moment disturbances
+while passing transients. A **second-order high-pass filter** — the complement of the
+FBW axis low-pass — is correct for all three moment perturbation paths: sustained (DC)
+ground moments are rejected; transient (bounce-cycle) moments produce a brief
+perturbation that decays.
+
+The second-order high-pass transfer function in terms of the FBW axis parameters is:
+
+$$H_{HP}(s) = \frac{s^2}{s^2 + 2\zeta\omega_n\,s + \omega_n^2}$$
+
+This is the complement of the FBW axis low-pass $H_{LP}(s) = \omega_n^2 / (s^2 +
+2\zeta\omega_n s + \omega_n^2)$ already implemented via
+`FilterSS2Clip::setLowPassSecondIIR`. The high-pass is implemented using the same
+`FilterSS2Clip` class with `setHighPassSecondIIR`.
+
+**Parameter assignment (per-axis FBW filter consistency):**
+
+| Perturbation axis | Filter parameters | Source config keys |
+| --- | --- | --- |
+| Wind-x → roll rate $\Delta\Omega_x$ | $\omega_n$, $\zeta$ | `roll_rate_wn_rad_s`, `roll_rate_zeta_nd` |
+| Wind-y → pitch → $n_{z,\text{moment}}$ | $\omega_n$, $\zeta$ | `nz_wn_rad_s`, `nz_zeta_nd` |
+| Wind-z → yaw → $\Delta a_y$ | $\omega_n$, $\zeta$ | `ny_wn_rad_s`, `ny_zeta_nd` |
+
+No new configuration parameters are added. Each moment perturbation high-pass filter
+is constructed from the same ωn and ζ as the corresponding FBW command response filter,
+ensuring that the gear moment rejection bandwidth is consistent with the FBW command
+bandwidth on each axis.
+
+**Note on `kContactFiltTau_s`.** The existing $n_{\text{contact},z}$ suppression uses
+$\tau = 0.10$ s hardcoded as `constexpr float kContactFiltTau_s = 0.10f` in
+`Aircraft.cpp`. This violates the no-magic-number rule and the design intent that
+physics parameters be configuration values. It must be moved to a named configuration
+parameter in the aircraft JSON config (e.g., `contact_nz_filter_tau_s`). This is a
+prerequisite for IP-AGF-4.
+
+*Resolved. Implementation pending explicit instruction (IP-AGF-4, IP-AGF-5).*
+
+---
+
+### OQ-LG-14 — Velocity Regularization Floor for Moment Perturbations *(Resolved)*
+
+**Resolution:** Alternative 3 — no gating or floor needed.
+
+The perturbation formulas have $V$ in the numerator, not the denominator, so they carry
+no singularity. Additionally, the gear forces that produce $\mathbf{M}^W$ themselves
+vanish near standstill: rolling resistance is gated by the $k_{V\varepsilon} = 0.01$ m/s
+deadband in `WheelUnit::step()`, and Pacejka tyre forces are regularized by the same
+floor. Therefore $\mathbf{M}^W \propto V$ near zero, and the perturbations go as $V^2$
+near standstill — well-behaved without any additional floor or gating.
+
+*No code action required.*
 
 ---
 

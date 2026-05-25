@@ -11,6 +11,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | Plan file | Scope | Status |
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Wheel kappa fix, rolling-condition clamp, n_contact_z_filt filter, Tustin ODE (OQ-LG-5), airborne bearing drag (OQ-LG-6) | Active |
+| [aircraft_gear_ground_forces.md](aircraft_gear_ground_forces.md) | Revert applyGearGroundConstraint; fix test damping; update §4b doc; implement OQ-LG-9 moment perturbations (partially blocked) | Active |
 
 ---
 
