@@ -162,13 +162,39 @@ initialized from the `"landing_gear"` section of the aircraft JSON config.
 ### Integration Contract — `Aircraft`
 
 `Aircraft::step()` calls `LandingGear::step()` before the `LoadFactorAllocator` solve.
-The contact forces are applied as follows:
+The contact forces are applied via two parallel mechanisms:
 
-- `force_body_n[Z]` and `force_body_n[Y]` are passed to `LoadFactorAllocator` as additive
-  disturbance terms alongside aerodynamic and propulsion forces.
-- `moment_body_nm` is applied directly to the kinematic update, bypassing the allocator,
-  because ground steering and differential braking are separate actuator systems outside
-  FBW authority.
+**1. Direct wind-frame acceleration contribution.**
+The full body-frame contact force is transformed to the wind frame and added directly
+to the wind-frame specific forces:
+
+$$\mathbf{F}_{\text{gear}}^W = R_{WN}\,R_{NB}\,\mathbf{f}_{\text{body}}$$
+
+All three components (x, y, z) contribute to ax, ay, az. When the flight-path angle
+$\gamma \neq 0$ — as during a gear bounce — the vertical normal component $F_z$ projects
+as $F_z\sin\gamma$ onto wind-x. Whether this cross-axis coupling is a correct physical
+effect or a model fidelity limitation of the wind-frame integrator is an open question
+(OQ-LG-10).
+
+**2. Commanded load-factor reduction (n_z suppression).**
+The NED-upward component of the contact force is projected onto the aircraft weight to
+compute a contact load fraction:
+
+$$n_{\text{contact},z,\text{raw}} = \frac{-F_{\text{contact,NED},z}}{m g}$$
+
+This is filtered through a first-order lag ($\tau = 0.10$ s) to produce
+$n_{\text{contact},z,\text{filt}}$, which is subtracted from the commanded $n_z$ before
+the LFA solve. This prevents the aerodynamic lift system from simultaneously targeting
+full commanded $n_z$ while the gear is already providing the required normal force.
+
+**3. Moment perturbations (intended design — not yet implemented).**
+`moment_body_nm` is assembled by `LandingGear::step()` but is **not currently applied**.
+The intended design (OQ-LG-9 resolution) converts each wind-frame moment axis to a
+perturbation injected through existing paths: the wind-x (roll) component increments
+`rollRate_Wind_rps` fed to `commitAttitude`; the wind-z (pitch) component produces an
+n_z command perturbation filtered and subtracted from $n_z$-shaped before the LFA solve;
+the wind-y (yaw) component produces a lateral specific force added to $a_y$. Each
+perturbation scales with airspeed and vanishes at zero speed.
 
 ### Integration Contract — `Aircraft6DOF`
 
@@ -411,11 +437,21 @@ dynamic fidelity in the wheel spin-up transient. The configured value need not s
 the Nyquist bound; it should be the smallest value that produces acceptable rollout and
 braking behavior for the intended scenario.
 
-#### 4b. Rolling-Condition Clamp (Removed)
+#### 4b. Rolling-Condition Clamp (Removed) and Quasi-Static Free-Roll Clamp (Present)
 
-The rolling-condition clamp that was applied when explicit Euler was the integrator is
-no longer present. The Tustin integrator is unconditionally stable and does not produce
-the limit cycle — hunting across $\kappa = 0$ — that the clamp was designed to suppress.
+The rolling-condition clamp that was applied when explicit Euler was the integrator was
+removed when the Tustin integrator was introduced (OQ-LG-5). The Tustin integrator is
+unconditionally stable and does not produce the limit cycle — hunting across $\kappa = 0$
+— that the original clamp was designed to suppress.
+
+**Current code diverges from this description.** `WheelUnit::step()` currently contains
+a quasi-static free-roll clamp: when no brake is applied, $\omega_w$ is set directly to
+$V_{cx}/r_w$ (exact free-rolling condition), bypassing the Tustin ODE entirely. This
+prevents any $\kappa \neq 0$ during unbraked rolling and eliminates longitudinal
+Pacejka force during free roll. Whether this clamp is the correct long-term design, or
+whether the Tustin integrator should converge to free-roll naturally without clamping, is
+an open question (OQ-LG-11).
+
 The four canonical tyre events are now handled as follows:
 
 | Event | Condition | Action |
@@ -643,6 +679,9 @@ simulation rate.
 | OQ-LG-6 | ~~Airborne wheel spin-down model~~ **Resolved: linear + quadratic bearing drag; spindown-time parametrization** | — |
 | OQ-LG-7 | ~~First-contact wheel speed initial condition~~ **Resolved: no special action; Tustin integrator handles spin-up** | — |
 | OQ-LG-8 | Terrain facet slope ignored in surface normal | Not blocking for paved runways; blocking for sloped unprepared strips |
+| OQ-LG-9 | ~~moment_body_nm not applied in Aircraft~~ **Resolved: derive n_z, ay, and roll-rate perturbations from gear moments, mirroring the existing n_z suppression** | — |
+| OQ-LG-10 | ~~Wind-frame contact force decomposition: full transform vs. friction-only in wind-x~~ **Resolved: full transform retained; test parameters must use realistic ζ** | — |
+| OQ-LG-11 | ~~Quasi-static free-roll clamp vs. Tustin natural convergence~~ **Resolved: clamp retained; V_cx uses correct contact-point velocity including ω × r** | — |
 
 ---
 
@@ -1049,9 +1088,9 @@ $$t^* = \frac{T_\text{sd}}{\ln 2}\ln\!\frac{\omega_0 + \omega_\text{ref}}{\omega
 $I_w \approx 7.7 \times 10^{-5}$ kg·m², $V_\text{ref} = 20$ m/s →
 $\omega_\text{ref} = 250$ rad/s, $T_\text{sd} = 5$ s):
 
-$$c_v = \frac{7.7\times10^{-5} \times 0.693}{5} \approx 1.07\times10^{-5}\ \text{N·m·s/rad}$$
+$$c_v = \frac{7.7\times10^{-5} \times 0.693}{5} \approx 1.07\times10^{-5}\ \text{N}{\cdot}\text{m}{\cdot}\text{s/rad}$$
 
-$$c_f = 1.07\times10^{-5} \times 250 \approx 2.67\times10^{-3}\ \text{N·m}$$
+$$c_f = 1.07\times10^{-5} \times 250 \approx 2.67\times10^{-3}\ \text{N}{\cdot}\text{m}$$
 
 The wheel starting from 250 rad/s reaches zero in exactly 5 s. A bounce with 0.1 s
 airborne time retains $\approx 97\%$ of its liftoff speed.
@@ -1182,12 +1221,233 @@ currently exists in any `Terrain` implementation.
    pre-computation during `deserializeLasTerrain()` / `addCell()`; `FlatTerrain`
    trivial implementation.
 
-**Recommendation:** Alternative 1 (current flat-terrain assumption) is acceptable for
-all planned paved runway operations. Alternative 3 is the preferred long-term solution
-when sloped unprepared-strip operations become a requirement, because it gives the exact
-facet normal with a single API call and no step-size tuning. Alternative 2 is a
-low-cost interim if slope support is needed before the `Terrain` interface can be
-extended.
+**Chosen direction: Alternative 3.** `normalAtPosition()` will be added to the `Terrain`
+interface with barycentric interpolation of precomputed per-vertex normals in `TerrainMesh`
+and a trivial $[0,0,-1]^\text{NED}$ return in `FlatTerrain`. Alternative 1 (flat-terrain
+assumption) is retained as the current implementation pending that work; it is correct
+for all planned paved runway operations. Alternative 2 is not pursued.
+
+---
+
+### OQ-LG-9 — `moment_body_nm` Not Applied in `Aircraft` *(Resolved)*
+
+**Resolution:** Derive n_z, ay, and roll-rate perturbations from the gear moment vector,
+mirroring the existing n_z suppression from the gear normal force. `moment_body_nm` is
+not applied as a body-rate increment (the trim-aero model carries no integrated body-rate
+state); instead each wind-frame moment axis is converted to a centripetal-equivalent
+specific force or rate at the aircraft's operating speed and injected through the paths
+the model already exposes.
+
+**Chosen approach:** Let $\mathbf{M}^W = R_{WN}\,R_{NB}\,\mathbf{M}^B$ be the gear
+moment in the wind frame (x forward, y right, z down). The three perturbations are:
+
+**Wind-x (roll):** added to the commanded roll rate fed to `commitAttitude`:
+$$\Delta\Omega_{x} = \frac{M^W_x}{I_{xx}}\,\Delta t$$
+
+**Wind-z (pitch / lift axis):** produces an n_z perturbation analogous to
+$n_{\text{contact},z,\text{raw}}$, filtered and subtracted from $n_z$-shaped before the
+LFA solve:
+$$n_{z,\text{moment}} = \frac{M^W_z}{I_{zz}} \cdot \frac{V}{g}$$
+
+**Wind-y (yaw / lateral axis):** produces a lateral specific force added to $a_y$:
+$$\Delta a_y = \frac{M^W_y}{I_{yy}} \cdot V$$
+
+$n_{z,\text{moment}}$ and $\Delta a_y$ scale with $V$ and vanish at zero speed —
+physically correct. A velocity regularization floor (consistent with the Pacejka
+$V_\text{ref}$ floor in §3b) prevents division sensitivity at near-zero speed.
+
+For scenarios requiring the nose-swing transient or fully coupled yaw/pitch/roll dynamics
+(independent heading rotation ahead of path curvature), `Aircraft6DOF` is the correct
+model.
+
+**Prerequisites for implementation:** wind-frame moment-axis sign convention verified;
+filter $\tau$ values for the pitch and yaw perturbations chosen; velocity regularization
+floor value decided.
+
+*Implementation pending explicit instruction.*
+
+---
+
+### OQ-LG-10 — $F_z\sin\gamma$ Coupling During Gear Bounce
+
+**Question:** The current `Aircraft::step()` applies the full body contact force to the
+wind-frame EOM via $\mathbf{F}^W = R_{WN}\,R_{NB}\,\mathbf{f}^B$. When the flight-path
+angle $\gamma \neq 0$ (as during a gear bounce), the vertical contact normal force $F_z$
+projects as $F_z\sin\gamma$ onto wind-x. Is this $F_z\sin\gamma$ coupling physically
+correct, or does it indicate a model fidelity problem with the trim-aero wind-frame
+integrator during ground contact?
+
+**Why the decomposition question is a red herring.** A physically correct decomposition
+of the contact force into surface-normal and surface-tangential components, both then
+rotated to the wind frame, gives **identically the same result** as the current full
+transform — it is just linearity of the rotation:
+
+$$R_{WN}(\mathbf{F}_\text{friction}^\text{NED} + \mathbf{F}_\text{normal}^\text{NED})
+= R_{WN}\,\mathbf{F}_\text{friction}^\text{NED} + R_{WN}\,\mathbf{F}_\text{normal}^\text{NED}$$
+
+The $F_z\sin\gamma$ term appears in any physically consistent rotation of the vertical
+normal force into a tilted coordinate frame. Applying the normal force "directly to
+wind-z" without rotating it would be an approximation that intentionally drops the
+coupling — not a correct decomposition.
+
+**Is $F_z\sin\gamma$ physically correct?** Yes. When the aircraft is ascending at
+angle $\gamma$, its velocity vector is tilted upward. The terrain normal force (directed
+vertically) genuinely has a component $F_z\sin\gamma$ along that tilted velocity
+direction. Simultaneously, gravity contributes $-mg\sin\gamma$ in the same direction.
+Their net is $(F_z - mg)\sin\gamma / m$: zero in steady contact, large and positive
+(forward) when $F_z \gg mg$ during a bounce compression, large and negative (backward)
+when $F_z \approx 0$ during extension. Averaged over a well-damped bounce cycle the net
+effect is small; over a poorly damped, sustained bounce the average is non-zero and
+depends on the damping asymmetry.
+
+**Why it matters:** With well-damped gear ($\zeta \geq 0.3$), $\gamma$ remains small
+and the effect is negligible. With underdamped gear ($\zeta \approx 0.1$ or lower),
+the bounce is sustained and the average $(F_z - mg)\sin\gamma / m$ can dominate rolling
+resistance, stalling deceleration. Adequate $\zeta$ is achievable through the linear viscous damping coefficients
+alone ($b_c$, $b_e$ — §2b);
+quadratic orifice damping is not required for this purpose (it is physically motivated
+by hydraulic orifice flow and provides stroke-speed-dependent damping, but is not the
+only route to a realistic $\zeta$). The scenario test
+`Scenario_LandingRollout_StopsInFiniteDistance_NoBrakes` has an implicit dependency on
+adequate gear damping that is not currently documented.
+
+**Alternatives:**
+
+1. **Full transform (current — physically correct).** The $F_z\sin\gamma$ coupling is
+   real physics and is correctly represented. The scenario test requires gear parameters
+   with adequate damping ($\zeta \geq 0.3$); test configurations with missing orifice
+   damping (default zero) produce physically valid but practically useless results for
+   rolling resistance validation and should be corrected at the test level.
+
+   **Benefits:** Physically consistent; no special-casing; identical to what
+   `Aircraft6DOF` would use.
+
+   **Drawbacks:** The scenario test has an undocumented gear-damping dependency.
+
+   **Prerequisites:** Document the minimum damping requirement in the scenario test;
+   ensure `LandingGearFullStop` uses physically representative parameters.
+
+2. **Intentional approximation: suppress $F_z\sin\gamma$ coupling.** Apply only the
+   NED-horizontal (friction) part of the contact force to the wind-frame EOM via
+   $R_{WN}$; apply the NED-vertical (normal) part as a direct NED-z acceleration
+   contribution, bypassing the wind-frame rotation. This deliberately drops the
+   $F_z\sin\gamma$ wind-x coupling.
+
+   This is a model simplification, not a physically correct decomposition. It is
+   equivalent to assuming the aircraft's velocity is always horizontal during ground
+   contact — i.e., that bounce-induced $\gamma$ excursions do not exist. The
+   approximation error in wind-z is $F_z(1-\cos\gamma)/m$; at $\gamma = 2.5°$ this
+   is 0.1% of $F_z/m$ and negligible.
+
+   **Benefits:** Rolling resistance deceleration is insensitive to gear damping ratio;
+   no minimum damping requirement for the scenario test.
+
+   **Drawbacks:** Physically incorrect for any scenario where $\gamma \neq 0$ during
+   ground contact (bounced landing, sloped runway). Requires bypass of the normal
+   NED→wind rotation path, adding special-case code.
+
+   **Prerequisites:** None — one additional line in `Aircraft::step()`.
+
+**Resolution:** Alternative 1 chosen. The full transform is physically correct and is
+retained as-is. The deceleration test failure is a symptom of unrealistically low gear
+damping in the test configuration, not a force application error. Test configurations
+used for rolling resistance validation must use gear parameters with $\zeta_c \geq 0.3$.
+Alternative 2 is not pursued; it is an approximation, not a correct decomposition, and
+adding a special-case bypass would trade physical correctness for test convenience.
+
+*Implementation pending explicit instruction.*
+
+---
+
+### OQ-LG-11 — Quasi-Static Free-Roll Clamp vs. Tustin Natural Convergence
+
+**Question:** Should `WheelUnit::step()` clamp $\omega_w$ to the exact free-rolling
+speed $V_{cx}/r_w$ when no brake is applied, or should the Tustin integrator converge
+to free-roll naturally through the Pacejka traction force?
+
+**Current state:** The current `WheelUnit::step()` contains:
+
+```cpp
+if (!_params.has_brake || brake_demand_nd < 1e-4f)
+    _wheel_speed_rps = std::max(0.0f, V_cx / r_w);
+```
+
+This forces $\omega_w = V_{cx}/r_w$ exactly at every substep when unbraked, making
+$\kappa = 0$ and $F_x = 0$ by construction. The Tustin integrator is bypassed for $\omega_w$
+during free roll. Section §4b documents the rolling-condition clamp as "no longer present,"
+which is incorrect.
+
+**Why it matters:** The Tustin OQ-LG-5 resolution states that free-roll convergence is
+handled naturally ("Tustin integrator converges without clamping"). If the clamp is
+present, the Tustin substep count rule for free-roll convergence (OQ-LG-5) is moot for
+the unbraked case. The behavior difference is observable: with the clamp, $F_x = 0$
+exactly during free roll; without it, $F_x$ converges to zero over a transient governed
+by the tyre-dynamics pole frequency and the substep count.
+
+**Why the clamp was added:** In the original explicit-Euler implementation, the wheel ODE
+was numerically stiff without the clamp, and the clamp was required to suppress a limit
+cycle around $\kappa = 0$. The Tustin integrator was intended to make the clamp
+unnecessary. However, the quasi-static clamp was added (re-added) in a later session to
+address rolling-resistance deceleration behavior rather than numerical stability — a
+different rationale.
+
+**Alternatives:**
+
+1. **Keep the quasi-static free-roll clamp (current).** Document it as a deliberate
+   engineering simplification: during free roll, $\kappa = 0$ exactly, $F_x = 0$, and
+   only $F_{rr}$ (rolling resistance) decelerates the aircraft. This is the correct
+   quasi-static rolling condition and produces physically meaningful results regardless
+   of substep count.
+
+   **Benefits:** Simple; independent of substep count; physically correct for steady
+   free-roll; eliminates the tyre-dynamics spin-up transient during free roll.
+
+   **Drawbacks:** Contradicts the §4b design intent that Tustin handles free-roll
+   naturally; the OQ-LG-5 substep count rule becomes irrelevant for the unbraked case;
+   the first-contact spin-up transient (OQ-LG-7) is short-circuited for unbraked
+   contact.
+
+   **Prerequisites:** Update §4b to accurately describe the current behavior.
+
+2. **Remove the clamp and rely on Tustin convergence (per OQ-LG-5 resolution).**
+   The Tustin integrator naturally drives $\kappa \to 0$ during free roll; the tyre
+   Pacejka force acts as the restoring term. The substep count must satisfy the 3×
+   Nyquist rule from OQ-LG-5 to resolve the transient accurately.
+
+   **Benefits:** Consistent with the documented design intent; one less special case;
+   the spin-up and free-roll transients are physically resolved by the integrator.
+
+   **Drawbacks:** Requires sufficient substep count (OQ-LG-5 rule); a transient $F_x$
+   exists during free roll that can affect rollout deceleration if not fully resolved.
+
+   **Prerequisites:** Substep count set per OQ-LG-5 Nyquist rule for the aircraft
+   configuration.
+
+**Resolution:** Alternative 1 chosen. The clamp is correct defensive programming — wheel
+speed cannot physically exceed the contact-patch ground speed or go negative during
+free rolling (no brake applied).
+
+**Contact-point velocity correctness.** The speed fed to the clamp is not the CG speed
+but the full contact-patch velocity. `LandingGear::step()` computes:
+
+$$\mathbf{v}_\text{contact}^B = \mathbf{v}_\text{CG}^B + \boldsymbol{\omega}^B \times \mathbf{c}^B$$
+
+where $\mathbf{c}^B = \mathbf{p}_\text{attach}^B - r_w\,\hat{n}^B$ is the tyre contact point
+in body frame (origin at CG). $V_{cx}$ is then the forward projection of this vector.
+During a turning rollout, inner and outer wheels therefore receive different $V_{cx}$ values
+correctly reflecting the differential ground speed due to yaw rate.
+
+**Trim-aero model caveat.** `rates_body_rps` is derived from path curvature and commanded
+roll rate only — it does not include gear-induced pitch oscillation. During a straight
+gear bounce with no turn or roll, $\boldsymbol{\omega}^B = \mathbf{0}$ and
+$\mathbf{v}_\text{contact}^B = \mathbf{v}_\text{CG}^B$. This is consistent with the model:
+gear forces do not drive pitch attitude in the trim-aero EOM, so the contact-patch and CG
+velocities are correctly identical in that scenario.
+
+Update §4b to describe the clamp as a deliberate quasi-static simplification retained in
+`Aircraft`; Alternative 2 is preferred for `Aircraft6DOF`.
+
+*Implementation pending explicit instruction (§4b doc update only).*
 
 ---
 
