@@ -18,7 +18,7 @@ and OQ-LG-8 remain open and do not block any item in this plan.
 **Design authority:** [`landing_gear.md`](../design/landing_gear.md),
 [`aircraft.md`](../design/aircraft.md)
 
-**Last updated:** 2026-05-25 (OQ-LG-12, OQ-LG-13, OQ-LG-14 resolved; IP-AGF-4 and IP-AGF-5 unblocked)
+**Last updated:** 2026-05-26 (IP-AGF-2 through IP-AGF-4 complete; IP-AGF-5 partial — see implementation notes)
 
 ---
 
@@ -27,10 +27,10 @@ and OQ-LG-8 remain open and do not block any item in this plan.
 | ID | Status | Title | Depends on | Design refs |
 | --- | --- | --- | --- | --- |
 | IP-AGF-1 | done | Update §4b in `landing_gear.md`: replace open-question text with OQ-LG-11 resolution; update canonical events table "Free-roll convergence" row | — | [landing_gear.md §4b, §OQ-LG-11](../design/landing_gear.md) |
-| IP-AGF-2 | todo | Remove `applyGearGroundConstraint()` from `KinematicState.hpp` (declaration), `KinematicState.cpp` (implementation), and `Aircraft.cpp` (call + `gear_in_contact` variable) | — | [landing_gear.md §Integration Contract](../design/landing_gear.md) |
-| IP-AGF-3 | todo | Fix strut damping in `addLandingGear()` test fixture: set `damping_compression_nspm` = 2600 and `damping_extension_nspm` = 520 for all three wheel units (ζ_c ≈ 0.40, ζ_e ≈ 0.08, 5:1 ratio) | IP-AGF-2 | [landing_gear.md §OQ-LG-10 resolution](../design/landing_gear.md) |
-| IP-AGF-4 | todo | Move `kContactFiltTau_s` to named config parameter `contact_nz_filter_tau_s`; add three `FilterSS2Clip` high-pass filter members (`_nz_moment_filt`, `_ay_moment_filt`, `_roll_rate_moment_filt`) to `Aircraft`; wire ωn/ζ from per-axis FBW config fields; add JSON and proto serialization | IP-AGF-3 | [landing_gear.md §OQ-LG-9, §OQ-LG-13](../design/landing_gear.md) |
-| IP-AGF-5 | todo | Implement moment-to-perturbation paths in `Aircraft::step()`: compute $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$, derive $\Delta\Omega_x$ / $n_{z,\text{moment}}$ / $\Delta a_y$, pass each through its second-order HP filter, inject into roll-rate, n_z, and ay channels | IP-AGF-4 | [landing_gear.md §OQ-LG-9 resolution](../design/landing_gear.md) |
+| IP-AGF-2 | done | Remove `applyGearGroundConstraint()` from `KinematicState.hpp` (declaration), `KinematicState.cpp` (implementation), and `Aircraft.cpp` (call + `gear_in_contact` variable) | — | [landing_gear.md §Integration Contract](../design/landing_gear.md) |
+| IP-AGF-3 | done | Fix strut damping in `addLandingGear()` test fixture: set `damping_compression_nspm` = 2600 and `damping_extension_nspm` = 520 for all three wheel units (ζ_c ≈ 0.40, ζ_e ≈ 0.08, 5:1 ratio) | IP-AGF-2 | [landing_gear.md §OQ-LG-10 resolution](../design/landing_gear.md) |
+| IP-AGF-4 | done | Move `kContactFiltTau_s` to named config parameter `contact_nz_filter_tau_s`; add three `FilterSS2Clip` high-pass filter members (`_nz_moment_filt`, `_ay_moment_filt`, `_roll_rate_moment_filt`) to `Aircraft`; wire ωn/ζ from per-axis FBW config fields; add JSON and proto serialization | IP-AGF-3 | [landing_gear.md §OQ-LG-9, §OQ-LG-13](../design/landing_gear.md) |
+| IP-AGF-5 | partial | Implement moment-to-perturbation paths in `Aircraft::step()`: compute $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$, derive $\Delta\Omega_x$ / $n_{z,\text{moment}}$ / $\Delta a_y$, pass each through its second-order HP filter, inject into roll-rate, n_z, and ay channels | IP-AGF-4 | [landing_gear.md §OQ-LG-9 resolution](../design/landing_gear.md) |
 
 **IP-AGF-3 ordering note:** IP-AGF-3 depends on IP-AGF-2 so that the corrected gear
 physics are in place before the test damping fix is validated. The test was written
@@ -50,30 +50,81 @@ parameter; additionally blocked by OQ-LG-13 ($\tau_{hp}$ value).
 
 ## Notes
 
-**`applyGearGroundConstraint` has no design authority (IP-AGF-2).** The function was
-added in a prior session to suppress the $F_z\sin\gamma$ coupling during gear bounce.
-OQ-LG-10 concluded that the coupling is physically correct and the correct remedy is
-adequate gear damping, not a velocity clamp. The `gear_in_contact` local variable in
-`Aircraft::step()` has no remaining use after the call is removed and must be deleted
-together with it.
+**`applyGearGroundConstraint` removed (IP-AGF-2 — done).** The function was removed from
+`KinematicState` and the call site in `Aircraft::step()`. OQ-LG-10 concluded that the
+$F_z\sin\gamma$ coupling is physically correct; the correct remedy is adequate gear damping,
+not a velocity clamp.
 
-**Damping target derivation (IP-AGF-3).** For the `addLandingGear` fixture: mass = 1045
-kg (from `makeConfig()`), k = 20000 N/m (unchanged). Formula: b = ζ × √(2km).
-Target ζ_c = 0.40 → b_c = 0.40 × √(2 × 20000 × 1045) = 0.40 × 6465 ≈ 2586, rounded
-to 2600. Target ζ_e = b_c / 5 / 6465 ≈ 0.080 → b_e = 2600 / 5 = 520. All three wheel
-units in the fixture use identical parameters and must all be updated.
+**Test fixture aircraft model.** The `addLandingGear` fixture is built on `makeConfig()`,
+a synthetic C172-class aircraft: mass = 1045 kg, S_ref = 16.2 m², AR = 7.47, CL_max = 1.80,
+V_ne = 82.3 m/s. These parameters match published Cessna 172S data closely (the wing area
+is exact). The fixture is not formally declared as a C172; it is a synthetic model calibrated
+to GA light-single data.
 
-**Expected test outcome after IP-AGF-2 + IP-AGF-3.** Rolling resistance force:
-F_rr = 0.02 × m × g ≈ 205 N. Deceleration: 205 / 1045 ≈ 0.196 m/s². Time from 15 m/s
-to 0.5 m/s: ≈ 74 s — within the 90 s test window.
+**Damping target derivation (IP-AGF-3 — done).** For the `addLandingGear` fixture: mass
+= 1045 kg, k = 20000 N/m per wheel (3 wheels → k_total = 60000 N/m). ζ_e = 520 /
+(2 × sqrt(20000 × 1045/3)) = 520 / 5281 ≈ 0.099. This is the per-wheel damping ratio.
+See OQ-LG-15 for the observed consequence.
 
-**OQ-LG-12 axis-swap concern.** The OQ-LG-9 resolution text assigns wind-z → n_z and
-wind-y → ay. In the `Aircraft` wind frame (x forward, y lateral, z lift), a moment about
-y (lateral) is pitch and drives n_z; a moment about z (lift) is yaw and drives ay. The
-OQ-LG-9 y/z assignment may be swapped. OQ-LG-12 must be resolved by reading
-`Aircraft::step()` before IP-AGF-4 is begun.
+**Actual test outcome (IP-AGF-2 + IP-AGF-3).** The `LandingGear_FullStop_SpeedNearZero`
+test still fails at 5.1 m/s after 90 s. The predicted 0.196 m/s² deceleration holds from
+t=0 to t≈79 s, at which point a gear bounce limit cycle establishes a terminal velocity
+near 5 m/s. The root cause is unresolved; the energy source that sustains the terminal
+velocity has not been conclusively identified. See OQ-LG-15 in [`landing_gear.md`](../design/landing_gear.md).
 
-**Proto field for `_n_z_moment_filt` (IP-AGF-4).** Follows the same pattern as
-`_n_contact_z_filt` (added in IP-LGD-3 through IP-LGD-6 in
-[`landing_gear_dynamics.md`](landing_gear_dynamics.md)). The field is filter state (not
-config), so it belongs in `AircraftState` and is serialized in both JSON and proto round-trips.
+**OQ-LG-15 root cause confirmed (as of 2026-05-31).** The diagnostic test
+`LandingGear_FullStop_OQ_LG15_Diagnostic` (300 s, full-resolution per-step CSV) has
+identified the mechanism. It is **not** the previously hypothesized aerodynamic energy
+injection or gear-spring bounce limit cycle. The confirmed mechanism is a numerical
+artifact: a periodic **+22,717 N forward impulse** (every 2.411 s) caused by **deep
+single-step gear penetration** — the aircraft descends while airborne, then the
+quasi-static strut model registers the full penetration depth (δ ≈ 0.081 m) in one step,
+producing a 4 m/s one-step closing rate and a ~10 kN damping spike. The α = 0
+wheelbarrowing (main gear airborne since t = 38.4 s; LFA holds zero lift with no
+dynamic-pressure washout) supplies the nose-up attitude that projects this spike forward.
+Three contributing defects: (1) quasi-static strut with no rate limit; (2) α = 0
+wheelbarrowing from missing LFA dynamic-pressure washout; (3) one-step contact detection.
+See [`landing_gear.md` §OQ-LG-15](../design/landing_gear.md) for the full analysis,
+diagnostic figures (10 plots in [`docs/design/img/`](../design/img/)), and the candidate
+fixes (sub-step the gear, strut ODE, LFA washout, in-step contact detection, or re-scope
+the test to the `Aircraft` validity bound). OQ-LG-15 remains **open** pending a fix
+decision; `damping_extension_nspm` tuning and brake torque are both rejected as masking.
+
+**IP-AGF-4 changes delivered.** `_contact_nz_filter_tau_s` moved from a compile-time
+constant to a JSON config field. The three HP moment filters (`_nz_moment_filt`,
+`_ay_moment_filt`, `_roll_rate_moment_filt`) were added to `Aircraft`. JSON and proto
+serialization were extended for all new state. A `_wow0_elapsed_s` member was also added
+as part of the n_z suppression redesign (see design deviation note below).
+
+**IP-AGF-5 partial (nz_moment path disabled).** The ay and roll-rate moment perturbation
+paths are active in `Aircraft::step()`. The nz_moment subtraction from n_z_shaped is
+intentionally commented out pending further investigation. The comment reads:
+`// n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);`. No test covers the
+nz_moment path; IP-AGF-5 is therefore not complete.
+
+**Design deviation — n_z suppression filter redesigned without consultation.**
+The design document (`landing_gear.md` §Integration Contract §2) specifies a simple
+first-order lag (τ = 0.10 s, now the config parameter `contact_nz_filter_tau_s`). During
+implementation, the simple lag was found insufficient: brief WoW=0 bounce episodes
+(≈0.06 s) allowed nzfilt to decay from 1.0 to 0.942, causing the LFA to target
+alpha ≈ 16° at V ≈ 6 m/s (sub-stall), injecting aerodynamic energy. The filter was
+redesigned to a two-speed hold-time scheme:
+
+- **WoW=1 (or _body_in_hard_contact):** nzfilt = 1.0 instantly (or driven by raw = 2 − n_z_shaped).
+- **WoW=0, elapsed < τ_hold:** hold nzfilt at its current value (no decay). τ_hold = 10 × τ_engage = 1.0 s.
+- **WoW=0, elapsed ≥ τ_hold:** slow exponential decay at τ_decay = τ_hold = 1.0 s.
+
+Two new members were added to `Aircraft` without design-document authority: `_wow0_elapsed_s`
+(elapsed seconds since WoW last went to zero) and the `_body_in_hard_contact` handling path
+in the filter block. JSON field `wow0_elapsed_s` and proto field 33 (`wow0_elapsed_s` in
+`AircraftState`) were added accordingly. The `landing_gear.md` §Integration Contract §2 has
+been updated to reflect this algorithm.
+
+**Debug printf in production code.** `Aircraft::step()` contains a diagnostic print block
+(guarded by `_has_landing_gear && (time_sec < 5.0 || time_sec > 87.0)`) and the
+`LandingGear_FullStop_SpeedNearZero` test prints to stdout every 25 steps. Both must be
+removed once the FullStop test resolution is agreed and OQ-LG-15 is closed.
+
+**OQ-LG-12, OQ-LG-13, OQ-LG-14 resolved.** These are all marked resolved in
+`landing_gear.md`. OQ-LG-13 resolution determined that the HP filters reuse existing FBW
+ωn/ζ parameters (no new config field needed beyond `contact_nz_filter_tau_s`).

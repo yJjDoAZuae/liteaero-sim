@@ -177,15 +177,32 @@ effect or a model fidelity limitation of the wind-frame integrator is an open qu
 (OQ-LG-10).
 
 **2. Commanded load-factor reduction (n_z suppression).**
-The NED-upward component of the contact force is projected onto the aircraft weight to
-compute a contact load fraction:
+The contact forces reduce the commanded $n_z$ fed to the LFA so that the aerodynamic lift
+system does not simultaneously target a full commanded load factor while the gear is already
+providing the required normal force. The suppression value $n_{\text{contact},z,\text{filt}}$
+is subtracted from the shaped $n_z$ command before the LFA solve:
 
-$$n_{\text{contact},z,\text{raw}} = \frac{-F_{\text{contact,NED},z}}{m g}$$
+$$n_{z,\text{shaped}} = \max\!\bigl(0,\; n_{z,\text{shaped}} - n_{\text{contact},z,\text{filt}}\bigr)$$
 
-This is filtered through a first-order lag ($\tau = 0.10$ s) to produce
-$n_{\text{contact},z,\text{filt}}$, which is subtracted from the commanded $n_z$ before
-the LFA solve. This prevents the aerodynamic lift system from simultaneously targeting
-full commanded $n_z$ while the gear is already providing the required normal force.
+The filter uses a **two-speed hold-time** scheme driven by the `weight_on_wheels` flag and
+the `_body_in_hard_contact` flag (set when the terrain hard constraint fires):
+
+| State | Condition | Action |
+| --- | --- | --- |
+| Hard contact | `_body_in_hard_contact` | First-order lag toward raw = 2 − n_z_shaped at τ_engage |
+| WoW engaged | `weight_on_wheels && !_body_in_hard_contact` | Snap nzfilt = 1.0 instantly; reset hold timer |
+| WoW hold | `!weight_on_wheels` and elapsed < τ_hold | Hold nzfilt at current value; no decay |
+| WoW decay | `!weight_on_wheels` and elapsed ≥ τ_hold | Exponential decay at τ_decay = τ_hold |
+
+Parameters: τ_engage = `contact_nz_filter_tau_s` (config, default 0.10 s); τ_hold = 10 × τ_engage
+(= 1.0 s for the default). The hold window covers one gear natural period, preventing brief
+WoW=0 bounce episodes from releasing suppression and allowing the LFA to inject aerodynamic
+energy. Genuine takeoff — WoW=0 sustained beyond τ_hold — releases suppression via the slow
+decay (τ_decay = τ_hold).
+
+State member `_wow0_elapsed_s` tracks elapsed seconds since WoW last transitioned to zero.
+It is reset to zero on WoW=1 or hard contact, and incremented by the integration timestep
+on WoW=0. It is serialized in both JSON (`wow0_elapsed_s`) and proto (AircraftState field 33).
 
 **3. Moment perturbations (intended design — not yet implemented).**
 `moment_body_nm` is assembled by `LandingGear::step()` but is **not currently applied**.
@@ -516,6 +533,173 @@ contact model to avoid discontinuities at touchdown.
 
 ---
 
+### 7. Gear Oscillation Stability — Describing Function Analysis
+
+Landing gear systems are susceptible to two distinct oscillatory instabilities driven by
+nonlinear contact mechanics: **vertical bounce limit cycles** and **wheel shimmy**. Both
+are real in-service phenomena and require formal stability analysis before a gear design
+can be declared fit for purpose. The describing function (DF) method is the standard
+nonlinear frequency-domain tool: it replaces the nonlinear element with an
+amplitude-dependent equivalent gain $N(A)$ and applies the Nyquist criterion via
+$N(A)\,G(j\omega) = -1$ to determine whether limit cycles can exist and at what amplitude.
+
+#### 7a. Contact Nonlinearity and Its Describing Function
+
+The fundamental nonlinearity in the gear model is the **one-sided contact spring**: when
+the strut is compressed ($\delta > 0$) it produces a restoring force; when the wheel is
+airborne ($\delta \leq 0$) the force is zero. For a sinusoidal perturbation
+$\hat{\delta} = A\sin(\omega t)$ about the static equilibrium deflection
+$\delta_0 = mg / k_\text{total}$, the spring behaves as a biased half-wave rectifier.
+
+Define $\varphi = \arcsin(\delta_0/A) \in [0, \pi/2]$ as the angle at which the aircraft
+just lifts off each cycle. The describing function is:
+
+$$N(A) = \begin{cases}
+k_\text{total} & A \leq \delta_0 \quad\text{(always in contact, linear regime)} \\[6pt]
+\dfrac{k_\text{total}}{\pi}\!\left[
+  \dfrac{\pi}{2} + \arcsin\!\!\left(\dfrac{\delta_0}{A}\right)
+  + \dfrac{\delta_0}{A}\sqrt{1-\!\left(\dfrac{\delta_0}{A}\right)^{\!2}}\,
+\right] & A > \delta_0 \quad\text{(periodic liftoff)}
+\end{cases}$$
+
+The describing function is real-valued (no phase shift), monotonically decreasing in $A$,
+and continuous at $A = \delta_0$:
+- $A \to \delta_0^+$: $N \to k_\text{total}$
+- $A \to \infty$: $N \to k_\text{total}/2$ (half-cycle contact per period)
+
+For the test fixture ($m = 1045$ kg, $k = 20\,000$ N/m per wheel, three wheels):
+
+$$k_\text{total} = 60\,000\;\text{N/m}, \qquad
+\delta_0 = \frac{mg}{k_\text{total}} = \frac{10\,255}{60\,000} = 0.171\;\text{m}$$
+
+Vertical oscillations with amplitude $A < 0.171$ m remain in the linear regime. The
+linear natural frequency is $\omega_n = \sqrt{k_\text{total}/m} = 7.57$ rad/s
+($T \approx 0.83$ s).
+
+#### 7b. Vertical Bounce — Limit Cycle Conditions
+
+For vertical motion, the plant is a double integrator (mass only):
+
+$$G_\text{bounce}(j\omega) = -\frac{1}{m\omega^2}$$
+
+The Nyquist limit cycle condition $N(A)\,G_\text{bounce}(j\omega) = -1$ reduces to:
+
+$$N(A) = m\omega^2$$
+
+This gives a family of resonant amplitudes as a function of frequency:
+- For $A \leq \delta_0$: $N = k_\text{total} \Rightarrow \omega = \omega_n$.
+- For $A > \delta_0$: $N < k_\text{total} \Rightarrow \omega < \omega_n$ — the resonant
+  frequency decreases with bounce amplitude. A hard bounce with $A \gg \delta_0$ oscillates
+  near $\omega_n / \sqrt{2}$.
+
+**Whether a limit cycle grows or decays** depends entirely on the net energy per cycle.
+The asymmetric damping dissipates energy on both strokes:
+
+$$\Delta E_\text{damp}(A, \omega) = \frac{\pi}{2}\,A^2\,\omega\,(b_c + b_e)$$
+
+This is always positive — damping removes energy regardless of the $b_c/b_e$ ratio. Low
+$b_e$ (fast rebound, slow decay) does **not** inject energy; it merely prolongs the
+oscillation. This DF analysis describes the *physical* gear-spring bounce mode. Note that
+the `LandingGear_FullStop` terminal-velocity behavior (OQ-LG-15) is **not** this spring
+limit cycle: the diagnostic shows it is a numerical artifact (deep single-step penetration
+producing a one-step forward impulse), oscillating at the contact sampling rate rather than
+the spring natural frequency. The DF spring-mode analysis here remains valid for assessing
+genuine multi-cycle bounce behavior at adequate substep resolution.
+
+**Design criterion — extension damping.** The extension stroke must dissipate enough
+energy per cycle that the bounce amplitude decays to 50% within 3 natural periods
+($t_{50\%} \leq 3T$). Solving $e^{-\zeta_e \omega_n t_{50\%}} = 0.5$ for the
+single-wheel approximation:
+
+$$\zeta_e = \frac{b_e}{2\sqrt{k\,m/3}} \geq 0.18$$
+
+At $\zeta_e = 0.099$ (current test fixture), the 50% decay time is $t_{50\%} \approx 6T
+\approx 5$ s — the bounce requires roughly twice the target number of cycles to halve
+its amplitude, making the system susceptible to limit cycling whenever any energy coupling
+is present.
+
+#### 7c. Wheel Shimmy
+
+Wheel shimmy is a **lateral** oscillation of the nose (or main) wheel about its swivel
+axis, driven by the lag between heading change and tyre lateral force development. It is
+independent of the vertical bounce mode and occurs at much higher frequencies
+($f_\text{shimmy} = V / (2\pi\sigma)$, typically 10–40 Hz). Wheel shimmy has caused
+structural failure of nose-wheel assemblies in service and is a required design analysis
+item for any castoring nose wheel (FAR 25.499, MIL-HDBK-516C).
+
+**Mechanism.** After a lateral disturbance, the tyre develops its restoring lateral force
+only after traveling a path length of approximately $\sigma$ — the **relaxation length**
+(roughly 0.3–0.5 × tyre radius). This lag creates a phase delay between the geometric
+yaw perturbation and the restoring moment. At the critical speed this phase delay reaches
+180°, and the moment drives the oscillation rather than suppressing it.
+
+**Governing parameters (nose wheel):**
+
+| Symbol | Quantity | Typical C172-class value |
+| --- | --- | --- |
+| $l$ | Mechanical caster arm (swivel offset from contact patch) | 0.05–0.10 m |
+| $e$ | Pneumatic trail (additional contact-force offset) | 0.02–0.04 m |
+| $\sigma$ | Tyre lateral relaxation length | 0.03–0.06 m |
+| $C_\alpha$ | Tyre cornering stiffness | 20,000–40,000 N/rad |
+| $I_\psi$ | Nose wheel assembly yaw inertia | 0.5–2.0 kg·m² |
+| $c_\psi$ | Swivel damper coefficient | 50–200 N·m·s/rad |
+
+**Linearized stability analysis.** Combining the nose wheel yaw equation with the
+relaxation-length tyre dynamics gives the third-order characteristic polynomial:
+
+$$\frac{I_\psi \sigma}{V}\,s^3
++ \!\left(I_\psi + \frac{c_\psi \sigma}{V}\right)\!s^2
++ \!\left(c_\psi + \frac{C_\alpha(l+e)\,l}{V}\right)\!s
++ C_\alpha(l+e) = 0$$
+
+By the Routh–Hurwitz criterion, the stability boundary is:
+
+$$\left(I_\psi + \frac{c_\psi \sigma}{V}\right)\!\left(c_\psi + \frac{C_\alpha(l+e)\,l}{V}\right)
+= \frac{I_\psi \sigma\,C_\alpha(l+e)}{V}$$
+
+**Key result — no damper ($c_\psi = 0$).** The Routh condition reduces to $l > \sigma$.
+A caster arm shorter than the tyre relaxation length will shimmy at all forward speeds
+without a damper. For $l \approx \sigma$ — common in light GA designs — a swivel damper
+is always required for shimmy margin.
+
+**Describing function for limit cycle amplitude.** Above the stability boundary the
+shimmy amplitude is bounded by tyre lateral force saturation at
+$F_{y,\text{max}} = \mu_y N_z$. Treating this as a symmetric saturation nonlinearity
+with linear slope $C_\alpha$, the DF is:
+
+$$N_\text{shimmy}(A_\psi) = \frac{2C_\alpha}{\pi}\!\left[
+  \arcsin\!\left(\frac{F_{y,\text{max}}}{C_\alpha A_\psi}\right)
+  + \frac{F_{y,\text{max}}}{C_\alpha A_\psi}
+    \sqrt{1-\!\left(\frac{F_{y,\text{max}}}{C_\alpha A_\psi}\right)^{\!2}}
+\right]$$
+
+for $C_\alpha A_\psi > F_{y,\text{max}}$ (saturation reached); $N_\text{shimmy} = C_\alpha$
+below saturation. Substituting into the closed-loop condition $N_\text{shimmy}(A_\psi)\,
+G_\text{shimmy}(j\omega_\text{shimmy}) = -1$ and solving numerically gives the
+limit cycle yaw amplitude $A_\psi$.
+
+**Shimmy frequency** is dominated by the tyre lag pole:
+$\omega_\text{shimmy} \approx V / \sigma$, so $f_\text{shimmy} = V/(2\pi\sigma)$.
+For $V = 20$ m/s and $\sigma = 0.05$ m: $f \approx 64$ Hz.
+
+**Current model limitation.** The `LandingGear` model does not include swivel inertia
+$I_\psi$, swivel damper $c_\psi$, tyre relaxation length $\sigma$, or pneumatic trail
+$e$. It therefore **cannot simulate shimmy** and provides no shimmy margin assessment.
+This is an acceptable gap for the autotakeoff/autolanding verification use case but would
+be a blocking deficiency for ground-dynamics certification analysis.
+
+#### 7d. Design Criteria Summary
+
+| Mode | Parameter | Design target | Consequence of violation |
+| --- | --- | --- | --- |
+| Vertical bounce | $\zeta_e$ (extension damping ratio) | $\geq 0.20$ | Bounce persists $>5$ s; susceptible to limit cycling from any energy coupling |
+| Vertical bounce | $\zeta_c$ (compression damping ratio) | $\geq 0.30$ | Insufficient touchdown energy absorption |
+| Nose wheel shimmy | Caster geometry | $l > \sigma$ | Shimmy at all speeds without damper |
+| Nose wheel shimmy | Swivel damper | $c_\psi > C_\alpha\sigma l\bigl[(V_\text{max}/V_{\text{crit},0})^2 - 1\bigr]$ | Shimmy above $V_\text{crit}$ |
+| Nose wheel shimmy | Model fidelity | $\sigma$, $e$, $I_\psi$, $c_\psi$ all parameterized | Cannot assess shimmy margin without full caster model |
+
+---
+
 ## Force Assembly
 
 The per-wheel contact forces are rotated from the wheel frame into the body frame and
@@ -694,6 +878,7 @@ simulation rate.
 | OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
 | OQ-LG-13 | ~~High-pass filter design for moment perturbation paths: τ_hp value and config parameter name~~ **Resolved: second-order high-pass; reuse per-axis FBW filter parameters (ωn, ζ); no new config parameters needed** | — |
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
+| OQ-LG-15 | LandingGear_FullStop_SpeedNearZero: deep single-step gear penetration produces a periodic +22.7 kN forward-impulse artifact, sustained by α=0 wheelbarrowing; root cause confirmed, fix pending | Blocking for `LandingGear_FullStop_SpeedNearZero` |
 
 ---
 
@@ -1551,6 +1736,271 @@ floor. Therefore $\mathbf{M}^W \propto V$ near zero, and the perturbations go as
 near standstill — well-behaved without any additional floor or gating.
 
 *No code action required.*
+
+---
+
+### OQ-LG-15 — LandingGear_FullStop_SpeedNearZero: Periodic Forward-Impulse Artifact From Deep Single-Step Gear Penetration
+
+**Question:** The `LandingGear_FullStop_SpeedNearZero` scenario test — aircraft at V = 15 m/s
+must decelerate to < 0.5 m/s within 90 s via rolling resistance — instead settles into a
+slowly-decaying limit cycle near 5 m/s. What is the root cause, and what is the correct fix?
+
+**Test fixture aircraft model.** The fixture uses `makeConfig()`, a synthetic C172-class
+aircraft: mass = 1045 kg, S_ref = 16.2 m², AR = 7.47, CL_max = 1.80, V_ne = 82.3 m/s.
+These parameters match published Cessna 172S data closely (wing area is exact). The
+fixture is not formally declared as a C172; it is a synthetic model calibrated to GA
+light-single data.
+
+> **Note on prior analysis (superseded 2026-05-31).** Earlier revisions of this open
+> question hypothesized an aerodynamic "energy injection" via $F_\text{wind,x} =
+> -F_\text{spring}\sin\alpha_0$ and a gear-spring bounce limit cycle at the spring natural
+> frequency (1.21 Hz). The full-resolution diagnostic (`LandingGear_FullStop_OQ_LG15_Diagnostic`)
+> has refuted both. The actual mechanism is a numerical artifact described below. All
+> superseded hypotheses have been removed from this section; version control retains them.
+
+#### Root cause (confirmed by full-resolution diagnostic)
+
+The diagnostic test `LandingGear_FullStop_OQ_LG15_Diagnostic` logs every state, force, and
+attitude at the full 0.02 s timestep for 300 s. The data establish a definite mechanism:
+
+**1. The aircraft wheelbarrows on the nose gear from t = 38.4 s onward.** As speed drops
+through V ≈ 6.3 m/s the main gear leaves the ground and never returns (Figures 2, 3). The
+LFA holds α = 0° throughout (lift fully suppressed by `n_contact_z_filt` = 1), so body
+pitch tracks the flight-path angle. The nose-down attitude during descent puts the nose
+wheel lower than the mains; the aircraft rides on the nose wheel alone for the rest of the
+run (Figure 4 confirms main-gear contact patches stay 30–50 mm above terrain).
+
+**2. The limit cycle has two timescales** (Figure 1):
+
+- A **high-frequency backward-impulse train** at 17.3 Hz. Each nose-wheel contact lasts
+  exactly one timestep and applies a backward force averaging −1,686 N (wind-frame x),
+  removing ≈ 0.0115 m/s per impulse. About 40 such impulses occur per limit-cycle period.
+- A **low-frequency forward spike** every 2.411 s (0.41 Hz). A single timestep applies a
+  **+22,717 N forward impulse** (≈ 22 × aircraft weight), adding **+0.476 m/s** in one
+  step. This exactly resets the speed that the backward-impulse train bled off.
+
+The two nearly balance, producing a quasi-stable speed near 5 m/s that decays only very
+slowly (the test's required 0.2 m/s² rolling deceleration is absent because the aircraft
+is airborne 65% of the time and the single contacting wheel carries little normal force).
+
+**3. The forward spike is a deep-single-step-penetration artifact** (Figure 2). Every spike
+occurs under identical conditions: the aircraft is descending at vD ≈ 0.30 m/s while
+airborne, then on one contact step the quasi-static strut model sets the deflection
+directly to the full penetration depth (δ ≈ 0.081 m) reached during the airborne descent.
+The finite-difference rate estimate is then
+
+$$\dot\delta = \frac{\delta^k - \delta^{k-1}}{\Delta t} = \frac{0.081 - 0}{0.02} \approx 4.05\ \text{m/s},$$
+
+which drives an enormous damping force $F_\text{damp} = b_c\,\dot\delta \approx 2{,}600
+\times 4.05 \approx 10{,}500$ N on the compression stroke (plus the spring term). This
+single-step force, transformed through the body/wind attitude — which has just flipped
+nose-up because the bounce reversed vD and the α = 0 constraint ties pitch to the
+flight-path angle — appears as a +22.7 kN component along the velocity vector. The result
+is a large spurious forward velocity increment in one step.
+
+**Why this is a numerical artifact, not physics.** A real strut compressing at 4 m/s would
+do so over a finite stroke time, with the contact force building and releasing smoothly;
+the unsprung mass and tyre compliance would limit the rate. The quasi-static model
+(§2c, no unsprung mass, δ set from instantaneous geometry) collapses the entire
+penetration into one 0.02 s step, so the damping term sees a one-step closing rate of
+4 m/s that has no physical counterpart. The forward projection then arises because the
+force transform uses an attitude that is itself an artifact of the α = 0 wheelbarrowing
+(see LFA washout note below). No real gear injects 22 kN of forward thrust during a taxi
+rollout.
+
+**Contributing model defects (all required for the artifact to appear):**
+
+1. **Quasi-static strut with no rate limit.** Deep one-step penetration → 4 m/s closing
+   rate → ~10 kN damping spike. A strut ODE with unsprung mass, or a sub-stepped contact
+   solver, would not produce this.
+2. **α = 0 wheelbarrowing.** The LFA commands α directly with no dynamic-pressure washout,
+   so it holds zero lift and drives the nose-down/nose-up pitch oscillation that both
+   causes the nose-only contact and provides the attitude that projects the spike forward.
+3. **One-step contact detection.** Contact is evaluated once per outer step; a wheel that
+   descends a large distance while "airborne" registers its full penetration in a single
+   step rather than at the moment of crossing.
+
+**Quantified limit-cycle balance (t = 290–300 s):**
+
+| Component | Value |
+| --- | --- |
+| Forward spike magnitude | +22,717 N (wind-x), +0.476 m/s per event |
+| Forward spike period | 2.411 s (0.41 Hz) |
+| Strut deflection at spike | 0.081 m (single-step) |
+| vD just before spike | +0.30 m/s (descending) |
+| Backward impulse (high-freq) | −1,686 N avg, −0.0115 m/s each, 17.3 Hz |
+| Backward impulses per cycle | ≈ 40 |
+| Net speed change per cycle | ≈ 0 (40 × −0.0115 + 0.476 ≈ +0.02 m/s) |
+
+**Diagnostic figures.** Generated from `build/test/oq_lg15_diagnostic.csv` by
+`docs/design/img/plot_oq_lg15.py`.
+
+![Impulse mechanism](img/oq_lg15_impulse_mechanism.png)
+
+**Figure 1 — THE MECHANISM.** Wind-frame gear force (top) and forward speed (bottom),
+t = 290–296 s. The high-frequency backward-impulse train bleeds speed down; a single
++22.7 kN forward spike every 2.41 s (red markers) resets it. This is the core finding.
+
+![Spike anatomy](img/oq_lg15_spike_anatomy.png)
+
+**Figure 2 — Anatomy of one forward-spike event.** Strut deflection, vertical speed,
+pitch/flight-path angle, and gear force across 12 timesteps spanning one spike. The deep
+single-step penetration (δ jumps to 0.08 m), the vD reversal, the nose-up pitch flip, and
+the +22.7 kN force all occur on the same step.
+
+**Supporting figures.**
+
+![Forward speed 0–300 s](img/oq_lg15_forward_speed.png)
+
+**Figure 3 — Forward speed over 300 s.** Speed at t = 300 s is 5.068 m/s vs. 5.136 m/s at
+t = 90 s — a slowly-decaying limit cycle, not a hard equilibrium. The decay is far too slow
+to reach the 0.5 m/s pass threshold because rolling deceleration is largely absent during
+wheelbarrowing.
+
+![Full timeline: struts, speed, pitch](img/oq_lg15_full_timeline.png)
+
+**Figure 4 — Full 300 s timeline.** Shows strut deflections, forward speed, and pitch
+over the complete run. Main gear leaves the ground at t = 38.4 s and never returns.
+Pitch oscillates through ±2° in the nose-bounce phase; alpha is 0° throughout (LFA
+holding zero lift).
+
+![Wheelbarrowing transition detail](img/oq_lg15_wheelbarrow_transition.png)
+
+**Figure 5 — Wheelbarrowing transition, t = 34–45 s.** Main gear deflection decreases
+from ~0.015 m to zero as speed drops through 6.3 m/s. The aircraft transitions from
+all-wheel contact to nose-only wheelbarrowing at V ≈ 6.3 m/s.
+
+![Per-wheel contact patch AGL](img/oq_lg15_wheel_agl.png)
+
+**Figure 6 — Per-wheel contact patch AGL, t = 290–300 s.** Shows the altitude of each
+wheel's contact patch above the terrain. The nose wheel oscillates across the ground
+line (AGL = 0) at 17.3 Hz. Both main gear contact patches remain 30–50 mm above the
+terrain throughout, explaining why they show zero strut deflection despite the aircraft
+being at low altitude.
+
+![Per-wheel strut deflections 290–300 s](img/oq_lg15_strut_deflection.png)
+
+**Figure 7 — Per-wheel strut deflections, t = 290–300 s.** Each wheel on its own axis
+with appropriate scale. Left and right main are confirmed zero on a 0–10 mm scale.
+Nose strut maximum = 0.084 m.
+
+![Forward and vertical speed 290–300 s](img/oq_lg15_vn_vd_coupled.png)
+
+**Figure 8 — Forward and vertical speed, t = 290–300 s.** Contact events (shaded)
+aligned with vertical speed reversal. WoW = 1 shown as a top band (positive, in legend).
+
+![Contact force and energy 290–300 s](img/oq_lg15_contact_power.png)
+
+**Figure 9 — Contact force and energy decomposition, t = 290–300 s.** Shows NED-north
+contact force, horizontal power (F_NED-x · V_N), and total contact power. The
+NED-frame force logged here is computed with the post-step attitude and does **not**
+equal the wind-frame force the EOM applies with the start-of-step attitude — the two
+differ by a one-step attitude rotation, which is itself part of the artifact (see root
+cause §3). The wind-frame force in Figures 1–2 is the quantity that actually moves the
+aircraft.
+
+**Key findings from the diagnostic run (as of 2026-05-31):**
+
+| Quantity | Value |
+| --- | --- |
+| Speed at t = 300 s | 5.068 m/s (slowly-decaying limit cycle, not a hard equilibrium) |
+| Main gear leaves ground | t = 38.4 s, V ≈ 6.3 m/s — never returns |
+| Aircraft airborne fraction (t=290–300 s) | 65.4% |
+| Contacting wheel | Nose only; main gear AGL = +30–50 mm throughout |
+| Max nose strut deflection (t=290–300 s) | 0.084 m (0.49 × δ₀) |
+| Alpha throughout run | 0.00° (LFA holds zero-lift AoA) |
+| Pitch range (t=290–300 s) | −3.7° to +3.5° (oscillates each step) |
+| Forward spike | +22,717 N, +0.476 m/s, every 2.411 s (0.41 Hz) |
+| Backward impulse train | −1,686 N avg, −0.0115 m/s each, 17.3 Hz |
+| Theoretical gear natural frequency | 1.21 Hz (not the observed frequency) |
+
+**Wheelbarrowing — why the nose carries the contact.** The LFA holds α = 0° throughout
+because `n_contact_z_filt` = 1 suppresses all commanded lift. With α = 0, body pitch
+equals the flight-path angle. During descent the aircraft is nose-down, which puts the
+nose attach point (2 m forward, 0.5 m below CG) geometrically lower than the main gear
+attach points (0.5 m aft). The nose wheel touches and rebounds before the altitude drops
+far enough for the mains; Figure 6 confirms the main gear contact patches stay 30–50 mm
+above terrain throughout.
+
+**LFA dynamic-pressure washout — model fidelity gap.** A physical FBW system generates
+pitch moment through control surfaces: $M_\text{pitch} = q\,S\,\bar{c}\,C_m$. As dynamic
+pressure $q$ falls during rollout from 15 m/s to 5 m/s, pitch authority drops to
+$(5/15)^2 = 11\%$ of its approach-speed value — a real controller would lose the ability
+to hold the nose-down attitude at taxi speed. The `Aircraft` LFA commands $\alpha$ directly
+with no dynamic-pressure weighting, so it retains full authority at 5 m/s. This sustains
+the α = 0 wheelbarrowing that is a precondition for the forward-spike artifact. Adding a
+dynamic-pressure washout to the LFA pitch authority is a candidate fix (see Alternatives).
+
+**Why the bounce is at 17.3 Hz, not 1.21 Hz.** The observed bounce frequency is not the
+gear spring resonance. Each contact lasts exactly one timestep; the period is set by the
+ballistic arc time between one-step contacts, not by $\sqrt{k/m}$. This is consistent with
+the single-step-penetration mechanism: the gear never executes a multi-step spring
+oscillation — it touches, fires a one-step impulse, and rebounds.
+
+**Alternatives.** The root cause is now identified (deep single-step gear penetration
+producing a spurious forward impulse, sustained by α = 0 wheelbarrowing). The fix must
+address one or more of the three contributing defects. The diagnostic test
+(`LandingGear_FullStop_OQ_LG15_Diagnostic`, 300 s with full-resolution CSV logging) is
+retained as a permanent diagnostic and is not part of the fix.
+
+1. ~~**Increase extension damping in the test fixture.**~~ **Rejected by design authority.**
+   Masks the artifact without correcting it; it would remain in every other ground scenario.
+
+2. **Sub-step the gear contact (increase `substeps`).** Raising the gear substep count
+   subdivides the outer step so a deep penetration is resolved over several sub-steps
+   instead of collapsing into one 4 m/s closing-rate spike. This directly attacks defect
+   #1 (the dominant one). **Benefit:** targets the actual force spike; no change to the
+   physics model. **Drawback:** does not remove the underlying quasi-static discontinuity,
+   only reduces its per-step magnitude; the spike amplitude scales with how deep the
+   aircraft sinks between contact checks, so very fast descents could still spike.
+   **Prerequisite:** confirm by re-running the diagnostic at `substeps` = 4, 8, 16 that the
+   forward spike magnitude falls as expected.
+
+3. **Replace the quasi-static strut with a strut ODE (unsprung mass + tyre compliance).**
+   Integrating a second-order strut model (OQ-LG-4) removes the instantaneous δ-from-geometry
+   assumption entirely, so the closing rate is a physical state, not a one-step finite
+   difference. **Benefit:** eliminates defect #1 at the source; also the correct model for
+   `Aircraft6DOF`. **Drawback:** larger change; reintroduces the strut ODE stability
+   constraint the quasi-static model was chosen to avoid. **Prerequisite:** resolve OQ-LG-4.
+
+4. **Add dynamic-pressure washout to the LFA pitch authority.** Weight the LFA's α command
+   by $q/q_\text{ref}$ so pitch authority fades at low speed, as a real FBW system does.
+   This attacks defect #2: without the held α = 0 nose-down/nose-up oscillation, the
+   wheelbarrowing (and the nose-up attitude that projects the spike forward) would not be
+   sustained. **Benefit:** improves model fidelity generally, not just for this test.
+   **Drawback:** does not fix the deep-penetration spike itself — a hard touchdown could
+   still spike; it removes the *sustaining* condition, not the *triggering* one.
+   **Prerequisite:** a separate design decision on LFA low-speed behavior (affects more
+   than landing gear).
+
+5. **Detect contact crossing within the step.** Evaluate the terrain-crossing time within
+   the outer step and apply the contact force only for the fraction of the step after
+   crossing. Attacks defect #3. **Benefit:** removes the one-step full-penetration
+   registration. **Drawback:** most invasive change to `LandingGear::step()`; interacts
+   with the substep loop.
+
+6. **Add brake torque to the test scenario.** Adds wheel-slip dissipation independent of
+   rolling resistance. **Drawback:** changes the test intent (it was written to exercise
+   rolling resistance alone) and works around rather than fixes the artifact. Acceptable
+   only as a last resort if the model defects are deemed out of scope for `Aircraft`.
+
+7. **Re-scope the test to the `Aircraft` validity bound.** The design (§ top, Validity
+   bound) already states that gear-induced pitch/roll moment authority and low-speed ground
+   dynamics require `Aircraft6DOF`. Wheelbarrowing on a single wheel at taxi speed is
+   squarely in that excluded class. The test could be re-scoped to assert deceleration only
+   while all wheels are in contact (V > 6.3 m/s), with the sub-6 m/s rollout-to-stop moved
+   to an `Aircraft6DOF` scenario. **Benefit:** honest about the model's validity envelope.
+   **Drawback:** leaves the artifact in place for any scenario that does reach single-wheel
+   contact in `Aircraft`.
+
+**Recommendation:** Alternatives 2 and 4 together address both the triggering defect
+(deep single-step penetration → sub-step the gear) and the sustaining defect (held α = 0
+→ dynamic-pressure washout), and both improve fidelity beyond this one test. Confirm with
+the diagnostic that the forward spike disappears before relying on the FullStop pass.
+Alternative 7 (re-scope to validity bound) is the correct fallback if the model changes
+are deferred — it is honest about what `Aircraft` can represent. Do not apply Alternatives
+1 or 6 (damping tuning, brake torque); both mask the artifact. This open question remains
+**open** pending a decision among 2/3/4/5/7; no code change has been made.
 
 ---
 

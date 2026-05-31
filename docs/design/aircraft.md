@@ -167,6 +167,12 @@ constraint, `initialize()` throws `std::invalid_argument`.
 | `_nz_filter` | `_nz_filter.serializeJson()` | 2nd order LP state + config matrices |
 | `_ny_filter` | `_ny_filter.serializeJson()` | 2nd order LP state + config matrices |
 | `_roll_rate_filter` | `_roll_rate_filter.serializeJson()` | 2nd order LP state + config matrices |
+| `_nz_moment_filt` | state vector x (two floats) | 2nd order HP filter state for pitch-moment → n_z perturbation |
+| `_ay_moment_filt` | state vector x (two floats) | 2nd order HP filter state for yaw-moment → Δay perturbation |
+| `_roll_rate_moment_filt` | state vector x (two floats) | 2nd order HP filter state for roll-moment → Δroll-rate perturbation |
+| `_n_contact_z_filt` | scalar float | n_z suppression filter output (0–1); see `landing_gear.md` §Integration Contract §2 |
+| `_wow0_elapsed_s` | scalar float | Elapsed seconds since WoW last went to zero; holds suppression during brief bounce episodes |
+| `LandingGear` | `landing_gear.serializeJson()` | Per-wheel strut deflection + wheel speed (when landing gear is present) |
 
 **Postconditions:** The returned JSON or byte vector is sufficient to restore the
 aircraft to the exact mid-flight state via `deserializeJson()` / `deserializeProto()`.
@@ -805,11 +811,21 @@ flowchart LR
 | `_nz_filter` | `control::FilterSS2Clip` | Value member | Nz command response (2nd order LP) |
 | `_ny_filter` | `control::FilterSS2Clip` | Value member | Ny command response (2nd order LP) |
 | `_roll_rate_filter` | `control::FilterSS2Clip` | Value member | Roll rate command response (2nd order LP) |
-| `_runner_dt_s` | `double` | Value member | Copy of SimRunner output step; used at initialize() time only |
-| `_integration_substeps` | `int` | Value member | Physics integration substeps per runner step; = ⌈runner_dt_s / max_integration_dt_s⌉ |
-| `_integration_dt_s` | `double` | Value member | `runner_dt_s / _integration_substeps` — actual physics integration timestep |
-| `_cmd_filter_substeps` | `int` | Value member | Computed: ⌈integration_dt_s / max_cmd_filter_dt_s⌉ |
-| `_cmd_filter_dt_s` | `double` | Value member | `_integration_dt_s / _cmd_filter_substeps` |
+| `_nz_moment_filt` | `control::FilterSS2Clip` | Value member | Pitch-moment → n_z perturbation (2nd order HP); see IP-AGF-5 |
+| `_ay_moment_filt` | `control::FilterSS2Clip` | Value member | Yaw-moment → Δay perturbation (2nd order HP); see IP-AGF-5 |
+| `_roll_rate_moment_filt` | `control::FilterSS2Clip` | Value member | Roll-moment → Δroll-rate perturbation (2nd order HP); see IP-AGF-5 |
+| `_landing_gear` | `LandingGear` | Value member | Present always; active only when `_has_landing_gear` |
+| `_body_collider` | `BodyCollider` | Value member | Present always; active only when `_has_body_collider` |
+| `_contact_forces` | `ContactForces` | Value member | Combined gear + collider forces from last step |
+| `_terrain` | `const terrain::Terrain*` | Non-owning pointer | Set via `setTerrain()`; null = no ground contact |
+| `_n_contact_z_filt` | `float` | Value member | n_z suppression filter output (0–1) |
+| `_contact_nz_filter_tau_s` | `float` | Value member | Engage time constant τ_engage (s); from config `contact_nz_filter_tau_s` |
+| `_wow0_elapsed_s` | `float` | Value member | Elapsed seconds since WoW last went to zero; implements hold-time suppression |
+| `_body_in_hard_contact` | `bool` | Value member | Set true by step-12 hard constraint; drives LP path of the suppression filter |
+| `_outer_dt_s` | `float` | Value member | Integration timestep from SimRunner (stored at initialize()) |
+| `_cmd_filter_substeps` | `int` | Value member | Command filter substeps per outer step |
+| `_cmd_filter_dt_s` | `float` | Value member | `_outer_dt_s / _cmd_filter_substeps` |
+| `_nz_wn_rad_s` … `_roll_rate_zeta_nd` | `float` × 6 | Value members | Per-axis FBW filter natural frequencies and damping ratios |
 
 **Invariant:** `_propulsion` must never be null after construction. If the caller passes
 `nullptr`, the constructor throws `std::invalid_argument`.
