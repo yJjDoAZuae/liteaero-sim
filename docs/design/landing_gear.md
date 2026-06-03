@@ -176,42 +176,93 @@ as $F_z\sin\gamma$ onto wind-x. Whether this cross-axis coupling is a correct ph
 effect or a model fidelity limitation of the wind-frame integrator is an open question
 (OQ-LG-10).
 
-**2. Commanded load-factor reduction (n_z suppression).**
-The contact forces reduce the commanded $n_z$ fed to the LFA so that the aerodynamic lift
-system does not simultaneously target a full commanded load factor while the gear is already
-providing the required normal force. The suppression value $n_{\text{contact},z,\text{filt}}$
-is subtracted from the shaped $n_z$ command before the LFA solve:
+**2. Gear force & moment integration — two-path design with inertial attitude lag.**
 
-$$n_{z,\text{shaped}} = \max\!\bigl(0,\; n_{z,\text{shaped}} - n_{\text{contact},z,\text{filt}}\bigr)$$
+> **Status: designed (2026-06), not yet implemented.** This is the authoritative design for
+> how gear forces and moments couple into the load-factor model. It supersedes the
+> currently-coded two-speed hold-time n_z suppression and the unimplemented
+> moment-perturbation scheme (see "Current implementation" note at the end of this section).
+> The root-cause analysis that motivated it is recorded as OQ-LG-15 (resolved).
 
-The filter uses a **two-speed hold-time** scheme driven by the `weight_on_wheels` flag and
-the `_body_in_hard_contact` flag (set when the terrain hard constraint fires):
+The load-factor model represents body attitude kinematically (pitch = flight-path angle γ +
+α, with α set by the LFA), so it has no rotational-inertia state. A long-lever-arm gear
+contact force applied against that zero-inertia attitude produces a non-physical feedback
+(OQ-LG-15). The design below restores the missing rotational inertia where it matters and
+routes gear force and moment into the FBW channels.
 
-| State | Condition | Action |
-| --- | --- | --- |
-| Hard contact | `_body_in_hard_contact` | First-order lag toward raw = 2 − n_z_shaped at τ_engage |
-| WoW engaged | `weight_on_wheels && !_body_in_hard_contact` | Snap nzfilt = 1.0 instantly; reset hold timer |
-| WoW hold | `!weight_on_wheels` and elapsed < τ_hold | Hold nzfilt at current value; no decay |
-| WoW decay | `!weight_on_wheels` and elapsed ≥ τ_hold | Exponential decay at τ_decay = τ_hold |
+**Path 1 — gear normal force → realized n_z (second-order shaping, DC gain 1).** The gear
+normal contribution to load factor is shaped by a second-order low-pass and subtracted from
+the commanded n_z so the wing does not double-supply load the gear already carries:
 
-Parameters: τ_engage = `contact_nz_filter_tau_s` (config, default 0.10 s); τ_hold = 10 × τ_engage
-(= 1.0 s for the default). The hold window covers one gear natural period, preventing brief
-WoW=0 bounce episodes from releasing suppression and allowing the LFA to inject aerodynamic
-energy. Genuine takeoff — WoW=0 sustained beyond τ_hold — releases suppression via the slow
-decay (τ_decay = τ_hold).
+$$n_{z,\text{shaped}} = \max\!\bigl(0,\; n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}\bigr),
+\qquad n_{z,\text{gear}} = \frac{-F_z^B}{m\,g},
+\qquad H_1(s)=\frac{\omega_{n1}^2}{s^2+2\zeta_1\omega_{n1}s+\omega_{n1}^2}.$$
 
-State member `_wow0_elapsed_s` tracks elapsed seconds since WoW last transitioned to zero.
-It is reset to zero on WoW=1 or hard contact, and incremented by the integration timestep
-on WoW=0. It is serialized in both JSON (`wow0_elapsed_s`) and proto (AircraftState field 33).
+$H_1$ has **DC gain 1** (a steady gear load fully transfers to realized n_z; the wing lift
+command goes to zero when settled) and a **zero-initial-slope (second-order) step response**
+that emulates the body's inertial resistance to a strut-force transient. It is **gated on
+gear load** (weight-on-wheels). No explicit dynamic-pressure washout is applied: lift
+authority fades emergently through the aerodynamic limit $L_{\max}=q\,S\,C_{L,\max}$.
 
-**3. Moment perturbations (intended design — not yet implemented).**
-`moment_body_nm` is assembled by `LandingGear::step()` but is **not currently applied**.
-The intended design (OQ-LG-9 resolution) converts each wind-frame moment axis to a
-perturbation injected through existing paths: the wind-x (roll) component increments
-`rollRate_Wind_rps` fed to `commitAttitude`; the wind-z (pitch) component produces an
-n_z command perturbation filtered and subtracted from $n_z$-shaped before the LFA solve;
-the wind-y (yaw) component produces a lateral specific force added to $a_y$. Each
-perturbation scales with airspeed and vanishes at zero speed.
+**Path 2 — gear moments → body rates, with pitch feeding α → CL.** The wind-frame gear moment
+$\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$ drives a perturbation on each axis through a
+**zero-DC (washout / high-pass) filter** $H_2$, so a transient gear moment produces a
+transient response that **converges back to zero once the gear unloads** (no persistent
+gear-moment deflection):
+
+$$\Delta p = H_{2}\!\left\{\tfrac{M_x^W}{I_{xx}}\right\}\ \text{(roll rate)},\quad
+\Delta\theta_\text{gear} = H_{2}\!\left\{\tfrac{M_y^W}{I_{yy}}\right\}\ \text{(pitch)},\quad
+\Delta a_y = H_{2}\!\left\{\tfrac{M_z^W}{I_{zz}}\,V\right\}\ \text{(lateral accel)}.$$
+
+$\Delta p$ is added to `rollRate_Wind_rps` in `commitAttitude`; $\Delta a_y$ is added to the
+$a_y$ specific force; and the gear-induced pitch $\Delta\theta_\text{gear}$ is **summed into
+the angle of attack**, $\alpha_\text{aero}=\alpha_\text{LFA}+\Delta\theta_\text{gear}$, so it
+modulates CL and hence the realized n_z. This produces the physical coupling: main-gear
+contact (aft, nose-down moment) lowers CL → derotation/settle; nose-gear contact (forward,
+nose-up moment) raises CL → nose-up/bounce tendency. The pitch path replaces the abandoned
+n_z-command-suppression route (OQ-LG-16, resolved).
+
+**Inertial attitude lag — the attitude consumed by gear geometry.** The body attitude used to
+compute gear contact geometry (and the gear-force frame, the body rate $\boldsymbol\omega$ in
+the contact-patch velocity, and the reported attitude) **lags the velocity-vector direction
+through a configurable low-pass** $H_\text{lag}$ with **DC gain 1**:
+
+$$\theta_\text{geom} = H_\text{lag}(s)\,\gamma \;+\; \alpha_\text{LFA} \;+\; \Delta\theta_\text{gear}.$$
+
+This restores rotational inertia: the body cannot pitch faster than $H_\text{lag}$ permits, so
+the contact point cannot be swept through space faster than the body can physically rotate.
+$H_\text{lag}$ tracks the steady/real attitude (DC gain 1) and lags only fast swings — it is
+not a gear-moment deflection and is distinct from the zero-DC washout of Path 2. This lag is
+the element that breaks the OQ-LG-15 bounce; the aero force summation continues to use the
+true instantaneous α for the in-flight n_z command, so the lag does not enter the in-flight
+lift response (where $\Delta\theta_\text{gear}=0$).
+
+**DC-gain summary** (the defining character of each path):
+
+| Path | Filter | DC gain | Rationale |
+| --- | --- | --- | --- |
+| Force → realized n_z (Path 1) | $H_1$, 2nd-order | **1** | steady gear load genuinely persists in the realized load factor |
+| Moment → rate / α / a_y (Path 2) | $H_2$, washout | **0** | no steady gear moment; transient deflections must not persist (airborne self-zeroes via the strut force floor) |
+| Velocity vector → gear-geometry attitude | $H_\text{lag}$, low-pass | **1** | tracks the real/steady attitude, lags only fast swings (rotational inertia) |
+
+The contact model stays **quasi-static / algebraic** (no strut ODE, no implicit contact
+integrator); the only added integrated dynamics are these filters (Tustin / `FilterSS2Clip`),
+and the aircraft EOM stays RK4.
+
+*Open parameterization (OQ-LG-17):* the values $\omega_n,\zeta$ for $H_1$, $H_2$, and
+$H_\text{lag}$, and whether $H_\text{lag}$ (gear-geometry attitude) and $H_2$ pitch (gear-moment
+→ CL) are **co-parameterized** (one pitch-inertia time constant) or independent, are not yet
+fixed — see OQ-LG-17.
+
+*Current implementation (to be replaced when the above is built):* the code presently uses a
+two-speed hold-time n_z suppression filter (`contact_nz_filter_tau_s`, state `_wow0_elapsed_s`,
+proto field 33) and has the roll/yaw moment perturbations active with the pitch (n_z) moment
+path disabled. These are the artifacts diagnosed in OQ-LG-15 and are superseded by the design
+above.
+
+**3. Direct wind-frame moment — `Aircraft6DOF` only.** In the full `Aircraft6DOF` model the
+assembled `moment_body_nm` is applied directly to the rotational EOM with no perturbation
+mapping; the Path-2 perturbation scheme above is specific to the load-factor `Aircraft`.
 
 ### Integration Contract — `Aircraft6DOF`
 
@@ -309,17 +360,30 @@ The force floor prevents suction when the strut extends rapidly past its natural
 
 **Quasi-static strut deflection.** The current implementation uses a quasi-static
 (unsprung-mass = 0) approximation: strut deflection $\delta_i$ is set directly to the
-terrain penetration depth (clamped to travel limits), and $\dot{\delta}_i$ is estimated
-from the finite difference with the previous substep:
+terrain penetration depth (clamped to travel limits), and the deflection rate
+$\dot{\delta}_i$ is computed as the **analytic projection of the contact-patch velocity
+onto the inward surface normal** (not a finite difference):
 
 $$\delta_i = \operatorname{clamp}(h_i,\ 0,\ \delta_{i,\max})$$
 
-$$\dot{\delta}_i = \frac{\delta_i^k - \delta_i^{k-1}}{\Delta t_{\text{inner}}}$$
+$$\dot{\delta}_i = -\,\mathbf{v}_{c_i}\cdot\hat{\mathbf{n}}, \qquad
+\mathbf{v}_{c_i} = \mathbf{v}^B + \boldsymbol\omega^B\times\mathbf{c}_i^B$$
 
-This avoids integrating a second-order ODE and eliminates the Euler stability constraint
-$\Delta t < 2\sqrt{m/k}$. The `substeps` parameter subdivides the outer timestep to
-improve the accuracy of $\dot{\delta}$ estimation at high closure speeds. The default is
-`substeps = 4`.
+where $\hat{\mathbf n}$ is the terrain surface normal in body frame (using the surface
+normal rather than the strut travel axis eliminates a phantom $V_N\sin\alpha$ term when the
+aircraft is pitched — see `WheelUnit::step`). This avoids integrating a second-order ODE
+and eliminates the Euler stability constraint $\Delta t < 2\sqrt{m/k}$.
+
+**What `substeps` actually does.** The `substeps` parameter subdivides the outer step only
+for the **wheel-spin (Pacejka longitudinal) ODE** in `WheelUnit::step`. The per-wheel
+penetration, contact point, and contact-patch velocity are computed once per outer step in
+`LandingGear::step` (from the frozen aircraft state) and held constant across the sub-loop,
+so $\delta$, $\dot\delta$, and the normal force $F_z$ are identical on every sub-step.
+`substeps` therefore does **not** refine $\delta$, $\dot\delta$, $F_z$, or the contact
+geometry, and does not advance the aircraft state; it only refines the wheel-spin transient.
+The class default is `substeps = 4`; some fixtures override it (the `LandingGear_FullStop`
+fixture sets `substeps = 1`). See OQ-LG-15 for why raising `substeps` does not mitigate the
+deep-penetration force spikes.
 
 **Note:** unsprung mass and tyre spring compliance are second-order effects relevant only
 to a full 6DOF equations-of-motion model (`Aircraft6DOF`). The quasi-static strut is
@@ -878,7 +942,9 @@ simulation rate.
 | OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
 | OQ-LG-13 | ~~High-pass filter design for moment perturbation paths: τ_hp value and config parameter name~~ **Resolved: second-order high-pass; reuse per-axis FBW filter parameters (ωn, ζ); no new config parameters needed** | — |
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
-| OQ-LG-15 | LandingGear_FullStop_SpeedNearZero: deep single-step gear penetration produces a periodic +22.7 kN forward-impulse artifact, sustained by α=0 wheelbarrowing; root cause confirmed, fix pending | Blocking for `LandingGear_FullStop_SpeedNearZero` |
+| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the two-path gear-F&M integration with inertial attitude lag, specified in Integration Contract — `Aircraft` §2. Not yet implemented; filter parameterization is OQ-LG-17** | — |
+| OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 two-path design — gear pitch moment → pitch-rate → Δθ_gear (washout) → α → CL → realized Nz (Alternative 2); implemented as part of OQ-LG-15** | — |
+| OQ-LG-17 | Filter parameterization for the gear-F&M integration (ωₙ/ζ for H₁, H₂, H_lag; co-parameterize the gear-geometry attitude lag with the gear-moment→pitch→CL channel, or independent?) | Non-blocking; resolved at implementation against the Integration Contract §2 model |
 
 ---
 
@@ -1739,7 +1805,7 @@ near standstill — well-behaved without any additional floor or gating.
 
 ---
 
-### OQ-LG-15 — LandingGear_FullStop_SpeedNearZero: Periodic Forward-Impulse Artifact From Deep Single-Step Gear Penetration
+### OQ-LG-15 — LandingGear_FullStop_SpeedNearZero: Gear–Attitude Feedback Artifact *(Resolved)*
 
 **Question:** The `LandingGear_FullStop_SpeedNearZero` scenario test — aircraft at V = 15 m/s
 must decelerate to < 0.5 m/s within 90 s via rolling resistance — instead settles into a
@@ -1755,252 +1821,164 @@ light-single data.
 > question hypothesized an aerodynamic "energy injection" via $F_\text{wind,x} =
 > -F_\text{spring}\sin\alpha_0$ and a gear-spring bounce limit cycle at the spring natural
 > frequency (1.21 Hz). The full-resolution diagnostic (`LandingGear_FullStop_OQ_LG15_Diagnostic`)
-> has refuted both. The actual mechanism is a numerical artifact described below. All
-> superseded hypotheses have been removed from this section; version control retains them.
+> has refuted both. The actual mechanism is the numerical artifact summarized below and
+> detailed in the linked investigation report. Version control retains the superseded analysis.
 
-#### Root cause (confirmed by full-resolution diagnostic)
+**Resolution (2026-06): root cause diagnosed; fix designed.** The fix — the two-path gear
+force/moment integration with an inertial attitude lag — is specified in the main body at
+[Integration Contract — `Aircraft` §2](#integration-contract--aircraft). The decided design
+is not repeated here. Only filter parameterization remains open ([OQ-LG-17](#oq-lg-17--filter-parameterization-for-the-gear-fm-integration)).
+No code change has been made. Rejected approaches (all mask the artifact or scope around it):
+`damping_extension_nspm` tuning, brake torque, gating $F_x$, the strut ODE, backward-Euler
+contact, and re-scoping the test to the validity bound.
 
-The diagnostic test `LandingGear_FullStop_OQ_LG15_Diagnostic` logs every state, force, and
-attitude at the full 0.02 s timestep for 300 s. The data establish a definite mechanism:
+**Root cause (summary).** A zero-inertia, velocity-slaved attitude (load-factor model: pitch =
+flight-path angle + α) sweeps the long-lever-arm nose wheel through space at ~9 m/s during the
+single-wheel bounce; the quasi-static strut reads that as a deep one-step penetration (34 kN
+normal force), and the slip model returns near-peak forward traction (+24 kN F_x) for the
+resulting slightly-negative contact-patch velocity. The result is a 17.3 Hz one-step bounce
+plus a periodic +22.7 kN forward spike that holds the aircraft at ~5 m/s. The **full diagnostic
+investigation** (defect chain, instrumented force breakdown, quantified data, and figures) is
+recorded in the standalone report:
+[Gear–Attitude Feedback Artifact investigation](../defects/oq_lg15_gear_attitude_feedback_investigation.md).
 
-**1. The aircraft wheelbarrows on the nose gear from t = 38.4 s onward.** As speed drops
-through V ≈ 6.3 m/s the main gear leaves the ground and never returns (Figures 2, 3). The
-LFA holds α = 0° throughout (lift fully suppressed by `n_contact_z_filt` = 1), so body
-pitch tracks the flight-path angle. The nose-down attitude during descent puts the nose
-wheel lower than the mains; the aircraft rides on the nose wheel alone for the rest of the
-run (Figure 4 confirms main-gear contact patches stay 30–50 mm above terrain).
+---
 
-**2. The limit cycle has two timescales** (Figure 1):
+### OQ-LG-16 — Gear Pitch Moment Has No Path Into the `Aircraft` Load-Factor Model *(Resolved)*
 
-- A **high-frequency backward-impulse train** at 17.3 Hz. Each nose-wheel contact lasts
-  exactly one timestep and applies a backward force averaging −1,686 N (wind-frame x),
-  removing ≈ 0.0115 m/s per impulse. About 40 such impulses occur per limit-cycle period.
-- A **low-frequency forward spike** every 2.411 s (0.41 Hz). A single timestep applies a
-  **+22,717 N forward impulse** (≈ 22 × aircraft weight), adding **+0.476 m/s** in one
-  step. This exactly resets the speed that the backward-impulse train bled off.
+> **Resolution (2026-06-02): subsumed by the OQ-LG-15 two-path design.** The gear pitch moment
+> reaches the load-factor model through OQ-LG-15 **Path 2**: gear pitch moment → pitch-rate
+> contribution → $\Delta\theta_\text{gear}$ (zero-DC washout) → summed into α → CL → realized
+> Nz. This is Alternative 2 below (pitch-rate perturbation into the attitude, mirroring the
+> roll path), and it is the chosen approach. The n_z-command-suppression-channel scheme
+> (Alternative 1) is **abandoned**. Sequencing still holds: implement the OQ-LG-15 fix
+> (including the required attitude lag) first; the gear pitch-moment path is part of that same
+> work, not a separate later step. The disabled `n_z_moment` code in `Aircraft::step()` should
+> be removed/replaced when Path 2 is implemented. The discussion below is retained for
+> rationale.
 
-The two nearly balance, producing a quasi-stable speed near 5 m/s that decays only very
-slowly (the test's required 0.2 m/s² rolling deceleration is absent because the aircraft
-is airborne 65% of the time and the single contacting wheel carries little normal force).
+**Question (resolved — see above):** IP-AGF-5 was specified to feed gear-induced moments into the `Aircraft`
+load-factor model through three command-channel perturbations: roll moment → roll-rate
+command, yaw moment → lateral-acceleration command, and **pitch moment → n_z command**. The
+roll and yaw paths are implemented and active in `Aircraft::step()`. The **pitch (n_z) path
+is implemented but disabled** — the perturbation is computed but commented out, and the
+filter is stepped with zero input:
 
-**3. The forward spike is a deep-single-step-penetration artifact** (Figure 2). Every spike
-occurs under identical conditions: the aircraft is descending at vD ≈ 0.30 m/s while
-airborne, then on one contact step the quasi-static strut model sets the deflection
-directly to the full penetration depth (δ ≈ 0.081 m) reached during the airborne descent.
-The finite-difference rate estimate is then
+```cpp
+// const float n_z_moment_raw = M_wind.y() / _inertia.Iyy_kgm2 * _outer_dt_s * V_air / kGravity_mps2;
+_nz_moment_filt.step(0.f);   // advance filter state with zero input (disabled path)
+// n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);
+```
 
-$$\dot\delta = \frac{\delta^k - \delta^{k-1}}{\Delta t} = \frac{0.081 - 0}{0.02} \approx 4.05\ \text{m/s},$$
+As a result, gear pitch moments produce **no pitch response at all** in the `Aircraft` model.
+How should gear-induced pitch be represented, and is the n_z-command-perturbation approach
+even viable?
 
-which drives an enormous damping force $F_\text{damp} = b_c\,\dot\delta \approx 2{,}600
-\times 4.05 \approx 10{,}500$ N on the compression stroke (plus the spring term). This
-single-step force, transformed through the body/wind attitude — which has just flipped
-nose-up because the bounce reversed vD and the α = 0 constraint ties pitch to the
-flight-path angle — appears as a +22.7 kN component along the velocity vector. The result
-is a large spurious forward velocity increment in one step.
+**Why it was disabled.** The pitch perturbation subtracts from `n_z_shaped`:
+`n_z_shaped = max(0, n_z_shaped − n_z_moment_filt_val)`. During ground contact the
+contact-nz suppression filter (§Integration Contract §2, OQ-LG-13) already drives
+`n_z_shaped → 0`. The subtraction then hits the `max(0, …)` floor and is annihilated
+regardless of the gear pitch moment's sign or magnitude — the suppression filter and the
+moment perturbation fight over the same variable, and suppression wins. The path was disabled
+rather than ship a perturbation that is silently zeroed exactly when gear contact (the only
+source of the moment) is active.
 
-**Why this is a numerical artifact, not physics.** A real strut compressing at 4 m/s would
-do so over a finite stroke time, with the contact force building and releasing smoothly;
-the unsprung mass and tyre compliance would limit the rate. The quasi-static model
-(§2c, no unsprung mass, δ set from instantaneous geometry) collapses the entire
-penetration into one 0.02 s step, so the damping term sees a one-step closing rate of
-4 m/s that has no physical counterpart. The forward projection then arises because the
-force transform uses an attitude that is itself an artifact of the α = 0 wheelbarrowing
-(see LFA washout note below). No real gear injects 22 kN of forward thrust during a taxi
-rollout.
+**Structural problem.** The `Aircraft` load-factor model has no rotational dynamics state and
+no vertical-position state independent of the velocity vector: attitude is derived
+kinematically (α held by the LFA, pitch follows the flight-path angle). A gear pitch moment
+$M_y^B = x_\text{wheel}\cdot(-F_z)$ — e.g. the nose gear at 2 m with a 34 kN normal force
+gives ~58 kN·m, $\dot q = M_y/I_{yy} \approx 32$ rad/s² — has no angular-momentum integrator
+to act on. The n_z-perturbation scheme is an attempt to *approximate* a pitch moment as an
+equivalent load-factor change, bypassing the absent rotational EOM. This is the same
+impedance mismatch identified throughout the gear integration effort.
 
-**Contributing model defects (all required for the artifact to appear):**
+**Alternatives:**
 
-1. **Quasi-static strut with no rate limit.** Deep one-step penetration → 4 m/s closing
-   rate → ~10 kN damping spike. A strut ODE with unsprung mass, or a sub-stepped contact
-   solver, would not produce this.
-2. **α = 0 wheelbarrowing.** The LFA commands α directly with no dynamic-pressure washout,
-   so it holds zero lift and drives the nose-down/nose-up pitch oscillation that both
-   causes the nose-only contact and provides the attitude that projects the spike forward.
-3. **One-step contact detection.** Contact is evaluated once per outer step; a wheel that
-   descends a large distance while "airborne" registers its full penetration in a single
-   step rather than at the moment of crossing.
+1. **Apply the pitch perturbation to the LFA input before the contact-nz suppression floor.**
+   Compute `n_z_moment_filt_val` and add it to the commanded n_z *before* `n_contact_z_filt`
+   suppression, so the gear pitch moment can modulate the LFA's α target even while lift is
+   otherwise suppressed.
+   **Benefit:** keeps the IP-AGF-5 approach; small code change. **Drawback:** reintroduces a
+   lift response during ground contact — exactly what the suppression filter exists to
+   prevent — and risks re-opening aerodynamic energy paths; interacts with OQ-LG-15.
+   **Prerequisite:** OQ-LG-15 resolved (clean contact forces) so the moment driving it is
+   physical.
 
-**Quantified limit-cycle balance (t = 290–300 s):**
+2. **Add an explicit pitch-rate perturbation to `commitAttitude()`, analogous to the roll
+   path.** Pass a `delta_pitch_rps` derived from $M_y^W/I_{yy}\cdot\Delta t$ directly into the
+   attitude kinematics, bypassing the n_z channel and its suppression floor entirely. This is
+   structurally consistent with how the roll moment is already handled
+   (`commitAttitude(rollRate_filt + delta_rr_filt, dt)`).
+   **Benefit:** does not fight the lift-suppression filter; mirrors the working roll path;
+   directly perturbs attitude where the physical effect belongs. **Drawback:** `commitAttitude`
+   currently derives pitch from the velocity vector with α fixed — injecting an independent
+   pitch rate breaks that kinematic assumption and may require decoupling pitch from the
+   flight-path angle, a larger change to the attitude model. **Prerequisite:** OQ-LG-15
+   resolved; design decision on whether `Aircraft` pitch may deviate from (flight-path angle
+   + α).
 
-| Component | Value |
-| --- | --- |
-| Forward spike magnitude | +22,717 N (wind-x), +0.476 m/s per event |
-| Forward spike period | 2.411 s (0.41 Hz) |
-| Strut deflection at spike | 0.081 m (single-step) |
-| vD just before spike | +0.30 m/s (descending) |
-| Backward impulse (high-freq) | −1,686 N avg, −0.0115 m/s each, 17.3 Hz |
-| Backward impulses per cycle | ≈ 40 |
-| Net speed change per cycle | ≈ 0 (40 × −0.0115 + 0.476 ≈ +0.02 m/s) |
+3. **Defer gear pitch moments to `Aircraft6DOF`.** Accept that the load-factor model cannot
+   represent gear-induced pitch and document it as a validity bound (the design already states
+   this for moment-authority exceedance). Remove the dead n_z-moment code from `Aircraft` to
+   avoid implying a capability that is not present.
+   **Benefit:** honest; removes disabled code; no risk of band-aids on a model that
+   structurally cannot carry the effect. **Drawback:** `Aircraft` ground handling remains
+   pitch-blind to the gear; nose-wheel-steering and wheelbarrowing dynamics cannot be
+   represented in the load-factor model. **Prerequisite:** none.
 
-**Diagnostic figures.** Generated from `build/test/oq_lg15_diagnostic.csv` by
-`docs/design/img/plot_oq_lg15.py`.
+**Resolution: Alternative 2, as part of the OQ-LG-15 two-path design.** The OQ-LG-15 Path 2
+introduces the lagged attitude state and the gear-moment → rate paths; the gear pitch moment
+drives a pitch-rate contribution into that lagged attitude (mirroring the roll path), and the
+resulting Δθ_gear is summed into α → CL → realized Nz. This removes the structural objection
+to Alternative 2 ("pitch is rigidly slaved to FPA + α") — Path 2 introduces exactly the
+attitude lag that makes an independent pitch contribution well-defined. **Alternative 1**
+(feeding the moment back through the n_z-command-suppression channel) is **abandoned** — it
+re-entangles with the lift-suppression filter and is annihilated by the floor. **Alternative
+3** (defer to `Aircraft6DOF`) is not needed: the load-factor model *can* carry the effect via
+the washout-perturbation form (the gear-moment deflection does not persist, per OQ-LG-15
+decision 8). Implementation is folded into the OQ-LG-15 work, not a separate item.
 
-![Impulse mechanism](img/oq_lg15_impulse_mechanism.png)
+---
 
-**Figure 1 — THE MECHANISM.** Wind-frame gear force (top) and forward speed (bottom),
-t = 290–296 s. The high-frequency backward-impulse train bleeds speed down; a single
-+22.7 kN forward spike every 2.41 s (red markers) resets it. This is the core finding.
+### OQ-LG-17 — Filter Parameterization for the Gear-F&M Integration
 
-![Spike anatomy](img/oq_lg15_spike_anatomy.png)
+**Question:** The gear force/moment integration design ([Integration Contract — `Aircraft`
+§2](#integration-contract--aircraft)) defines three filters: $H_1$ (force → realized n_z,
+DC 1), $H_2$ (moment → rate/α/a_y, washout DC 0), and $H_\text{lag}$ (velocity vector →
+gear-geometry attitude, low-pass DC 1). What ωₙ/ζ should each use, and — the one structural
+choice — should $H_\text{lag}$ (gear-geometry attitude lag) and the pitch channel of $H_2$
+(gear-moment → Δθ_gear → α → CL) be **co-parameterized** (one shared pitch-inertia time
+constant) or parameterized independently?
 
-**Figure 2 — Anatomy of one forward-spike event.** Strut deflection, vertical speed,
-pitch/flight-path angle, and gear force across 12 timesteps spanning one spike. The deep
-single-step penetration (δ jumps to 0.08 m), the vD reversal, the nose-up pitch flip, and
-the +22.7 kN force all occur on the same step.
+The numerical-value tuning ($\omega_n,\zeta$ for each filter, the $H_\text{lag}$ corner above
+the guidance/flare bandwidth and below the ~17 Hz bounce band, the SO(3) filtering form) is an
+implementation detail settled at build/verification time. The co-parameterization choice below
+is the genuine design question.
 
-**Supporting figures.**
+**Alternatives (co-parameterization of $H_\text{lag}$ and the $H_2$ pitch channel):**
 
-![Forward speed 0–300 s](img/oq_lg15_forward_speed.png)
+1. **Co-parameterize (shared pitch-inertia time constant).** $H_\text{lag}$ and the $H_2$
+   pitch path use the same ωₙ/ζ (their DC gains still differ — 1 for the lag, 0 for the
+   washout — that is a per-input-path property, not the time constant).
+   **Benefit:** both derive from the single physical pitch inertia $I_{yy}$; one body, one
+   rotational time constant — physically coherent. Fewer free parameters; less tuning surface.
+   **Drawback:** ties the numerical sweep-suppression bandwidth ($H_\text{lag}$) to the
+   physical pitch-response bandwidth; if the sweep-suppression requirement demands a different
+   corner than the CL-coupling fidelity wants, they cannot diverge.
 
-**Figure 3 — Forward speed over 300 s.** Speed at t = 300 s is 5.068 m/s vs. 5.136 m/s at
-t = 90 s — a slowly-decaying limit cycle, not a hard equilibrium. The decay is far too slow
-to reach the 0.5 m/s pass threshold because rolling deceleration is largely absent during
-wheelbarrowing.
+2. **Independent parameterization.** $H_\text{lag}$ and the $H_2$ pitch path carry separate
+   ωₙ/ζ.
+   **Benefit:** tune sweep suppression (numerical) separately from CL-coupling fidelity
+   (physical). **Drawback:** the model's body then effectively pitches at two different rates
+   depending on which consumer (gear geometry vs. aero α) reads the attitude — physically
+   incoherent for a single rigid body; larger tuning surface.
 
-![Full timeline: struts, speed, pitch](img/oq_lg15_full_timeline.png)
-
-**Figure 4 — Full 300 s timeline.** Shows strut deflections, forward speed, and pitch
-over the complete run. Main gear leaves the ground at t = 38.4 s and never returns.
-Pitch oscillates through ±2° in the nose-bounce phase; alpha is 0° throughout (LFA
-holding zero lift).
-
-![Wheelbarrowing transition detail](img/oq_lg15_wheelbarrow_transition.png)
-
-**Figure 5 — Wheelbarrowing transition, t = 34–45 s.** Main gear deflection decreases
-from ~0.015 m to zero as speed drops through 6.3 m/s. The aircraft transitions from
-all-wheel contact to nose-only wheelbarrowing at V ≈ 6.3 m/s.
-
-![Per-wheel contact patch AGL](img/oq_lg15_wheel_agl.png)
-
-**Figure 6 — Per-wheel contact patch AGL, t = 290–300 s.** Shows the altitude of each
-wheel's contact patch above the terrain. The nose wheel oscillates across the ground
-line (AGL = 0) at 17.3 Hz. Both main gear contact patches remain 30–50 mm above the
-terrain throughout, explaining why they show zero strut deflection despite the aircraft
-being at low altitude.
-
-![Per-wheel strut deflections 290–300 s](img/oq_lg15_strut_deflection.png)
-
-**Figure 7 — Per-wheel strut deflections, t = 290–300 s.** Each wheel on its own axis
-with appropriate scale. Left and right main are confirmed zero on a 0–10 mm scale.
-Nose strut maximum = 0.084 m.
-
-![Forward and vertical speed 290–300 s](img/oq_lg15_vn_vd_coupled.png)
-
-**Figure 8 — Forward and vertical speed, t = 290–300 s.** Contact events (shaded)
-aligned with vertical speed reversal. WoW = 1 shown as a top band (positive, in legend).
-
-![Contact force and energy 290–300 s](img/oq_lg15_contact_power.png)
-
-**Figure 9 — Contact force and energy decomposition, t = 290–300 s.** Shows NED-north
-contact force, horizontal power (F_NED-x · V_N), and total contact power. The
-NED-frame force logged here is computed with the post-step attitude and does **not**
-equal the wind-frame force the EOM applies with the start-of-step attitude — the two
-differ by a one-step attitude rotation, which is itself part of the artifact (see root
-cause §3). The wind-frame force in Figures 1–2 is the quantity that actually moves the
-aircraft.
-
-**Key findings from the diagnostic run (as of 2026-05-31):**
-
-| Quantity | Value |
-| --- | --- |
-| Speed at t = 300 s | 5.068 m/s (slowly-decaying limit cycle, not a hard equilibrium) |
-| Main gear leaves ground | t = 38.4 s, V ≈ 6.3 m/s — never returns |
-| Aircraft airborne fraction (t=290–300 s) | 65.4% |
-| Contacting wheel | Nose only; main gear AGL = +30–50 mm throughout |
-| Max nose strut deflection (t=290–300 s) | 0.084 m (0.49 × δ₀) |
-| Alpha throughout run | 0.00° (LFA holds zero-lift AoA) |
-| Pitch range (t=290–300 s) | −3.7° to +3.5° (oscillates each step) |
-| Forward spike | +22,717 N, +0.476 m/s, every 2.411 s (0.41 Hz) |
-| Backward impulse train | −1,686 N avg, −0.0115 m/s each, 17.3 Hz |
-| Theoretical gear natural frequency | 1.21 Hz (not the observed frequency) |
-
-**Wheelbarrowing — why the nose carries the contact.** The LFA holds α = 0° throughout
-because `n_contact_z_filt` = 1 suppresses all commanded lift. With α = 0, body pitch
-equals the flight-path angle. During descent the aircraft is nose-down, which puts the
-nose attach point (2 m forward, 0.5 m below CG) geometrically lower than the main gear
-attach points (0.5 m aft). The nose wheel touches and rebounds before the altitude drops
-far enough for the mains; Figure 6 confirms the main gear contact patches stay 30–50 mm
-above terrain throughout.
-
-**LFA dynamic-pressure washout — model fidelity gap.** A physical FBW system generates
-pitch moment through control surfaces: $M_\text{pitch} = q\,S\,\bar{c}\,C_m$. As dynamic
-pressure $q$ falls during rollout from 15 m/s to 5 m/s, pitch authority drops to
-$(5/15)^2 = 11\%$ of its approach-speed value — a real controller would lose the ability
-to hold the nose-down attitude at taxi speed. The `Aircraft` LFA commands $\alpha$ directly
-with no dynamic-pressure weighting, so it retains full authority at 5 m/s. This sustains
-the α = 0 wheelbarrowing that is a precondition for the forward-spike artifact. Adding a
-dynamic-pressure washout to the LFA pitch authority is a candidate fix (see Alternatives).
-
-**Why the bounce is at 17.3 Hz, not 1.21 Hz.** The observed bounce frequency is not the
-gear spring resonance. Each contact lasts exactly one timestep; the period is set by the
-ballistic arc time between one-step contacts, not by $\sqrt{k/m}$. This is consistent with
-the single-step-penetration mechanism: the gear never executes a multi-step spring
-oscillation — it touches, fires a one-step impulse, and rebounds.
-
-**Alternatives.** The root cause is now identified (deep single-step gear penetration
-producing a spurious forward impulse, sustained by α = 0 wheelbarrowing). The fix must
-address one or more of the three contributing defects. The diagnostic test
-(`LandingGear_FullStop_OQ_LG15_Diagnostic`, 300 s with full-resolution CSV logging) is
-retained as a permanent diagnostic and is not part of the fix.
-
-1. ~~**Increase extension damping in the test fixture.**~~ **Rejected by design authority.**
-   Masks the artifact without correcting it; it would remain in every other ground scenario.
-
-2. **Sub-step the gear contact (increase `substeps`).** Raising the gear substep count
-   subdivides the outer step so a deep penetration is resolved over several sub-steps
-   instead of collapsing into one 4 m/s closing-rate spike. This directly attacks defect
-   #1 (the dominant one). **Benefit:** targets the actual force spike; no change to the
-   physics model. **Drawback:** does not remove the underlying quasi-static discontinuity,
-   only reduces its per-step magnitude; the spike amplitude scales with how deep the
-   aircraft sinks between contact checks, so very fast descents could still spike.
-   **Prerequisite:** confirm by re-running the diagnostic at `substeps` = 4, 8, 16 that the
-   forward spike magnitude falls as expected.
-
-3. **Replace the quasi-static strut with a strut ODE (unsprung mass + tyre compliance).**
-   Integrating a second-order strut model (OQ-LG-4) removes the instantaneous δ-from-geometry
-   assumption entirely, so the closing rate is a physical state, not a one-step finite
-   difference. **Benefit:** eliminates defect #1 at the source; also the correct model for
-   `Aircraft6DOF`. **Drawback:** larger change; reintroduces the strut ODE stability
-   constraint the quasi-static model was chosen to avoid. **Prerequisite:** resolve OQ-LG-4.
-
-4. **Add dynamic-pressure washout to the LFA pitch authority.** Weight the LFA's α command
-   by $q/q_\text{ref}$ so pitch authority fades at low speed, as a real FBW system does.
-   This attacks defect #2: without the held α = 0 nose-down/nose-up oscillation, the
-   wheelbarrowing (and the nose-up attitude that projects the spike forward) would not be
-   sustained. **Benefit:** improves model fidelity generally, not just for this test.
-   **Drawback:** does not fix the deep-penetration spike itself — a hard touchdown could
-   still spike; it removes the *sustaining* condition, not the *triggering* one.
-   **Prerequisite:** a separate design decision on LFA low-speed behavior (affects more
-   than landing gear).
-
-5. **Detect contact crossing within the step.** Evaluate the terrain-crossing time within
-   the outer step and apply the contact force only for the fraction of the step after
-   crossing. Attacks defect #3. **Benefit:** removes the one-step full-penetration
-   registration. **Drawback:** most invasive change to `LandingGear::step()`; interacts
-   with the substep loop.
-
-6. **Add brake torque to the test scenario.** Adds wheel-slip dissipation independent of
-   rolling resistance. **Drawback:** changes the test intent (it was written to exercise
-   rolling resistance alone) and works around rather than fixes the artifact. Acceptable
-   only as a last resort if the model defects are deemed out of scope for `Aircraft`.
-
-7. **Re-scope the test to the `Aircraft` validity bound.** The design (§ top, Validity
-   bound) already states that gear-induced pitch/roll moment authority and low-speed ground
-   dynamics require `Aircraft6DOF`. Wheelbarrowing on a single wheel at taxi speed is
-   squarely in that excluded class. The test could be re-scoped to assert deceleration only
-   while all wheels are in contact (V > 6.3 m/s), with the sub-6 m/s rollout-to-stop moved
-   to an `Aircraft6DOF` scenario. **Benefit:** honest about the model's validity envelope.
-   **Drawback:** leaves the artifact in place for any scenario that does reach single-wheel
-   contact in `Aircraft`.
-
-**Recommendation:** Alternatives 2 and 4 together address both the triggering defect
-(deep single-step penetration → sub-step the gear) and the sustaining defect (held α = 0
-→ dynamic-pressure washout), and both improve fidelity beyond this one test. Confirm with
-the diagnostic that the forward spike disappears before relying on the FullStop pass.
-Alternative 7 (re-scope to validity bound) is the correct fallback if the model changes
-are deferred — it is honest about what `Aircraft` can represent. Do not apply Alternatives
-1 or 6 (damping tuning, brake torque); both mask the artifact. This open question remains
-**open** pending a decision among 2/3/4/5/7; no code change has been made.
+**Recommendation:** **Alternative 1** for $H_\text{lag}$ and the $H_2$ pitch channel (one
+pitch-inertia time constant — the body has one $I_{yy}$). Keep $H_1$ (force → n_z) as its own
+parameter, since it represents the heave/lift-shedding response, a different inertia. Expose
+the decoupling option (Alternative 2) only if implementation/verification shows the
+sweep-suppression bandwidth must differ from the physical pitch bandwidth. Values are set
+against the mathematical model in the Integration Contract during implementation.
 
 ---
 

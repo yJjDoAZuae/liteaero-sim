@@ -62,6 +62,25 @@ public:
     StrutState strutState() const;
     void       setStrutState(const StrutState& s);
 
+    // OQ-LG-15 diagnostic — breakdown of the most recent step()'s contact force.
+    // TEMPORARY: remove once the deep-penetration forward-force artifact is fixed.
+    struct ContactDiag {
+        float           F_z          = 0.f;  // normal force magnitude (N)
+        float           F_x          = 0.f;  // Pacejka longitudinal force (N, +fwd)
+        float           F_y          = 0.f;  // Pacejka lateral force (N)
+        float           F_rr         = 0.f;  // rolling resistance (N, signed)
+        float           kappa        = 0.f;  // longitudinal slip ratio
+        float           alpha_t      = 0.f;  // slip angle (rad)
+        float           V_cx         = 0.f;  // contact-patch fwd speed (m/s)
+        float           V_cy         = 0.f;  // contact-patch lateral speed (m/s)
+        float           omega        = 0.f;  // wheel spin (rad/s)
+        float           delta_dot    = 0.f;  // strut closing rate (m/s)
+        Eigen::Vector3f wheel_fwd    = Eigen::Vector3f::Zero();
+        Eigen::Vector3f surf_normal  = Eigen::Vector3f::Zero();
+        Eigen::Vector3f force_body   = Eigen::Vector3f::Zero();
+    };
+    const ContactDiag& lastContactDiag() const { return _diag; }
+
     [[nodiscard]] nlohmann::json       serializeJson()                               const;
     void                               deserializeJson(const nlohmann::json&          j);
     [[nodiscard]] std::vector<uint8_t> serializeProto()                              const;
@@ -74,6 +93,7 @@ private:
     float           _wheel_speed_rps           = 0.0f;
     float           _cf                        = 0.0f;
     float           _cv                        = 0.0f;
+    ContactDiag     _diag;   // OQ-LG-15 diagnostic cache (TEMPORARY)
 };
 
 }  // namespace liteaero::simulation

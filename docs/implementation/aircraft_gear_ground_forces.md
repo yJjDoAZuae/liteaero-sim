@@ -67,28 +67,26 @@ to GA light-single data.
 See OQ-LG-15 for the observed consequence.
 
 **Actual test outcome (IP-AGF-2 + IP-AGF-3).** The `LandingGear_FullStop_SpeedNearZero`
-test still fails at 5.1 m/s after 90 s. The predicted 0.196 m/s² deceleration holds from
-t=0 to t≈79 s, at which point a gear bounce limit cycle establishes a terminal velocity
-near 5 m/s. The root cause is unresolved; the energy source that sustains the terminal
-velocity has not been conclusively identified. See OQ-LG-15 in [`landing_gear.md`](../design/landing_gear.md).
+test still fails at ~5 m/s after 90 s — a slowly-decaying limit cycle rather than a stop.
+The root cause is now confirmed (gear–attitude feedback artifact) and the fix designed; see
+the note below.
 
-**OQ-LG-15 root cause confirmed (as of 2026-05-31).** The diagnostic test
-`LandingGear_FullStop_OQ_LG15_Diagnostic` (300 s, full-resolution per-step CSV) has
-identified the mechanism. It is **not** the previously hypothesized aerodynamic energy
-injection or gear-spring bounce limit cycle. The confirmed mechanism is a numerical
-artifact: a periodic **+22,717 N forward impulse** (every 2.411 s) caused by **deep
-single-step gear penetration** — the aircraft descends while airborne, then the
-quasi-static strut model registers the full penetration depth (δ ≈ 0.081 m) in one step,
-producing a 4 m/s one-step closing rate and a ~10 kN damping spike. The α = 0
-wheelbarrowing (main gear airborne since t = 38.4 s; LFA holds zero lift with no
-dynamic-pressure washout) supplies the nose-up attitude that projects this spike forward.
-Three contributing defects: (1) quasi-static strut with no rate limit; (2) α = 0
-wheelbarrowing from missing LFA dynamic-pressure washout; (3) one-step contact detection.
-See [`landing_gear.md` §OQ-LG-15](../design/landing_gear.md) for the full analysis,
-diagnostic figures (10 plots in [`docs/design/img/`](../design/img/)), and the candidate
-fixes (sub-step the gear, strut ODE, LFA washout, in-step contact detection, or re-scope
-the test to the `Aircraft` validity bound). OQ-LG-15 remains **open** pending a fix
-decision; `damping_extension_nspm` tuning and brake torque are both rejected as masking.
+**OQ-LG-15 root cause confirmed; fix designed (as of 2026-06).** The diagnostic test
+`LandingGear_FullStop_OQ_LG15_Diagnostic` plus `WheelUnit::step()` force-breakdown
+instrumentation identified the complete chain: a zero-inertia, velocity-slaved attitude
+sweeps the long-lever-arm nose wheel at ~9 m/s → deep one-step penetration (34 kN normal
+force) → near-peak forward slip force (+24 kN F_x) → 17.3 Hz bounce + periodic +22.7 kN
+forward spike. The **full defect investigation** (defect chain, instrumented force breakdown,
+quantified data, 9 figures) is the standalone report
+[`oq_lg15_gear_attitude_feedback_investigation.md`](../defects/oq_lg15_gear_attitude_feedback_investigation.md).
+The **fix** (two-path gear-F&M integration with inertial attitude lag) is design content in
+[`landing_gear.md` — Integration Contract — `Aircraft` §2](../design/landing_gear.md);
+OQ-LG-15 is resolved, with filter parameterization tracked as OQ-LG-17. Not yet implemented;
+no code change made.
+
+*Diagnostic instrumentation still in tree (TEMPORARY, remove when OQ-LG-15 closes):*
+`WheelUnit::ContactDiag` struct + `_diag` member + `lastContactDiag()` accessor in
+`WheelUnit.hpp/.cpp`, and the `nose_*` columns in the diagnostic test CSV.
 
 **IP-AGF-4 changes delivered.** `_contact_nz_filter_tau_s` moved from a compile-time
 constant to a JSON config field. The three HP moment filters (`_nz_moment_filt`,
@@ -98,9 +96,17 @@ as part of the n_z suppression redesign (see design deviation note below).
 
 **IP-AGF-5 partial (nz_moment path disabled).** The ay and roll-rate moment perturbation
 paths are active in `Aircraft::step()`. The nz_moment subtraction from n_z_shaped is
-intentionally commented out pending further investigation. The comment reads:
-`// n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);`. No test covers the
-nz_moment path; IP-AGF-5 is therefore not complete.
+intentionally commented out: the contact-nz suppression filter drives `n_z_shaped → 0`
+during ground contact, so the `max(0, n_z_shaped − n_z_moment_filt_val)` subtraction is
+annihilated by the floor exactly when gear contact (the only moment source) is active. The
+comment reads `// n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);`. No test
+covers the nz_moment path; IP-AGF-5 is therefore not complete. The design question — how the
+gear pitch moment should reach the load-factor model — is now **resolved**
+([OQ-LG-16](../design/landing_gear.md)): it is subsumed by the OQ-LG-15 **two-path design**,
+where the gear pitch moment drives a pitch-rate contribution → Δθ_gear (zero-DC washout) →
+α → CL → realized Nz, mirroring the roll path. The disabled n_z-suppression-channel scheme is
+abandoned; the dead `n_z_moment` code should be removed/replaced when the OQ-LG-15 two-path
+fix is implemented (the pitch path is part of that work, not re-enabled separately).
 
 **Design deviation — n_z suppression filter redesigned without consultation.**
 The design document (`landing_gear.md` §Integration Contract §2) specifies a simple

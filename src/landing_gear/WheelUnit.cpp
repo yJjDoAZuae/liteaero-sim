@@ -77,6 +77,7 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
                 _wheel_speed_rps = omega_k + 0.5f * dt_s * (odot_k + odot_star);
             }
         }
+        _diag = ContactDiag{};   // OQ-LG-15 diagnostic: clear when airborne (TEMPORARY)
         return {};
     }
 
@@ -144,6 +145,14 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
     //    thousands near standstill (V_cx → 0, ω > 0), creating a fictitious
     //    traction spike that injects energy and permanently accelerates the aircraft.
     const float r_w           = _params.tyre_radius_m;
+
+    // Quasi-static omega for free-rolling: I_w = 0.15*r_w³ ≈ 0.0012 kg·m² gives a
+    // Pacejka time constant of ~9 µs, three orders of magnitude shorter than dt = 20 ms.
+    // When no brake torque is applied the wheel must be at pure rolling (omega = V_cx/r_w);
+    // clamping to that value makes kappa=0, F_x=0, and only F_rr decelerates the aircraft.
+    if (!_params.has_brake || brake_demand_nd < 1e-4f)
+        _wheel_speed_rps = std::max(0.0f, V_cx / r_w);
+
     const float wheel_speed_mps = r_w * std::abs(_wheel_speed_rps);
     const float V_ref  = std::max(std::abs(V_cx), wheel_speed_mps) + kVeps;
     const float kappa = (r_w * _wheel_speed_rps - V_cx) / V_ref;
@@ -166,6 +175,13 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
 
     // 9. Wheel speed integration — Tustin predictor-corrector (OQ-LG-5)
     // I_w = m_w * r_w^2 / 2,  m_w ≈ 0.3 * r_w  →  I_w = 0.15 * r_w^3
+    //
+    // Rolling resistance is applied as a direct longitudinal force (step 10 below),
+    // NOT as a torque here.  The wheel inertia I_w ≈ 0.0012 kg·m² gives a Pacejka
+    // time constant of ~9 µs — orders of magnitude shorter than any practical dt.
+    // Routing rolling resistance through the wheel ODE causes the omega integrator
+    // to overshoot by ~3× per step and oscillate, producing a near-zero average
+    // contact force instead of the intended rolling-resistance deceleration.
     const float I_w = 0.15f * r_w * r_w * r_w;
 
     if (I_w > 0.0f) {
@@ -173,9 +189,7 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
         const float tau_brake_k  = (_params.has_brake)
                                  ? _params.max_brake_torque_nm * brake_demand_nd * _wheel_speed_rps
                                  : 0.0f;
-        const float tau_roll_k   = (_wheel_speed_rps > 0.01f)
-                                 ? _params.rolling_resistance_nd * r_w * F_z : 0.0f;
-        const float odot_k       = (-r_w * F_x - tau_brake_k - tau_roll_k) / I_w;
+        const float odot_k       = (-r_w * F_x - tau_brake_k) / I_w;
 
         // --- Euler predictor ---
         const float omega_star = _wheel_speed_rps + odot_k * dt_s;
@@ -194,22 +208,35 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
         const float tau_brake_star = (_params.has_brake)
                                    ? _params.max_brake_torque_nm * brake_demand_nd * omega_star
                                    : 0.0f;
-        const float tau_roll_star  = (omega_star > 0.01f)
-                                   ? _params.rolling_resistance_nd * r_w * F_z : 0.0f;
-        const float odot_star      = (-r_w * F_x_star - tau_brake_star - tau_roll_star) / I_w;
+        const float odot_star      = (-r_w * F_x_star - tau_brake_star) / I_w;
 
         // --- Tustin (trapezoidal); clamp at zero — wheels do not spin backwards ---
         _wheel_speed_rps = std::max(0.0f, _wheel_speed_rps + 0.5f * dt_s * (odot_k + odot_star));
     }
 
+    // Rolling resistance: direct backward force proportional to F_z (tire hysteresis loss).
+    // Applied here rather than through the wheel ODE because I_w << (m_aircraft * dt²),
+    // making the indirect path (torque → omega → kappa → Pacejka) numerically unstable.
+    const float F_rr = (_params.rolling_resistance_nd > 0.0f && std::abs(V_cx) > kVeps)
+                       ? -_params.rolling_resistance_nd * F_z * std::copysign(1.0f, V_cx)
+                       : 0.0f;
+
     // 10. Force assembly in body frame
     const Eigen::Vector3f force = F_z * surface_normal_body
-                                 + F_x * wheel_fwd
+                                 + (F_x + F_rr) * wheel_fwd
                                  + F_y * wheel_right;
     WheelContactForces result;
     result.force_body_n   = force;
     result.moment_body_nm = contact_point_body_m.cross(force);
     result.in_contact     = true;
+
+    // OQ-LG-15 diagnostic cache (TEMPORARY)
+    _diag.F_z = F_z;  _diag.F_x = F_x;  _diag.F_y = F_y;  _diag.F_rr = F_rr;
+    _diag.kappa = kappa;  _diag.alpha_t = alpha_t;
+    _diag.V_cx = V_cx;  _diag.V_cy = V_cy;  _diag.omega = _wheel_speed_rps;
+    _diag.delta_dot = delta_dot;
+    _diag.wheel_fwd = wheel_fwd;  _diag.surf_normal = surface_normal_body;
+    _diag.force_body = force;
     return result;
 }
 

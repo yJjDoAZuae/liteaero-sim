@@ -6,6 +6,7 @@
 #include "propulsion/PropulsionProp.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -76,6 +77,10 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _ny_zeta_nd          = ac.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = ac.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = ac.at("roll_rate_zeta_nd").get<float>();
+    if (!ac.contains("contact_nz_filter_tau_s"))
+        throw std::invalid_argument(
+            "Aircraft::initialize: missing required field aircraft.contact_nz_filter_tau_s");
+    _contact_nz_filter_tau_s = ac.at("contact_nz_filter_tau_s").get<float>();
     _cmd_filter_dt_s     = outer_dt_s / static_cast<float>(_cmd_filter_substeps);
     // Nyquist: wn * cmd_filter_dt_s must be < π for each axis.
     constexpr float kPi = 3.14159265f;
@@ -92,6 +97,12 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
     _roll_rate_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
     _nz_filter.resetToInput(1.f);
+    _nz_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    _ay_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
+    _roll_rate_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
+    _nz_moment_filt.resetToInput(0.f);
+    _ay_moment_filt.resetToInput(0.f);
+    _roll_rate_moment_filt.resetToInput(0.f);
 
     // 5. Load factor allocator (references _liftCurve — must be emplaced after step 3)
     const auto& lfa_sec = config.at("load_factor_allocator");
@@ -165,8 +176,13 @@ void Aircraft::reset() {
     _propulsion->reset();
     if (_has_landing_gear)  _landing_gear.reset();
     if (_has_body_collider) _body_collider.reset();
-    _contact_forces   = ContactForces{};
-    _n_contact_z_filt = 0.f;
+    _contact_forces       = ContactForces{};
+    _n_contact_z_filt     = 0.f;
+    _wow0_elapsed_s       = 0.f;
+    _nz_moment_filt.resetToInput(0.f);
+    _ay_moment_filt.resetToInput(0.f);
+    _roll_rate_moment_filt.resetToInput(0.f);
+    _body_in_hard_contact = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,8 +224,7 @@ void Aircraft::step(double time_sec,
 
     // Rotation matrices used both here and at step 10 (gear-to-wind transform).
     // _state is not mutated between steps 5 and 10.
-    constexpr float kGravity_mps2    = 9.80665f;
-    constexpr float kContactFiltTau_s = 0.10f;   // lag τ for n_contact_z filter (s)
+    constexpr float kGravity_mps2 = 9.80665f;
     const Eigen::Matrix3f R_nb_mat = _state.q_nb().toRotationMatrix();
     const Eigen::Matrix3f R_nw_mat = _state.q_nw().toRotationMatrix();
 
@@ -238,6 +253,12 @@ void Aircraft::step(double time_sec,
         contact_forces.weight_on_wheels |= bc.weight_on_wheels;
     }
     _contact_forces = contact_forces;
+    // Propagate persistent body-contact flag: even when the penalty spring
+    // sees pen=0 after the hard constraint corrected altitude, the aircraft is
+    // still on terrain if _body_in_hard_contact is set.
+    if (_body_in_hard_contact) {
+        _contact_forces.weight_on_wheels = true;
+    }
 
     // 5b. Subtract the current-step contact-force upward contribution from n_z
     //     so the aerodynamic system only targets the share of normal load not
@@ -246,19 +267,69 @@ void Aircraft::step(double time_sec,
     //     NED-frame projection (not wind-frame): the contact force is vertical
     //     in NED regardless of aircraft pitch.  Wind-frame introduces a
     //     cos(alpha) factor that causes a positive-feedback loop.
+    //
+    //     When the body collider triggered the hard terrain constraint last step
+    //     (_body_in_hard_contact), the penalty spring sees pen=0 at the
+    //     pre-integration position and reports zero force — but the terrain IS
+    //     providing the full ground reaction.  We supply a synthetic raw value
+    //     derived from the LP filter output so the filter drives n_z_shaped to 0
+    //     during landing while releasing it smoothly during a go-around command.
     {
-        const Eigen::Vector3f F_contact_NED = R_nb_mat * contact_forces.force_body_n;
-        // NED +Z = down; upward contact force → F_contact_NED.z() < 0.
-        const float n_contact_z_raw =
-            -F_contact_NED.z() / (_inertia.mass_kg * kGravity_mps2);
-        // First-order lag on the contact-load correction.  The lag prevents
-        // the LFA from instantly restoring full aerodynamic lift when the gear
-        // briefly loses contact during a bounce, which would maintain the
-        // upward rebound velocity indefinitely.  τ = 0.10 s is roughly half
-        // the gear natural period (~0.35 s for this aircraft).
-        const float alpha = _outer_dt_s / (_outer_dt_s + kContactFiltTau_s);
-        _n_contact_z_filt += alpha * (n_contact_z_raw - _n_contact_z_filt);
+        // Two-speed filter: instant engagement on contact, slow decay when airborne.
+        // Instant engagement prevents the LFA from restoring aero lift while gear
+        // springs are compressed (WoW=1).  Slow decay (τ_decay = 10× τ_engage) holds
+        // the suppression across brief airborne phases during gear bounce, preventing
+        // aero energy injection from sustaining the limit cycle.
+        if (_body_in_hard_contact) {
+            // After the hard constraint, the penalty spring sees pen=0 and reports
+            // zero force.  n_z_shaped here is the LP filter output (n_z_LP) before
+            // the contact modification.  max(0, 2 - n_z_LP):
+            //   n_z_LP=1 (landing, n_z_cmd=1): raw=1 → filter→1 → n_z_shaped=0 → pinned. ✓
+            //   n_z_LP=2 (go-around, n_z_cmd=2): raw=0 → filter decays → takeoff. ✓
+            const float raw = std::max(0.0f, 2.0f - n_z_shaped);
+            const float alpha = _outer_dt_s / (_outer_dt_s + _contact_nz_filter_tau_s);
+            _n_contact_z_filt += alpha * (raw - _n_contact_z_filt);
+            _wow0_elapsed_s = 0.0f;
+        } else if (contact_forces.weight_on_wheels) {
+            _n_contact_z_filt = 1.0f;  // instant engagement
+            _wow0_elapsed_s = 0.0f;
+        } else {
+            // WoW=0: hold for one gear natural period (τ_hold = 10 × τ_engage), then
+            // decay slowly (τ_decay = τ_hold).  The hold window covers brief bounces
+            // during ground roll, preventing sub-stall alpha spikes that would inject
+            // aerodynamic energy and sustain the bounce limit cycle.  Genuine takeoff
+            // (WoW=0 sustained beyond τ_hold) releases suppression via the slow decay.
+            _wow0_elapsed_s += _outer_dt_s;
+            const float hold_time_s = _contact_nz_filter_tau_s * 10.0f;
+            if (_wow0_elapsed_s > hold_time_s) {
+                const float alpha_decay = _outer_dt_s / (_outer_dt_s + hold_time_s);
+                _n_contact_z_filt -= alpha_decay * _n_contact_z_filt;
+            }
+            // else: hold at current value — bounce is too brief for genuine flight
+        }
         n_z_shaped = std::max(0.0f, n_z_shaped - _n_contact_z_filt);
+    }
+
+    // 5c. Gear moments → wind-frame perturbations (OQ-LG-9 / OQ-LG-13).
+    //     M^W = R_WN · R_NB · M^B; then each axis drives its FBW-complementary HP filter.
+    //     The HP filters pass transient moment spikes and suppress the DC component,
+    //     which is already handled by the aero forces in step 9.
+    float delta_rr_filt_rps   = 0.f;
+    float n_z_moment_filt_val  = 0.f;
+    float delta_ay_filt_mps2  = 0.f;
+    // DISABLED pending investigation of interaction with step-5b contact-nz filter.
+    (void)n_z_moment_filt_val;
+    {
+        const Eigen::Vector3f M_wind =
+            R_nw_mat.transpose() * (R_nb_mat * contact_forces.moment_body_nm);
+        const float delta_rr_raw_rps  = M_wind.x() / _inertia.Ixx_kgm2 * _outer_dt_s;
+        // const float n_z_moment_raw    = M_wind.y() / _inertia.Iyy_kgm2 * _outer_dt_s * V_air / kGravity_mps2;
+        const float delta_ay_raw_mps2 = M_wind.z() / _inertia.Izz_kgm2 * _outer_dt_s * V_air;
+        delta_rr_filt_rps  = _roll_rate_moment_filt.step(delta_rr_raw_rps);
+        // n_z_moment_filt_val = _nz_moment_filt.step(n_z_moment_raw);
+        _nz_moment_filt.step(0.f);   // advance filter state with zero input (disabled path)
+        delta_ay_filt_mps2 = _ay_moment_filt.step(delta_ay_raw_mps2);
+        // n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);
     }
 
     LoadFactorInputs lfa_in;
@@ -318,8 +389,29 @@ void Aircraft::step(double time_sec,
     const float F_z_aero = std::max(F.z_n, -(n_z_shaped * m * kGravity_mps2));
 
     const float ax = (T * ca * cb + F.x_n + F_gear_wind.x()) / m + g_wind.x();
-    const float ay = (-T * ca * sb + F.y_n + F_gear_wind.y()) / m + g_wind.y();
+    const float ay = (-T * ca * sb + F.y_n + F_gear_wind.y()) / m + g_wind.y() + delta_ay_filt_mps2;
     const float az = (-T * sa      + F_z_aero + F_gear_wind.z()) / m + g_wind.z();
+
+    // DBG-FULLSTOP: print forces for the first 5 s, and at late time (>87 s) every 0.1s.
+    if (_has_landing_gear && (time_sec < 5.0 || time_sec > 87.0)) {
+        const float alt_now = _state.positionDatum().height_WGS84_m();
+        const float vD_now  = _state.velocity_NED_mps().z();
+        const float vN_now  = _state.velocity_NED_mps().x();
+        const bool  wow     = contact_forces.weight_on_wheels;
+        static double s_next_print = 0.0;
+        if (time_sec >= s_next_print) {
+            // Compute body pitch angle from q_nb (for diagnosing gear-geometry drift)
+            const Eigen::Quaternionf q_nb_dbg(_state.q_nb());
+            const Eigen::Matrix3f R_nb_dbg = q_nb_dbg.toRotationMatrix();
+            const float pitch_deg = std::asin(-R_nb_dbg(0, 2)) * 57.2958f;
+            printf("  [t=%.2f] alt=%.4f vN=%.4f vD=%.4f nzfilt=%.3f nzshp=%.3f"
+                   " Fwz=%.0f Fwx=%.0f az=%.3f ax=%.4f pitch=%.2f wow=%d\n",
+                   (float)time_sec, alt_now, vN_now, vD_now, _n_contact_z_filt,
+                   n_z_shaped, F_gear_wind.z(), F_gear_wind.x(),
+                   az, ax, pitch_deg, (int)wow);
+            s_next_print = time_sec + 0.1;
+        }
+    }
 
     // 10. Advance position and velocity. Attitude is committed after the terrain
     //     constraint so that stepQnw always sees the truly final velocity.
@@ -347,23 +439,23 @@ void Aircraft::step(double time_sec,
             _contact_forces.force_body_n   += bc_impact.force_body_n;
             _contact_forces.moment_body_nm += bc_impact.moment_body_nm;
             _contact_forces.weight_on_wheels = true;
-            // Refresh the contact-load filter from the post-integration body impact.
-            // The pre-integration body collider (step 5a) sees zero penetration once
-            // the hard constraint has corrected the aircraft position, so without this
-            // update the filter decays freely next step and full aerodynamic lift
-            // resumes immediately, pitching the aircraft up to stall.
-            const Eigen::Vector3f F_bc_NED = R_nb_mat * bc_impact.force_body_n;
-            const float n_contact_z_bc =
-                -F_bc_NED.z() / (_inertia.mass_kg * kGravity_mps2);
-            const float alpha_bc = _outer_dt_s / (_outer_dt_s + kContactFiltTau_s);
-            _n_contact_z_filt += alpha_bc * (n_contact_z_bc - _n_contact_z_filt);
+            // Keep the flag set each step the hard constraint fires.  Step-5b
+            // uses it to supply n_contact_z_raw = 1.0 when the penalty spring
+            // sees pen=0 after altitude correction.
+            _body_in_hard_contact = true;
             _state.applyTerrainHardConstraint(pen);
+        } else if (pen < -0.10f) {
+            // All corners are well above terrain — aircraft has genuinely departed
+            // the surface.  Clear the flag so the LFA is free to restore lift.
+            _body_in_hard_contact = false;
         }
+        // pen in (-0.10, 0]: small pitch-induced clearance — keep flag set so
+        // lift suppression and WoW reporting remain active across the gap.
     }
 
     // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and
     //     after any terrain constraint modification.
-    _state.commitAttitude(rollRate_filt_rps, dt_s);
+    _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s);
 }
 
 // ---------------------------------------------------------------------------
@@ -384,8 +476,12 @@ nlohmann::json Aircraft::serializeJson() const {
     j["ny_zeta_nd"]           = _ny_zeta_nd;
     j["roll_rate_wn_rad_s"]   = _roll_rate_wn_rad_s;
     j["roll_rate_zeta_nd"]    = _roll_rate_zeta_nd;
-    j["n_contact_z_filt"]     = _n_contact_z_filt;
-    j["nz_filter"]            = _nz_filter.serializeJson();
+    j["n_contact_z_filt"]         = _n_contact_z_filt;
+    j["wow0_elapsed_s"]           = _wow0_elapsed_s;
+    j["nz_moment_filter_x"]       = nlohmann::json::array({_nz_moment_filt.x()(0,0),       _nz_moment_filt.x()(1,0)});
+    j["ay_moment_filter_x"]       = nlohmann::json::array({_ay_moment_filt.x()(0,0),       _ay_moment_filt.x()(1,0)});
+    j["roll_rate_moment_filter_x"]= nlohmann::json::array({_roll_rate_moment_filt.x()(0,0),_roll_rate_moment_filt.x()(1,0)});
+    j["nz_filter"]                = _nz_filter.serializeJson();
     j["ny_filter"]            = _ny_filter.serializeJson();
     j["roll_rate_filter"]     = _roll_rate_filter.serializeJson();
     j["airframe"]        = _airframe.serializeJson();
@@ -427,6 +523,22 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _roll_rate_wn_rad_s  = j.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = j.at("roll_rate_zeta_nd").get<float>();
     _n_contact_z_filt    = j.value("n_contact_z_filt", 0.f);
+    _wow0_elapsed_s      = j.value("wow0_elapsed_s", 0.f);
+    _nz_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    _ay_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
+    _roll_rate_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
+    auto restoreFilterState = [](liteaero::control::FilterSS2Clip& filt,
+                                 const nlohmann::json& j, const char* key) {
+        if (j.contains(key) && j.at(key).size() >= 2) {
+            liteaero::control::Mat21 x;
+            x(0,0) = j.at(key).at(0).get<float>();
+            x(1,0) = j.at(key).at(1).get<float>();
+            filt.resetState(x);
+        }
+    };
+    restoreFilterState(_nz_moment_filt,        j, "nz_moment_filter_x");
+    restoreFilterState(_ay_moment_filt,        j, "ay_moment_filter_x");
+    restoreFilterState(_roll_rate_moment_filt, j, "roll_rate_moment_filter_x");
     _nz_filter.deserializeJson(j.at("nz_filter"));
     _ny_filter.deserializeJson(j.at("ny_filter"));
     _roll_rate_filter.deserializeJson(j.at("roll_rate_filter"));
@@ -468,13 +580,20 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_ny_zeta_nd(_ny_zeta_nd);
     proto.set_roll_rate_wn_rad_s(_roll_rate_wn_rad_s);
     proto.set_roll_rate_zeta_nd(_roll_rate_zeta_nd);
-    proto.add_nz_filter_x(_nz_filter.x()(0, 0));
-    proto.add_nz_filter_x(_nz_filter.x()(1, 0));
-    proto.add_ny_filter_x(_ny_filter.x()(0, 0));
-    proto.add_ny_filter_x(_ny_filter.x()(1, 0));
-    proto.add_roll_rate_filter_x(_roll_rate_filter.x()(0, 0));
-    proto.add_roll_rate_filter_x(_roll_rate_filter.x()(1, 0));
+    proto.set_nz_filter_x0(_nz_filter.x()(0, 0));
+    proto.set_nz_filter_x1(_nz_filter.x()(1, 0));
+    proto.set_ny_filter_x0(_ny_filter.x()(0, 0));
+    proto.set_ny_filter_x1(_ny_filter.x()(1, 0));
+    proto.set_roll_rate_filter_x0(_roll_rate_filter.x()(0, 0));
+    proto.set_roll_rate_filter_x1(_roll_rate_filter.x()(1, 0));
     proto.set_n_contact_z_filt(_n_contact_z_filt);
+    proto.set_wow0_elapsed_s(_wow0_elapsed_s);
+    proto.set_nz_moment_filter_x0(_nz_moment_filt.x()(0,0));
+    proto.set_nz_moment_filter_x1(_nz_moment_filt.x()(1,0));
+    proto.set_ay_moment_filter_x0(_ay_moment_filt.x()(0,0));
+    proto.set_ay_moment_filter_x1(_ay_moment_filt.x()(1,0));
+    proto.set_roll_rate_moment_filter_x0(_roll_rate_moment_filt.x()(0,0));
+    proto.set_roll_rate_moment_filter_x1(_roll_rate_moment_filt.x()(1,0));
 
     *proto.mutable_kinematic_state()  = parseSubMessage<las_proto::KinematicState>(_state.serializeProto());
     *proto.mutable_initial_state()    = parseSubMessage<las_proto::KinematicState>(_initial_state.serializeProto());
@@ -524,20 +643,36 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _roll_rate_wn_rad_s  = proto.roll_rate_wn_rad_s();
     _roll_rate_zeta_nd   = proto.roll_rate_zeta_nd();
     _n_contact_z_filt = proto.n_contact_z_filt();
+    _wow0_elapsed_s   = proto.wow0_elapsed_s();
+    _nz_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    _ay_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
+    _roll_rate_moment_filt.setHighPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
+    {
+        Mat21 x;
+        x(0,0) = proto.nz_moment_filter_x0();
+        x(1,0) = proto.nz_moment_filter_x1();
+        _nz_moment_filt.resetState(x);
+        x(0,0) = proto.ay_moment_filter_x0();
+        x(1,0) = proto.ay_moment_filter_x1();
+        _ay_moment_filt.resetState(x);
+        x(0,0) = proto.roll_rate_moment_filter_x0();
+        x(1,0) = proto.roll_rate_moment_filter_x1();
+        _roll_rate_moment_filt.resetState(x);
+    }
     _nz_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
     _roll_rate_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
     Mat21 nz_x;
-    nz_x(0, 0) = proto.nz_filter_x_size() >= 2 ? proto.nz_filter_x(0) : 0.f;
-    nz_x(1, 0) = proto.nz_filter_x_size() >= 2 ? proto.nz_filter_x(1) : 0.f;
+    nz_x(0, 0) = proto.nz_filter_x0();
+    nz_x(1, 0) = proto.nz_filter_x1();
     _nz_filter.resetState(nz_x);
     Mat21 ny_x;
-    ny_x(0, 0) = proto.ny_filter_x_size() >= 2 ? proto.ny_filter_x(0) : 0.f;
-    ny_x(1, 0) = proto.ny_filter_x_size() >= 2 ? proto.ny_filter_x(1) : 0.f;
+    ny_x(0, 0) = proto.ny_filter_x0();
+    ny_x(1, 0) = proto.ny_filter_x1();
     _ny_filter.resetState(ny_x);
     Mat21 rr_x;
-    rr_x(0, 0) = proto.roll_rate_filter_x_size() >= 2 ? proto.roll_rate_filter_x(0) : 0.f;
-    rr_x(1, 0) = proto.roll_rate_filter_x_size() >= 2 ? proto.roll_rate_filter_x(1) : 0.f;
+    rr_x(0, 0) = proto.roll_rate_filter_x0();
+    rr_x(1, 0) = proto.roll_rate_filter_x1();
     _roll_rate_filter.resetState(rr_x);
 
     if (_propulsion) {

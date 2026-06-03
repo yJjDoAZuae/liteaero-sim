@@ -118,7 +118,15 @@ private:
     liteaero::control::FilterSS2Clip _nz_filter;
     liteaero::control::FilterSS2Clip _ny_filter;
     liteaero::control::FilterSS2Clip _roll_rate_filter;
-    float                  _n_contact_z_filt      = 0.f;    // first-order lag on contact load correction
+    // 2nd-order HP moment perturbation filters — complement of per-axis FBW LP.
+    // Each uses the same ωn and ζ as the corresponding FBW axis filter (OQ-LG-13).
+    liteaero::control::FilterSS2Clip _nz_moment_filt;
+    liteaero::control::FilterSS2Clip _ay_moment_filt;
+    liteaero::control::FilterSS2Clip _roll_rate_moment_filt;
+    float                  _n_contact_z_filt          = 0.f;   // lift suppression: 1=gear loaded, 0=airborne
+    float                  _contact_nz_filter_tau_s   = 0.10f; // τ_engage; τ_decay = 10×τ (config)
+    float                  _wow0_elapsed_s            = 0.f;   // time since WoW last became 0; 0 when WoW=1
+    bool                   _body_in_hard_contact  = false;  // set by step-11 hard constraint; read and cleared by step-11
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps
