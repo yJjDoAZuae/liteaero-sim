@@ -239,8 +239,9 @@ fidelity gap that sustains (but does not by itself cause) the artifact.
 
 ## Relationship to the fix
 
-The fix — the two-path gear force/moment integration with an inertial attitude lag — is design
-content recorded in [`landing_gear.md` — Integration Contract — `Aircraft` §2](../design/landing_gear.md).
+The fix — the gear-F&M integration (a gear-load-driven body rotation-deviation state feeding
+α/CL and the gear geometry, plus a lagged n_z-command relaxation) — is design content recorded
+in [`landing_gear.md` — Integration Contract — `Aircraft` §2](../design/landing_gear.md).
 Verification: after implementing, re-run `LandingGear_FullStop_OQ_LG15_Diagnostic` and confirm
 both the +22.7 kN forward spike and the 17.3 Hz bounce vanish and the aircraft decelerates to
 rest within the original 90 s.

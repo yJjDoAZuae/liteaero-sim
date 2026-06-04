@@ -79,10 +79,12 @@ force) → near-peak forward slip force (+24 kN F_x) → 17.3 Hz bounce + period
 forward spike. The **full defect investigation** (defect chain, instrumented force breakdown,
 quantified data, 9 figures) is the standalone report
 [`oq_lg15_gear_attitude_feedback_investigation.md`](../defects/oq_lg15_gear_attitude_feedback_investigation.md).
-The **fix** (two-path gear-F&M integration with inertial attitude lag) is design content in
+The **fix** (gear-F&M integration: a gear-load-driven body rotation-deviation state feeding
+α/CL and the gear geometry, plus a lagged n_z-command relaxation) is design content in
 [`landing_gear.md` — Integration Contract — `Aircraft` §2](../design/landing_gear.md);
-OQ-LG-15 is resolved, with filter parameterization tracked as OQ-LG-17. Not yet implemented;
-no code change made.
+OQ-LG-15 is resolved, and filter parameterization is resolved (OQ-LG-17: rotation-deviation
+filter from the inertia tensor, n_z-relaxation filter from FBW ωₙ/ζ, independently). Design
+complete; not yet implemented, no code change made.
 
 *Diagnostic instrumentation still in tree (TEMPORARY, remove when OQ-LG-15 closes):*
 `WheelUnit::ContactDiag` struct + `_diag` member + `lastContactDiag()` accessor in
@@ -102,11 +104,12 @@ annihilated by the floor exactly when gear contact (the only moment source) is a
 comment reads `// n_z_shaped = std::max(0.f, n_z_shaped - n_z_moment_filt_val);`. No test
 covers the nz_moment path; IP-AGF-5 is therefore not complete. The design question — how the
 gear pitch moment should reach the load-factor model — is now **resolved**
-([OQ-LG-16](../design/landing_gear.md)): it is subsumed by the OQ-LG-15 **two-path design**,
-where the gear pitch moment drives a pitch-rate contribution → Δθ_gear (zero-DC washout) →
-α → CL → realized Nz, mirroring the roll path. The disabled n_z-suppression-channel scheme is
-abandoned; the dead `n_z_moment` code should be removed/replaced when the OQ-LG-15 two-path
-fix is implemented (the pitch path is part of that work, not re-enabled separately).
+([OQ-LG-16](../design/landing_gear.md)): it is subsumed by the OQ-LG-15 **gear-F&M
+integration**, where the gear pitch moment is one input to the body rotation-deviation
+$\Delta\theta$ (a stable 2nd-order low-pass, finite DC, *not* a rate into `q_nw`) → α → CL →
+realized Nz. The disabled n_z-suppression-channel scheme is abandoned; the dead `n_z_moment`
+code should be removed/replaced when the OQ-LG-15 fix is implemented (the pitch path is part of
+that work, not re-enabled separately).
 
 **Design deviation — n_z suppression filter redesigned without consultation.**
 The design document (`landing_gear.md` §Integration Contract §2) specifies a simple

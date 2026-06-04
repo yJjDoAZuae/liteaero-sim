@@ -176,7 +176,7 @@ as $F_z\sin\gamma$ onto wind-x. Whether this cross-axis coupling is a correct ph
 effect or a model fidelity limitation of the wind-frame integrator is an open question
 (OQ-LG-10).
 
-**2. Gear force & moment integration — two-path design with inertial attitude lag.**
+**2. Gear force & moment integration — rotation-deviation state plus lagged n_z relaxation.**
 
 > **Status: designed (2026-06), not yet implemented.** This is the authoritative design for
 > how gear forces and moments couple into the load-factor model. It supersedes the
@@ -190,69 +190,95 @@ contact force applied against that zero-inertia attitude produces a non-physical
 (OQ-LG-15). The design below restores the missing rotational inertia where it matters and
 routes gear force and moment into the FBW channels.
 
-**Path 1 — gear normal force → realized n_z (second-order shaping, DC gain 1).** The gear
-normal contribution to load factor is shaped by a second-order low-pass and subtracted from
-the commanded n_z so the wing does not double-supply load the gear already carries:
+The load-factor model normally sets the body attitude to FPA + α with zero rotational inertia.
+The gear couples in through **two mechanisms, both driven by the gear-derived loads** so that
+**both vanish identically when the gear is unloaded** — there is no filter on the flight-path
+angle, no always-on dynamic path, and no state switching. In flight the model is exactly
+trim-aero.
+
+**(a) Common rotation-deviation state Δθ — the body's inertial response to the gear loads.**
+The gear normal force and gear moment drive a single body rotation-deviation $\Delta\theta$ —
+the body's inertial pitch/bank response — through a **stable second-order low-pass in the gear
+inputs** (a damped spring–mass–damper, $H_2(s)=\omega^2/(s^2+2\zeta\omega s+\omega^2)$ scaled
+per channel):
+
+- **Zero initial rotational rate** (zero-initial-slope response): the body cannot slew instantly.
+- **Finite, nonzero DC gain**: a sustained gear load produces a bounded steady deviation (the
+  static stance / steady derotation) — not zero. (The deviation *rate* $s\,H_2$ is zero-DC: a
+  sustained load produces no sustained rate, i.e. no runaway.)
+- **Decays to zero on zero input**: the restoring term returns $\Delta\theta$ to zero whenever
+  the gear loads cease. Because $\Delta\theta$ is forced by the **gear loads themselves** —
+  *not* by lagging the FPA — it is identically zero off-ground, with no residual dynamics and
+  no switching.
+
+$\Delta\theta$ is forced by two gear-derived inputs:
+
+1. the **gear normal force's flight-path contribution** (the load factor / path curvature it
+   imparts) — the body's inertial resistance to the gear arresting the descent; and
+2. the **gear moment** $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$, as $M^W/I$ (direct angular
+   forcing), per axis (pitch from $M_y^W/I_{yy}$, bank from $M_x^W/I_{xx}$; the yaw axis
+   $M_z^W/I_{zz}$ drives a lateral specific-force perturbation $\Delta a_y$).
+
+$\Delta\theta$ is summed into **both** the aero angle of attack and the gear-geometry attitude:
+
+$$\alpha_\text{aero} = \alpha_\text{cmd} + \Delta\theta, \qquad
+\theta_\text{geom} = \text{FPA} + \alpha_\text{cmd} + \Delta\theta.$$
+
+**The prompt α/CL response emerges from the EOM — no FPA filter needed.** The gear force
+changes the flight-path angle through the ordinary force→velocity integration, while the body
+(carrying $\Delta\theta$) does not follow that change instantly (zero initial rotational rate).
+So $\alpha = \theta_\text{body} - \text{FPA}$ opens up promptly even though the body's own rate
+starts at zero, and CL follows. This is the confirmed mechanism — the FPA moves, the body lags —
+but the lag is produced by $\Delta\theta$ responding to the **gear load**, not by filtering the
+FPA. When the gear unloads, $\Delta\theta\to 0$ and $\alpha_\text{aero}\to\alpha_\text{cmd}$:
+exactly trim-aero, no added dynamics. The same $\Delta\theta$ in $\theta_\text{geom}$ breaks the
+OQ-LG-15 sweep — the body does not follow the gear-force-induced FPA swing, so the contact
+point is not swept through space at the FPA rate.
+
+**Never integrated into `q_nw`; no stuck bias.** $\Delta\theta$ is a separate state, **never
+integrated into the primary attitude quaternion `q_nw`**. Its restoring term (the spring
+$k=I\omega^2$) actively returns it to zero, so no residual can become a permanent attitude
+bias. (Feeding a *rate* into the pure `q_nw` integrator, which has no restoring term, would
+hold any leaked residual — the failure mode that ruled out the earlier "gear moment → body
+rate" framing.) `q_nw` carries only the velocity-derived attitude and the FBW-commanded roll.
+
+CL-coupling sign: main-gear contact (aft, nose-down moment) → $\Delta\theta<0$ → lower CL →
+derotation/settle; nose-gear contact (forward, nose-up) → higher CL → nose-up/bounce tendency.
+
+**(b) Lagged n_z-command relaxation — the load handoff.** The gear normal force provides part
+of the commanded load factor, so the wing must not double-supply it. The FBW senses the
+gear-provided acceleration and **relaxes the commanded n_z through its filter** (a lagged
+response, $H_1$, DC gain 1); $\alpha_\text{cmd}$ falls accordingly and the aero α/CL correct as
+the filter settles:
 
 $$n_{z,\text{shaped}} = \max\!\bigl(0,\; n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}\bigr),
-\qquad n_{z,\text{gear}} = \frac{-F_z^B}{m\,g},
-\qquad H_1(s)=\frac{\omega_{n1}^2}{s^2+2\zeta_1\omega_{n1}s+\omega_{n1}^2}.$$
+\qquad n_{z,\text{gear}} = \frac{-F_z^B}{m\,g}.$$
 
-$H_1$ has **DC gain 1** (a steady gear load fully transfers to realized n_z; the wing lift
-command goes to zero when settled) and a **zero-initial-slope (second-order) step response**
-that emulates the body's inertial resistance to a strut-force transient. It is **gated on
-gear load** (weight-on-wheels). No explicit dynamic-pressure washout is applied: lift
-authority fades emergently through the aerodynamic limit $L_{\max}=q\,S\,C_{L,\max}$.
+The input is the gear normal-force load factor (zero off-ground via the strut force floor), so
+the relaxation also vanishes when the gear unloads; gating is on the **input**, never the
+output (output-gating would inject a discontinuous lift jump at liftoff). No explicit
+dynamic-pressure washout is applied: lift authority fades emergently through
+$L_{\max}=q\,S\,C_{L,\max}$.
 
-**Path 2 — gear moments → body rates, with pitch feeding α → CL.** The wind-frame gear moment
-$\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$ drives a perturbation on each axis through a
-**zero-DC (washout / high-pass) filter** $H_2$, so a transient gear moment produces a
-transient response that **converges back to zero once the gear unloads** (no persistent
-gear-moment deflection):
+**DC-gain summary:**
 
-$$\Delta p = H_{2}\!\left\{\tfrac{M_x^W}{I_{xx}}\right\}\ \text{(roll rate)},\quad
-\Delta\theta_\text{gear} = H_{2}\!\left\{\tfrac{M_y^W}{I_{yy}}\right\}\ \text{(pitch)},\quad
-\Delta a_y = H_{2}\!\left\{\tfrac{M_z^W}{I_{zz}}\,V\right\}\ \text{(lateral accel)}.$$
-
-$\Delta p$ is added to `rollRate_Wind_rps` in `commitAttitude`; $\Delta a_y$ is added to the
-$a_y$ specific force; and the gear-induced pitch $\Delta\theta_\text{gear}$ is **summed into
-the angle of attack**, $\alpha_\text{aero}=\alpha_\text{LFA}+\Delta\theta_\text{gear}$, so it
-modulates CL and hence the realized n_z. This produces the physical coupling: main-gear
-contact (aft, nose-down moment) lowers CL → derotation/settle; nose-gear contact (forward,
-nose-up moment) raises CL → nose-up/bounce tendency. The pitch path replaces the abandoned
-n_z-command-suppression route (OQ-LG-16, resolved).
-
-**Inertial attitude lag — the attitude consumed by gear geometry.** The body attitude used to
-compute gear contact geometry (and the gear-force frame, the body rate $\boldsymbol\omega$ in
-the contact-patch velocity, and the reported attitude) **lags the velocity-vector direction
-through a configurable low-pass** $H_\text{lag}$ with **DC gain 1**:
-
-$$\theta_\text{geom} = H_\text{lag}(s)\,\gamma \;+\; \alpha_\text{LFA} \;+\; \Delta\theta_\text{gear}.$$
-
-This restores rotational inertia: the body cannot pitch faster than $H_\text{lag}$ permits, so
-the contact point cannot be swept through space faster than the body can physically rotate.
-$H_\text{lag}$ tracks the steady/real attitude (DC gain 1) and lags only fast swings — it is
-not a gear-moment deflection and is distinct from the zero-DC washout of Path 2. This lag is
-the element that breaks the OQ-LG-15 bounce; the aero force summation continues to use the
-true instantaneous α for the in-flight n_z command, so the lag does not enter the in-flight
-lift response (where $\Delta\theta_\text{gear}=0$).
-
-**DC-gain summary** (the defining character of each path):
-
-| Path | Filter | DC gain | Rationale |
+| Mechanism | Filter | DC gain | Off-ground behavior |
 | --- | --- | --- | --- |
-| Force → realized n_z (Path 1) | $H_1$, 2nd-order | **1** | steady gear load genuinely persists in the realized load factor |
-| Moment → rate / α / a_y (Path 2) | $H_2$, washout | **0** | no steady gear moment; transient deflections must not persist (airborne self-zeroes via the strut force floor) |
-| Velocity vector → gear-geometry attitude | $H_\text{lag}$, low-pass | **1** | tracks the real/steady attitude, lags only fast swings (rotational inertia) |
+| Gear loads → rotation deviation $\Delta\theta$ (→ α/CL + gear geometry) | $H_2$, stable 2nd-order low-pass in the gear inputs | **finite, nonzero** (deflection); **0** in rate | input (gear loads) = 0; state decays to zero via the restoring term — no residual, no switching, never in `q_nw` |
+| Gear force → n_z-command relaxation (load handoff) | $H_1$, 2nd-order | **1** | input (gear load factor) = 0; relaxation decays to zero |
 
 The contact model stays **quasi-static / algebraic** (no strut ODE, no implicit contact
 integrator); the only added integrated dynamics are these filters (Tustin / `FilterSS2Clip`),
 and the aircraft EOM stays RK4.
 
-*Open parameterization (OQ-LG-17):* the values $\omega_n,\zeta$ for $H_1$, $H_2$, and
-$H_\text{lag}$, and whether $H_\text{lag}$ (gear-geometry attitude) and $H_2$ pitch (gear-moment
-→ CL) are **co-parameterized** (one pitch-inertia time constant) or independent, are not yet
-fixed — see OQ-LG-17.
+*Parameterization (OQ-LG-17, resolved):* the two filters are parameterized independently from
+different sources. The **rotation-deviation filter $H_2$** is parameterized from **physical
+constants — the inertia tensor** (each axis through its own moment of inertia $I_{xx}/I_{yy}/I_{zz}$;
+the force and moment channels of an axis share that axis's inertia), with natural frequency and
+damping following from the aircraft's physical rotational characteristics. The
+**n_z-relaxation filter $H_1$** is parameterized independently from **FBW characteristics
+($\omega_n,\zeta$)**. They are never co-parameterized with each other. Numeric values are set at
+implementation.
 
 *Current implementation (to be replaced when the above is built):* the code presently uses a
 two-speed hold-time n_z suppression filter (`contact_nz_filter_tau_s`, state `_wow0_elapsed_s`,
@@ -262,7 +288,8 @@ above.
 
 **3. Direct wind-frame moment — `Aircraft6DOF` only.** In the full `Aircraft6DOF` model the
 assembled `moment_body_nm` is applied directly to the rotational EOM with no perturbation
-mapping; the Path-2 perturbation scheme above is specific to the load-factor `Aircraft`.
+mapping; the rotation-deviation and n_z-relaxation scheme above is specific to the load-factor
+`Aircraft`.
 
 ### Integration Contract — `Aircraft6DOF`
 
@@ -940,11 +967,11 @@ simulation rate.
 | OQ-LG-10 | ~~Wind-frame contact force decomposition: full transform vs. friction-only in wind-x~~ **Resolved: full transform retained; test parameters must use realistic ζ** | — |
 | OQ-LG-11 | ~~Quasi-static free-roll clamp vs. Tustin natural convergence~~ **Resolved: clamp retained; V_cx uses correct contact-point velocity including ω × r** | — |
 | OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
-| OQ-LG-13 | ~~High-pass filter design for moment perturbation paths: τ_hp value and config parameter name~~ **Resolved: second-order high-pass; reuse per-axis FBW filter parameters (ωn, ζ); no new config parameters needed** | — |
+| OQ-LG-13 | ~~High-pass filter design for moment perturbation paths~~ **Resolved, then superseded by the OQ-LG-15 gear-F&M integration: the moment→rate high-pass (integrated into `q_nw`) is replaced by a moment→deflection stable low-pass kept as a self-decaying state, not integrated into `q_nw`** | — |
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
-| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the two-path gear-F&M integration with inertial attitude lag, specified in Integration Contract — `Aircraft` §2. Not yet implemented; filter parameterization is OQ-LG-17** | — |
-| OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 two-path design — gear pitch moment → pitch-rate → Δθ_gear (washout) → α → CL → realized Nz (Alternative 2); implemented as part of OQ-LG-15** | — |
-| OQ-LG-17 | Filter parameterization for the gear-F&M integration (ωₙ/ζ for H₁, H₂, H_lag; co-parameterize the gear-geometry attitude lag with the gear-moment→pitch→CL channel, or independent?) | Non-blocking; resolved at implementation against the Integration Contract §2 model |
+| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete; not yet implemented** | — |
+| OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
+| OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: the two filters are independent — the rotation-deviation filter H₂ is parameterized from physical constants (the inertia tensor, per axis); the n_z-relaxation filter H₁ independently from FBW characteristics (natural frequency, damping ratio)** | — |
 
 ---
 
@@ -1742,9 +1769,18 @@ yaw → lateral acceleration → $a_y$. The OQ-LG-9 text has been corrected acco
 
 ---
 
-### OQ-LG-13 — Filter Design for Moment Perturbation Paths *(Resolved)*
+### OQ-LG-13 — Filter Design for Moment Perturbation Paths *(Resolved — superseded by the OQ-LG-15 gear-F&M integration)*
 
-**Resolution:** Second-order high-pass filter; reuse the per-axis FBW command response
+> **Superseded (2026-06).** This resolution chose a second-order **high-pass on the moment →
+> rate** path, with the rate integrated into the attitude (`commitAttitude`). The OQ-LG-15
+> gear-F&M integration **replaces** that: the gear moment now drives a **deflection** through a
+> stable second-order **low-pass** $H_2$ (finite DC; its *rate* $s\,H_2$ is zero-DC), kept as a
+> self-decaying state summed into the consumers and **not** integrated into `q_nw` — which
+> avoids the permanent-attitude-bias failure mode of integrating a rate into the pure attitude
+> integrator. See [Integration Contract — `Aircraft` §2](#integration-contract--aircraft). The
+> original resolution is retained below for history.
+
+**Resolution (superseded):** Second-order high-pass filter; reuse the per-axis FBW command response
 filter parameters (ωn, ζ) for the corresponding moment perturbation axis. No new
 configuration parameters are introduced.
 
@@ -1824,10 +1860,14 @@ light-single data.
 > has refuted both. The actual mechanism is the numerical artifact summarized below and
 > detailed in the linked investigation report. Version control retains the superseded analysis.
 
-**Resolution (2026-06): root cause diagnosed; fix designed.** The fix — the two-path gear
-force/moment integration with an inertial attitude lag — is specified in the main body at
+**Resolution (2026-06): root cause diagnosed; fix designed.** The fix — the gear-F&M
+integration (a gear-load-driven body rotation-deviation state feeding α/CL and the gear
+geometry, plus a lagged n_z-command relaxation) — is specified in the main body at
 [Integration Contract — `Aircraft` §2](#integration-contract--aircraft). The decided design
-is not repeated here. Only filter parameterization remains open ([OQ-LG-17](#oq-lg-17--filter-parameterization-for-the-gear-fm-integration)).
+is not repeated here. Filter parameterization is resolved
+([OQ-LG-17](#oq-lg-17--filter-parameterization-for-the-gear-fm-integration)): the
+rotation-deviation filter from the inertia tensor, the n_z-relaxation filter from FBW
+$\omega_n,\zeta$, independently. The design is complete; it is **not yet implemented**.
 No code change has been made. Rejected approaches (all mask the artifact or scope around it):
 `damping_extension_nspm` tuning, brake torque, gating $F_x$, the strut ODE, backward-Euler
 contact, and re-scoping the test to the validity bound.
@@ -1846,16 +1886,21 @@ recorded in the standalone report:
 
 ### OQ-LG-16 — Gear Pitch Moment Has No Path Into the `Aircraft` Load-Factor Model *(Resolved)*
 
-> **Resolution (2026-06-02): subsumed by the OQ-LG-15 two-path design.** The gear pitch moment
-> reaches the load-factor model through OQ-LG-15 **Path 2**: gear pitch moment → pitch-rate
-> contribution → $\Delta\theta_\text{gear}$ (zero-DC washout) → summed into α → CL → realized
-> Nz. This is Alternative 2 below (pitch-rate perturbation into the attitude, mirroring the
-> roll path), and it is the chosen approach. The n_z-command-suppression-channel scheme
-> (Alternative 1) is **abandoned**. Sequencing still holds: implement the OQ-LG-15 fix
-> (including the required attitude lag) first; the gear pitch-moment path is part of that same
-> work, not a separate later step. The disabled `n_z_moment` code in `Aircraft::step()` should
-> be removed/replaced when Path 2 is implemented. The discussion below is retained for
-> rationale.
+> **Resolution (2026-06-02): subsumed by the OQ-LG-15 gear-F&M integration.** The gear pitch
+> moment reaches the load-factor model through the OQ-LG-15 **rotation-deviation mechanism**:
+> the gear pitch moment is one of the two inputs forcing the body rotation-deviation
+> $\Delta\theta$, a **self-decaying deflection** (a stable 2nd-order low-pass with finite DC
+> gain — *not* a rate fed into the attitude integrator) → summed into α → CL → realized Nz, and
+> also into the gear-geometry attitude. It is **not** integrated into the primary attitude
+> quaternion `q_nw`, which is what guarantees the gear-moment deflection returns to zero after
+> liftoff with no permanent bias. This refines what was sketched as Alternative 2 below ("a
+> pitch-rate perturbation into `commitAttitude`, mirroring the roll path"): the roll-path
+> mechanism of integrating a rate into `q_nw` is **rejected** for exactly that bias risk — see
+> Integration Contract §2. The n_z-command-suppression-channel scheme (Alternative
+> 1) is also **abandoned**. Sequencing still holds: implement the OQ-LG-15 fix first; the gear
+> pitch-moment path is part of that same work. The
+> disabled `n_z_moment` code in `Aircraft::step()` should be removed/replaced when the fix is
+> implemented. The discussion below is retained for rationale.
 
 **Question (resolved — see above):** IP-AGF-5 was specified to feed gear-induced moments into the `Aircraft`
 load-factor model through three command-channel perturbations: roll moment → roll-rate
@@ -1926,59 +1971,59 @@ impedance mismatch identified throughout the gear integration effort.
    pitch-blind to the gear; nose-wheel-steering and wheelbarrowing dynamics cannot be
    represented in the load-factor model. **Prerequisite:** none.
 
-**Resolution: Alternative 2, as part of the OQ-LG-15 two-path design.** The OQ-LG-15 Path 2
-introduces the lagged attitude state and the gear-moment → rate paths; the gear pitch moment
-drives a pitch-rate contribution into that lagged attitude (mirroring the roll path), and the
-resulting Δθ_gear is summed into α → CL → realized Nz. This removes the structural objection
-to Alternative 2 ("pitch is rigidly slaved to FPA + α") — Path 2 introduces exactly the
-attitude lag that makes an independent pitch contribution well-defined. **Alternative 1**
+**Resolution: a refinement of Alternative 2, as part of the OQ-LG-15 gear-F&M integration.**
+The rotation-deviation mechanism introduces a body deviation state $\Delta\theta$; the gear
+pitch moment is one of its two inputs, and the resulting deflection (a stable 2nd-order
+low-pass with finite DC gain) is summed into α → CL → realized Nz and into the gear-geometry
+attitude. This removes the structural objection to Alternative 2 ("pitch is rigidly slaved to
+FPA + α") — the rotation-deviation state is exactly the inertial deviation that makes an
+independent pitch contribution well-defined. It **refines**
+Alternative 2's original mechanism, though: the sketch of "a pitch-rate perturbation into
+`commitAttitude`, mirroring the roll path" is **rejected**, because integrating a rate into the
+persistent attitude (`q_nw`) risks leaving a permanent gear-moment bias after liftoff. The
+deflection is instead kept as a self-decaying state summed into consumers, never accumulated
+into `q_nw` (see Integration Contract §2). **Alternative 1**
 (feeding the moment back through the n_z-command-suppression channel) is **abandoned** — it
 re-entangles with the lift-suppression filter and is annihilated by the floor. **Alternative
 3** (defer to `Aircraft6DOF`) is not needed: the load-factor model *can* carry the effect via
-the washout-perturbation form (the gear-moment deflection does not persist, per OQ-LG-15
-decision 8). Implementation is folded into the OQ-LG-15 work, not a separate item.
+the self-decaying deflection form (a stable 2nd-order low-pass whose restoring term returns the
+gear-moment deflection to zero after liftoff, with no permanent bias). Implementation is folded
+into the OQ-LG-15 work, not a separate item.
 
 ---
 
-### OQ-LG-17 — Filter Parameterization for the Gear-F&M Integration
+### OQ-LG-17 — Filter Parameterization for the Gear-F&M Integration *(Resolved)*
 
 **Question:** The gear force/moment integration design ([Integration Contract — `Aircraft`
-§2](#integration-contract--aircraft)) defines three filters: $H_1$ (force → realized n_z,
-DC 1), $H_2$ (moment → rate/α/a_y, washout DC 0), and $H_\text{lag}$ (velocity vector →
-gear-geometry attitude, low-pass DC 1). What ωₙ/ζ should each use, and — the one structural
-choice — should $H_\text{lag}$ (gear-geometry attitude lag) and the pitch channel of $H_2$
-(gear-moment → Δθ_gear → α → CL) be **co-parameterized** (one shared pitch-inertia time
-constant) or parameterized independently?
+§2](#integration-contract--aircraft)) defines two filters: the **rotation-deviation filter**
+$H_2$ (a stable 2nd-order low-pass with finite DC, producing Δθ from two gear-derived inputs —
+the gear force's flight-path/load-factor contribution and the gear moment $M/I$), and the
+**n_z-relaxation filter** $H_1$ (force → realized n_z, 2nd-order, DC 1). How is each
+parameterized, and are they tied together?
 
-The numerical-value tuning ($\omega_n,\zeta$ for each filter, the $H_\text{lag}$ corner above
-the guidance/flare bandwidth and below the ~17 Hz bounce band, the SO(3) filtering form) is an
-implementation detail settled at build/verification time. The co-parameterization choice below
-is the genuine design question.
+**Resolution: the two filters are distinct in use and characteristics and are parameterized
+independently, from different sources.**
 
-**Alternatives (co-parameterization of $H_\text{lag}$ and the $H_2$ pitch channel):**
+- **Rotation-deviation filter $H_2$ — parameterized from physical constants (the inertia
+  tensor).** This filter *is* the body's physical rotational dynamics, so its parameters come
+  from physical rotational properties, not from any control tuning. Each axis is driven through
+  its own moment of inertia — bank through $I_{xx}$, pitch through $I_{yy}$, yaw through
+  $I_{zz}$ — and the force-input and moment-input channels of a given axis necessarily share
+  that axis's inertia (one rigid body, one rotational response per axis). Its natural frequency
+  and damping follow from the aircraft's physical rotational stiffness and damping
+  characteristics; the inertia tensor is the primary physical input.
 
-1. **Co-parameterize (shared pitch-inertia time constant).** $H_\text{lag}$ and the $H_2$
-   pitch path use the same ωₙ/ζ (their DC gains still differ — 1 for the lag, 0 for the
-   washout — that is a per-input-path property, not the time constant).
-   **Benefit:** both derive from the single physical pitch inertia $I_{yy}$; one body, one
-   rotational time constant — physically coherent. Fewer free parameters; less tuning surface.
-   **Drawback:** ties the numerical sweep-suppression bandwidth ($H_\text{lag}$) to the
-   physical pitch-response bandwidth; if the sweep-suppression requirement demands a different
-   corner than the CL-coupling fidelity wants, they cannot diverge.
+- **Nz-relaxation filter $H_1$ — independently parameterized from FBW characteristics (a
+  natural frequency and damping ratio).** This filter is the FBW control loop's load-handoff
+  response, not a physical rotational mode. It carries its own $\omega_n,\zeta$ representing the
+  FBW load-factor response and is **not** tied to the inertia-tensor parameterization of $H_2$.
 
-2. **Independent parameterization.** $H_\text{lag}$ and the $H_2$ pitch path carry separate
-   ωₙ/ζ.
-   **Benefit:** tune sweep suppression (numerical) separately from CL-coupling fidelity
-   (physical). **Drawback:** the model's body then effectively pitches at two different rates
-   depending on which consumer (gear geometry vs. aero α) reads the attitude — physically
-   incoherent for a single rigid body; larger tuning surface.
+The two are never co-parameterized with each other: $H_2$ is physics-derived (inertia tensor),
+$H_1$ is control-derived (FBW $\omega_n,\zeta$). The specific numeric values, and the precise
+mapping from physical rotational stiffness/damping to $H_2$'s $\omega,\zeta$, are set against
+the mathematical model in the Integration Contract during implementation.
 
-**Recommendation:** **Alternative 1** for $H_\text{lag}$ and the $H_2$ pitch channel (one
-pitch-inertia time constant — the body has one $I_{yy}$). Keep $H_1$ (force → n_z) as its own
-parameter, since it represents the heave/lift-shedding response, a different inertia. Expose
-the decoupling option (Alternative 2) only if implementation/verification shows the
-sweep-suppression bandwidth must differ from the physical pitch bandwidth. Values are set
-against the mathematical model in the Integration Contract during implementation.
+*Resolved. Implementation pending the OQ-LG-15 fix.*
 
 ---
 
