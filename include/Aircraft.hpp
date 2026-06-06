@@ -118,15 +118,24 @@ private:
     liteaero::control::FilterSS2Clip _nz_filter;
     liteaero::control::FilterSS2Clip _ny_filter;
     liteaero::control::FilterSS2Clip _roll_rate_filter;
-    // 2nd-order HP moment perturbation filters — complement of per-axis FBW LP.
-    // Each uses the same ωn and ζ as the corresponding FBW axis filter (OQ-LG-13).
-    liteaero::control::FilterSS2Clip _nz_moment_filt;
-    liteaero::control::FilterSS2Clip _ay_moment_filt;
-    liteaero::control::FilterSS2Clip _roll_rate_moment_filt;
-    float                  _n_contact_z_filt          = 0.f;   // lift suppression: 1=gear loaded, 0=airborne
-    float                  _contact_nz_filter_tau_s   = 0.10f; // τ_engage; τ_decay = 10×τ (config)
-    float                  _wow0_elapsed_s            = 0.f;   // time since WoW last became 0; 0 when WoW=1
-    bool                   _body_in_hard_contact  = false;  // set by step-11 hard constraint; read and cleared by step-11
+    // H₁: lagged n_z-command relaxation from gear normal force load (LP, DC=1).
+    // Parameterized from FBW Nz ωn/ζ (OQ-LG-17).
+    liteaero::control::FilterSS2Clip _nz_relax_filter;
+    // H₂: body rotation-deviation filters (LP, DC=1, inertia-tensor ωn).
+    // Driven by accumulated FPA-bend (force channel) + gear moment angular rates.
+    liteaero::control::FilterSS2Clip _dtheta_pitch_filter;
+    liteaero::control::FilterSS2Clip _dtheta_roll_filter;
+    liteaero::control::FilterSS2Clip _dtheta_yaw_filter;
+    float  _dtheta_pitch_acc      = 0.f;  // accumulated pitch angle input to H₂: ∫(γ̇_gear + M_y/I_yy) dt (rad)
+    float  _dtheta_roll_acc       = 0.f;  // accumulated roll angle input to H₂: ∫(M_x/I_xx) dt (rad)
+    float  _dtheta_yaw_acc        = 0.f;  // accumulated yaw angle input to H₂: ∫(M_z/I_zz) dt (rad)
+    float  _prev_dtheta_roll      = 0.f;  // Δθ_roll from previous step (for rate computation)
+    float  _prev_dtheta_yaw       = 0.f;  // Δθ_yaw from previous step (for rate computation)
+    float  _dtheta_wn_pitch_rad_s = 2.4f; // H₂ ωn pitch (computed from inertia at init)
+    float  _dtheta_wn_roll_rad_s  = 2.8f; // H₂ ωn roll
+    float  _dtheta_wn_yaw_rad_s   = 2.0f; // H₂ ωn yaw
+    float  _dtheta_zeta_nd        = 0.7f; // H₂ damping ratio (config field)
+    bool   _body_in_hard_contact  = false; // set by step-11 hard constraint; read in step-5b
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

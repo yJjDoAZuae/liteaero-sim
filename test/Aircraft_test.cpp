@@ -68,7 +68,7 @@ static nlohmann::json makeConfig() {
             "ny_zeta_nd": 0.7,
             "roll_rate_wn_rad_s": 20.0,
             "roll_rate_zeta_nd": 0.7,
-            "contact_nz_filter_tau_s": 0.10
+            "dtheta_zeta_nd": 0.7
         },
         "airframe": {
             "g_max_nd":     3.8,
@@ -985,83 +985,104 @@ TEST(AircraftTest, LandingGear_FullStop_OQ_LG15_Diagnostic) {
 }
 
 // ---------------------------------------------------------------------------
-// IP-AGF-4 — contact_nz_filter_tau_s config parameter + HP moment filter state
+// IP-AGF-6 — H₁ nz-relaxation filter + Δθ rotation-deviation state
 // ---------------------------------------------------------------------------
 
-TEST(AircraftTest, Initialize_MissingContactNzFilterTau_Throws) {
-    // contact_nz_filter_tau_s must be a required config key in the aircraft section.
-    // Before IP-AGF-4: initialize() silently ignores the missing key (no throw).
-    // After IP-AGF-4: initialize() throws std::invalid_argument.
-    auto cfg = makeConfig();
-    cfg["aircraft"].erase("contact_nz_filter_tau_s");
-
-    auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
-    EXPECT_THROW(ac->initialize(cfg, 0.1f), std::invalid_argument);
-}
-
-TEST(AircraftTest, JsonSerialization_ContainsMomentFilterStateKeys) {
-    // After IP-AGF-4, serializeJson() must include state for the three HP moment
-    // filters so they survive a JSON round-trip.
-    // Before IP-AGF-4: these keys are absent → test fails.
-    auto ac = makeAircraft();
-    const nlohmann::json j = ac->serializeJson();
-
-    EXPECT_TRUE(j.contains("nz_moment_filter_x"))
-        << "serializeJson() must include nz_moment_filter_x HP filter state";
-    EXPECT_TRUE(j.contains("ay_moment_filter_x"))
-        << "serializeJson() must include ay_moment_filter_x HP filter state";
-    EXPECT_TRUE(j.contains("roll_rate_moment_filter_x"))
-        << "serializeJson() must include roll_rate_moment_filter_x HP filter state";
-}
-
-// ---------------------------------------------------------------------------
-// IP-AGF-5 — moment-to-perturbation paths in Aircraft::step()
-// ---------------------------------------------------------------------------
-
-TEST(AircraftTest, LandingGear_NzMomentFilter_SteppedOnContact) {
-    // When gear is in contact and produces a nonzero pitch moment (about body-y,
-    // which maps to wind-y and drives the n_z_moment HP filter), the
-    // nz_moment_filter_x state must become nonzero.
-    //
-    // The nose wheel (attach at x=2.0) in contact with the terrain produces a
-    // moment arm: cross-product of (2.0, 0, 0.5) with the upward strut force
-    // gives a nonzero moment about body-y.
-    //
-    // Before IP-AGF-5: the HP filter is never stepped with the gear moment →
-    //   state remains zero → EXPECT_GT fails.
-    // After IP-AGF-5: the HP filter is stepped → state becomes nonzero → PASSES.
+TEST(AircraftTest, JsonSerialization_ContainsGearFilterStateKeys) {
+    // serializeJson() must include state for the nz-relaxation (H₁) and
+    // rotation-deviation (H₂) filters so they survive a JSON round-trip.
+    // Before IP-AGF-6: these keys are absent → test fails.
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
-
     auto cfg = addLandingGear(makeConfig());
     cfg["initial_state"]["altitude_m"]         = 0.65;
     cfg["initial_state"]["velocity_north_mps"] = 15.0;
     cfg["initial_state"]["velocity_east_mps"]  = 0.0;
     cfg["initial_state"]["velocity_down_mps"]  = 0.0;
-
     auto ac = std::make_unique<liteaero::simulation::Aircraft>(
         std::make_unique<StubPropulsion>(0.0f));
     ac->initialize(cfg, 0.02f);
     ac->setTerrain(&terrain);
     ac->reset();
-
     liteaero::simulation::AircraftCommand cmd;
-    cmd.n_z         = 1.0f;
-    cmd.throttle_nd = 0.0f;
-
-    // A few steps at approach speed so the gear is in contact and producing forces.
+    cmd.n_z = 1.0f;
     constexpr float kDt = 0.02f;
-    for (int i = 1; i <= 5; ++i) {
+    for (int i = 1; i <= 5; ++i)
         ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
-    }
 
     const nlohmann::json j = ac->serializeJson();
-    ASSERT_TRUE(j.contains("nz_moment_filter_x"))
-        << "nz_moment_filter_x must exist in serialized state (IP-AGF-4 prerequisite)";
+    EXPECT_TRUE(j.contains("nz_relax_filter"))
+        << "serializeJson() must include nz_relax_filter (H₁) state";
+    EXPECT_TRUE(j.contains("dtheta_pitch_filter"))
+        << "serializeJson() must include dtheta_pitch_filter (H₂ pitch) state";
+    EXPECT_TRUE(j.contains("prev_dtheta_roll"))
+        << "serializeJson() must include prev_dtheta_roll state";
+}
 
-    const float x0 = j.at("nz_moment_filter_x").at(0).get<float>();
-    const float x1 = j.at("nz_moment_filter_x").at(1).get<float>();
-    EXPECT_GT(std::abs(x0) + std::abs(x1), 1e-6f)
-        << "nz_moment HP filter state must be nonzero after gear contact with pitch moment "
-           "(nose wheel at x=2.0 produces body-y moment); state: [" << x0 << ", " << x1 << "]";
+TEST(AircraftTest, LandingGear_DthetaPitchAcc_NonzeroAfterContact) {
+    // The Δθ pitch accumulator is driven by the gear normal force (FPA channel)
+    // and gear pitch moment (moment channel).  After a few steps in contact it
+    // must be nonzero.
+    // Before IP-AGF-6: field absent → ASSERT fails immediately.
+    // After IP-AGF-6: field is present and nonzero → PASSES.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addLandingGear(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 0.65;
+    cfg["initial_state"]["velocity_north_mps"] = 15.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_z = 1.0f;
+    constexpr float kDt = 0.02f;
+    for (int i = 1; i <= 5; ++i)
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+
+    const nlohmann::json j = ac->serializeJson();
+    ASSERT_TRUE(j.contains("dtheta_pitch_filter"))
+        << "dtheta_pitch_filter must be present in serialized state (IP-AGF-6)";
+    const auto& fj = j.at("dtheta_pitch_filter");
+    // Filter state x must be nonzero after gear contact drives the H₂ filter.
+    const float x0 = (fj.contains("state") && fj.at("state").contains("x0"))
+                         ? fj.at("state").at("x0").get<float>() : 0.f;
+    const float x1 = (fj.contains("state") && fj.at("state").contains("x1"))
+                         ? fj.at("state").at("x1").get<float>() : 0.f;
+    EXPECT_NE(std::abs(x0) + std::abs(x1), 0.0f)
+        << "dtheta_pitch_filter state must be nonzero after gear contact; x=[" << x0 << "," << x1 << "]";
+}
+
+TEST(AircraftTest, LandingGear_GearContact_DoesNotAccelerate) {
+    // The gear-attitude feedback defect (OQ-LG-15) causes a +22.7 kN forward
+    // impulse every ~2.4 s, so horizontal speed INCREASES above the 15 m/s
+    // start within 3 s of ground contact.  With the H₁ + Δθ fix the speed
+    // must decrease monotonically — no forward energy injection.
+    // Before IP-AGF-6: speed exceeds 15 m/s at ~t=2.4 s → EXPECT fails.
+    // After IP-AGF-6: speed is strictly less than 15 m/s → PASSES.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addLandingGear(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 0.65;
+    cfg["initial_state"]["velocity_north_mps"] = 15.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_z = 1.0f;
+    constexpr float kDt    = 0.02f;
+    constexpr int   kSteps = static_cast<int>(3.0f / kDt);
+    for (int i = 1; i <= kSteps; ++i)
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+    const float speed = ac->state().velocity_NED_mps().head<2>().norm();
+    EXPECT_LT(speed, 15.0f)
+        << "gear contact must not inject forward energy; speed after 3 s: "
+        << speed << " m/s (started at 15 m/s)";
 }

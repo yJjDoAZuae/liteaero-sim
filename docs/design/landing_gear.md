@@ -972,6 +972,7 @@ simulation rate.
 | OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete; not yet implemented** | — |
 | OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
 | OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: the two filters are independent — the rotation-deviation filter H₂ is parameterized from physical constants (the inertia tensor, per axis); the n_z-relaxation filter H₁ independently from FBW characteristics (natural frequency, damping ratio)** | — |
+| OQ-LG-18 | Δθ pitch force-channel accumulator diverges in the FullStop limit cycle — blocking implementation of the rotation-deviation pitch path | Blocking IP-AGF-6 Δθ pitch channel |
 
 ---
 
@@ -2026,6 +2027,46 @@ the mathematical model in the Integration Contract during implementation.
 *Resolved. Implementation pending the OQ-LG-15 fix.*
 
 ---
+
+### OQ-LG-18 — Δθ Pitch Force-Channel Accumulator Diverges in the FullStop Limit Cycle
+
+**Status:** Open. Blocking implementation of the rotation-deviation pitch channel (IP-AGF-6).
+
+**Problem description.**
+
+The gear-F&M integration design ([Integration Contract — `Aircraft` §2](#integration-contract--aircraft)) specifies the pitch force-channel as:
+
+$$\Delta\theta_{\text{force}} = -(1 - H_2) \cdot \int \dot\gamma_{\text{gear}}\, dt$$
+
+where $\dot\gamma_{\text{gear}} = -F_{\text{gear},\,\text{wind-z}} / (m V)$ is the flight-path rate from the gear upward force ($F_{\text{gear},\,\text{wind-z}} < 0$ for upward), $H_2(s) = \omega_n^2/(s^2 + 2\zeta\omega_n s + \omega_n^2)$ is the inertia-derived 2nd-order low-pass (pitch axis: $\omega_n = \sqrt{m g / I_{yy}} \approx 2.37$ rad/s for the test aircraft, $\tau \approx 0.42$ s), and the integrated total $\gamma_{\text{acc}} = \int \dot\gamma_{\text{gear}}\, dt$ accumulates all gear-derived FPA changes. The deviation is $\Delta\theta = H_2(\gamma_{\text{acc}}) - \gamma_{\text{acc}}$: negative when the body lags a rising $\gamma_{\text{acc}}$, decaying to zero when the gear force is removed and $H_2$ converges to $\gamma_{\text{acc}}$ (DC gain = 1).
+
+In a single landing event or brief ground roll this works correctly: $\gamma_{\text{acc}}$ accumulates a bounded amount, $H_2$ tracks it with the expected lag, and $\Delta\theta$ decays to zero on lift-off.
+
+In the **FullStop limit cycle** (~7 m/s, ~17.3 Hz bounce), however, the accumulator diverges:
+
+- Each contact step applies $\dot\gamma_{\text{gear}} \approx 1$–$4$ rad/s (gear force 8–30 kN at $V \approx 7$ m/s).
+- The bounce is at 17.3 Hz; the typical airborne phase between contacts is $\approx 0.029$ s.
+- The $H_2$ filter time constant is $\tau = 1/(\zeta\omega_n) \approx 0.42$ s.
+- In each 0.029 s airborne phase, $H_2$ recovers only $1 - e^{-0.029/0.42} \approx 7\%$ of the accumulated lag.
+- Over 87 s with $\approx 1\,500$ bounces, $\gamma_{\text{acc}}$ grows to $\approx 50$ rad; the lag $\Delta\theta$ diverges to $-1.7$ rad ($-99°$).
+
+The resulting body attitude is physically impossible (near-vertical nose-down), breaking the gear geometry and worsening the limit cycle rather than correcting it. The divergence is a property of the limit cycle itself — not of the implementation of the formula — so it cannot be corrected by tuning $\omega_n$, $\zeta$, or dt.
+
+**Not affected:** single-landing approach and rollout at speeds above ~10 m/s, where the bounce frequency is absent or moderate and the filter recovers adequately between contacts.
+
+**Alternatives.**
+
+1. **Leaky accumulator.** Replace $\gamma_{\text{acc}} \mathrel{+}= \dot\gamma_{\text{gear}} \cdot dt$ with a first-order leaky integral: $\gamma_{\text{acc}} \mathrel{*}= (1 - dt/\tau_{\text{leak}})$, then $\mathrel{+}= \dot\gamma_{\text{gear}} \cdot dt$. The leak time constant $\tau_{\text{leak}}$ bounds the steady-state accumulator to $|\gamma_{\text{acc}}| \lesssim |\dot\gamma_{\text{gear}}| \cdot \tau_{\text{leak}}$.  *Benefit:* minimal change to the formulation; preserves the "decays to zero when gear off" property.  *Drawback:* introduces a free parameter $\tau_{\text{leak}}$ with no physical derivation from the inertia tensor; adds DC error for sustained constant gear loads; the formula is no longer equivalent to $-(1-H_2)\cdot\int\dot\gamma$.
+
+2. **Instantaneous bounded input to $H_2$.** Replace the accumulator entirely: drive $H_2$ with the gear upward specific force $f_z = -F_{\text{gear},\,\text{wind-z}}/(m)$ (units m/s²), scaled to a physically bounded angle: $u = f_z / (\omega_n^2 \cdot L_{\text{ref}})$ where $L_{\text{ref}}$ is a reference length (e.g. CG-to-nose-gear distance). $\Delta\theta = H_2(u)$ — filter output directly. *Benefit:* no accumulator, no drift; bounded for physical gear loads; decays to zero when gear off (since $u \to 0$). *Drawback:* departs from the agreed $-(1-H_2)\cdot\int\dot\gamma$ derivation; introduces $L_{\text{ref}}$ as a parameter not present in the design; the steady-state value of $\Delta\theta$ depends on $L_{\text{ref}}$ rather than on the inertia tensor alone.
+
+3. **Higher $H_2$ natural frequency.** Increase $\omega_n$ so the filter recovers fully between bounces. For full recovery in 0.029 s, $\omega_n \gtrsim 4/0.029 \approx 138$ rad/s ($\approx 22$ Hz). *Benefit:* preserves the accumulator formulation exactly. *Drawback:* at $\omega_n \approx 138$ rad/s, $H_2$ is effectively a pass-through (no meaningful inertial lag); the deviation $\Delta\theta \approx 0$ at all times, giving no geometric correction; the Nyquist constraint ($\omega_n \cdot dt < \pi$) limits $\omega_n < 157$ rad/s for $dt = 0.02$ s; the physical motivation for this frequency (inertia tensor) no longer applies at these values.
+
+4. **FPA-domain smoothing.** Low-pass filter the flight-path angle $\gamma$ directly and use the smoothed–minus–instantaneous difference: $\Delta\theta = H_2(\gamma) - \gamma$. This avoids accumulation because $\gamma$ is always bounded. *Benefit:* bounded input; no new parameters; decays to zero when $\gamma$ is stable. *Drawback:* the input changes meaning from "gear-derived FPA rate" to "total FPA"; corrections appear for any rapid FPA change (e.g., during intentional maneuvers), not only gear-induced ones; the design's requirement that $\Delta\theta = 0$ when gear force = 0 is no longer satisfied — $\Delta\theta$ could be non-zero during rapid aero maneuvers with no gear contact.
+
+**Recommendation.**
+
+Alternative 1 (leaky accumulator) is the most conservative change to the agreed formulation and preserves the original formula's behavior in the normal single-landing case. The lack of physical derivation for $\tau_{\text{leak}}$ is a concern, but it can be bounded as: to recover fully within one bounce period $T_b = 1/(17.3) \approx 0.058$ s, set $\tau_{\text{leak}} \lesssim T_b / 4 \approx 0.015$ s. This is small enough to prevent accumulation at the bounce frequency while being large enough ($\gg dt = 0.02$ s) to preserve the intended lag for quasi-static gear loading. A user decision is needed on whether the leaky integral is an acceptable deviation from the derivation, and if so, what value of $\tau_{\text{leak}}$ (whether fixed, configurable, or derived from the gear natural frequency) is appropriate.
 
 ## Test Strategy
 

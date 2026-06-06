@@ -12,7 +12,8 @@
         "ny_wn_rad_s": 20.0,
         "ny_zeta_nd": 0.7,
         "roll_rate_wn_rad_s": 40.0,
-        "roll_rate_zeta_nd": 0.7
+        "roll_rate_zeta_nd": 0.7,
+        "dtheta_zeta_nd": 0.7
     },
     "airframe": {
         "g_max_nd": 7.33,
