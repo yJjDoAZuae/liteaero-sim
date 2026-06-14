@@ -202,14 +202,31 @@ the body's inertial pitch/bank response — through a **stable second-order low-
 inputs** (a damped spring–mass–damper, $H_2(s)=\omega^2/(s^2+2\zeta\omega s+\omega^2)$ scaled
 per channel):
 
-- **Zero initial rotational rate** (zero-initial-slope response): the body cannot slew instantly.
-- **Finite, nonzero DC gain**: a sustained gear load produces a bounded steady deviation (the
-  static stance / steady derotation) — not zero. (The deviation *rate* $s\,H_2$ is zero-DC: a
-  sustained load produces no sustained rate, i.e. no runaway.)
-- **Decays to zero on zero input**: the restoring term returns $\Delta\theta$ to zero whenever
-  the gear loads cease. Because $\Delta\theta$ is forced by the **gear loads themselves** —
-  *not* by lagging the FPA — it is identically zero off-ground, with no residual dynamics and
-  no switching.
+The required behavioral properties of $\Delta\theta$ are (these are the agreed
+acceptance properties any realization must satisfy; symbols defined in OQ-LG-18):
+
+- **P1 — Asymptotic decay to zero when the gear is unloaded.** When the gear force is
+  zero, $\Delta\theta$ returns to zero *asymptotically* through the filter's restoring
+  term — not instantaneously, and not by state switching. Because $\Delta\theta$ is
+  forced by the **gear loads themselves** (not by lagging the FPA), its forcing is
+  identically zero off-ground, so it decays with no residual dynamics.
+- **P2 — Finite, bounded steady-state under a sustained constant gear load.** A constant
+  gear load produces a bounded steady deviation (the static stance / steady derotation) —
+  not zero, not unbounded. (The deviation *rate* is zero-DC: a sustained load produces no
+  sustained rate, hence no runaway.)
+- **P3 — Zero gear-induced change in body angular velocity at the instant of contact.** A
+  finite gear force/moment cannot step the body's inertial-frame angular velocity. The
+  committed body attitude is $\text{FPA} + \alpha + \Delta\theta$; at contact the gear
+  force makes the FPA begin changing at rate $\dot\gamma_{\text{gear}}$, so $\Delta\theta$
+  must begin changing at $-\dot\gamma_{\text{gear}}$ for the body's inertial angular
+  velocity to be continuous. **The initial rate of $\Delta\theta$ itself is therefore
+  *not* zero — it is $-\dot\gamma_{\text{gear}}$.** ($\Delta\theta$ is a deviation measured
+  *from the wind frame*; the zero-rate condition applies to the body's inertial rate, not
+  to $\Delta\theta$.)
+- **P4 — Driven only by gear-derived quantities** — the gear normal force's flight-path
+  contribution and the gear moment. No filter acts on the total flight-path angle, and no
+  added dynamics may respond to non-gear effects (aerodynamic maneuvers, thrust). This
+  guarantees $\Delta\theta$ and its forcing vanish identically off-ground.
 
 $\Delta\theta$ is forced by two gear-derived inputs:
 
@@ -972,7 +989,8 @@ simulation rate.
 | OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete; not yet implemented** | — |
 | OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
 | OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: the two filters are independent — the rotation-deviation filter H₂ is parameterized from physical constants (the inertia tensor, per axis); the n_z-relaxation filter H₁ independently from FBW characteristics (natural frequency, damping ratio)** | — |
-| OQ-LG-18 | Δθ pitch force-channel accumulator diverges in the FullStop limit cycle — blocking implementation of the rotation-deviation pitch path | Blocking IP-AGF-6 Δθ pitch channel |
+| OQ-LG-18 | Realization of the agreed Δθ force-channel transfer: the literal accumulator contains a free integrator that drifts under one-sided gear loading; an algebraically-equivalent direct filter avoids it | Blocking IP-AGF-6 Δθ pitch channel |
+| OQ-LG-19 | Required Δθ behavior under non-constant (one-sided periodic) gear loading, and whether the ~17.3 Hz bounce limit cycle is in the Δθ model's scope or the contact model's | Blocking IP-AGF-6 Δθ pitch-channel acceptance |
 
 ---
 
@@ -2028,45 +2046,183 @@ the mathematical model in the Integration Contract during implementation.
 
 ---
 
-### OQ-LG-18 — Δθ Pitch Force-Channel Accumulator Diverges in the FullStop Limit Cycle
+### OQ-LG-18 — Realization of the Δθ Force Channel: Accumulator Free Integrator vs. Equivalent Direct Filter
 
-**Status:** Open. Blocking implementation of the rotation-deviation pitch channel (IP-AGF-6).
+**Status:** Open. Blocking implementation of the rotation-deviation pitch force channel (IP-AGF-6).
 
-**Problem description.**
+**Symbols (used here and in OQ-LG-19).**
 
-The gear-F&M integration design ([Integration Contract — `Aircraft` §2](#integration-contract--aircraft)) specifies the pitch force-channel as:
+- $\Delta\theta$ — the rotation-deviation state (rad): the body's pitch attitude deviation from
+  the trim-aero attitude $\text{FPA} + \alpha$. Summed into both the aero angle of attack and
+  the gear-geometry attitude.
+- $\text{FPA}$, $\gamma$ — flight-path angle (rad), $\gamma = \operatorname{atan2}(-v_D, v_H)$,
+  where $v_D$ is the NED-down velocity and $v_H$ the horizontal speed. Positive = climbing.
+- $F_z^W$ — the gear normal force resolved onto the wind-frame z (down-positive) axis (N);
+  $F_z^W < 0$ for an upward gear reaction.
+- $m$ — aircraft mass (kg); $V$ — airspeed (m/s); $I_{yy}$ — pitch moment of inertia (kg·m²);
+  $g = 9.80665$ m/s².
+- $\dot\gamma_{\text{gear}}$ — the flight-path-angle **rate** produced by the gear normal force:
+  $\dot\gamma_{\text{gear}} = -F_z^W/(m V)$. This is the gear-derived force-channel signal. It is
+  a *rate*, because a finite force produces a linear acceleration → a velocity change → an FPA
+  rate; there is no instantaneous angle from a force.
+- $H_2(s) = \omega_n^2/(s^2 + 2\zeta\omega_n s + \omega_n^2)$ — the agreed second-order low-pass
+  whose poles are the body's pitch rotational dynamics. Parameterized from the inertia tensor
+  (OQ-LG-17); for the FullStop test aircraft $\omega_n = \sqrt{m g / I_{yy}} \approx 2.37$ rad/s,
+  $\zeta \approx 0.7$, time constant $\tau = 1/(\zeta\omega_n) \approx 0.6$ s.
+- $\gamma_{\text{acc}} = \int \dot\gamma_{\text{gear}}\,dt$ — the accumulated gear-induced FPA.
 
-$$\Delta\theta_{\text{force}} = -(1 - H_2) \cdot \int \dot\gamma_{\text{gear}}\, dt$$
+**Agreed deviation transfer.** The force channel of $\Delta\theta$ is the high-pass complement
+of $H_2$ acting on the accumulated gear FPA:
 
-where $\dot\gamma_{\text{gear}} = -F_{\text{gear},\,\text{wind-z}} / (m V)$ is the flight-path rate from the gear upward force ($F_{\text{gear},\,\text{wind-z}} < 0$ for upward), $H_2(s) = \omega_n^2/(s^2 + 2\zeta\omega_n s + \omega_n^2)$ is the inertia-derived 2nd-order low-pass (pitch axis: $\omega_n = \sqrt{m g / I_{yy}} \approx 2.37$ rad/s for the test aircraft, $\tau \approx 0.42$ s), and the integrated total $\gamma_{\text{acc}} = \int \dot\gamma_{\text{gear}}\, dt$ accumulates all gear-derived FPA changes. The deviation is $\Delta\theta = H_2(\gamma_{\text{acc}}) - \gamma_{\text{acc}}$: negative when the body lags a rising $\gamma_{\text{acc}}$, decaying to zero when the gear force is removed and $H_2$ converges to $\gamma_{\text{acc}}$ (DC gain = 1).
+$$\Delta\theta_{\text{force}} = (H_2 - 1)\,\gamma_{\text{acc}}.$$
 
-In a single landing event or brief ground roll this works correctly: $\gamma_{\text{acc}}$ accumulates a bounded amount, $H_2$ tracks it with the expected lag, and $\Delta\theta$ decays to zero on lift-off.
+This form is what delivers the agreed properties P1–P3 (see
+[Integration Contract — `Aircraft` §2](#integration-contract--aircraft)): for a step onset of
+$\dot\gamma_{\text{gear}}$ it gives $\Delta\theta(0)=0$, initial rate $\dot{\Delta\theta}(0) =
+-\dot\gamma_{\text{gear}}$ (P3 — the body's inertial angular velocity does not jump), and it
+returns to zero when the gear unloads (P1, since $H_2$ has DC gain 1, so $(H_2-1)\to 0$ on a
+settled input). It is driven only by the gear force (P4).
 
-In the **FullStop limit cycle** (~7 m/s, ~17.3 Hz bounce), however, the accumulator diverges:
+**Problem.** The literal realization of the formula — accumulate the rate into
+$\gamma_{\text{acc}}$, run $\gamma_{\text{acc}}$ through $H_2$, and subtract — contains a **free
+integrator** ($\gamma_{\text{acc}} = \int\dot\gamma_{\text{gear}}\,dt$ is a $1/s$ pole with no
+restoring term). During ground contact the gear force is **one-sided** (the gear can only push
+up, never pull down), so $\dot\gamma_{\text{gear}}$ has a nonzero mean and $\gamma_{\text{acc}}$
+ramps without bound across repeated contacts. In the FullStop bounce limit cycle (~7 m/s,
+~17.3 Hz), $\gamma_{\text{acc}}$ grows to $\approx 50$ rad over 87 s and the realized
+$\Delta\theta$ reaches $\approx -1.7$ rad ($-99°$) — a physically impossible body attitude that
+breaks the gear geometry. This is an artifact of the **realization** (an unbounded internal
+state, plus catastrophic cancellation in $H_2(\gamma_{\text{acc}}) - \gamma_{\text{acc}}$ when
+both terms are large), distinct from the separate behavioral question of what $\Delta\theta$
+*should* be under one-sided periodic loading (OQ-LG-19).
 
-- Each contact step applies $\dot\gamma_{\text{gear}} \approx 1$–$4$ rad/s (gear force 8–30 kN at $V \approx 7$ m/s).
-- The bounce is at 17.3 Hz; the typical airborne phase between contacts is $\approx 0.029$ s.
-- The $H_2$ filter time constant is $\tau = 1/(\zeta\omega_n) \approx 0.42$ s.
-- In each 0.029 s airborne phase, $H_2$ recovers only $1 - e^{-0.029/0.42} \approx 7\%$ of the accumulated lag.
-- Over 87 s with $\approx 1\,500$ bounces, $\gamma_{\text{acc}}$ grows to $\approx 50$ rad; the lag $\Delta\theta$ diverges to $-1.7$ rad ($-99°$).
-
-The resulting body attitude is physically impossible (near-vertical nose-down), breaking the gear geometry and worsening the limit cycle rather than correcting it. The divergence is a property of the limit cycle itself — not of the implementation of the formula — so it cannot be corrected by tuning $\omega_n$, $\zeta$, or dt.
-
-**Not affected:** single-landing approach and rollout at speeds above ~10 m/s, where the bounce frequency is absent or moderate and the filter recovers adequately between contacts.
+This question concerns only **how the agreed transfer is realized numerically.** It is raised
+because the choice of realization changes which agreed properties P1–P4 are preserved.
 
 **Alternatives.**
 
-1. **Leaky accumulator.** Replace $\gamma_{\text{acc}} \mathrel{+}= \dot\gamma_{\text{gear}} \cdot dt$ with a first-order leaky integral: $\gamma_{\text{acc}} \mathrel{*}= (1 - dt/\tau_{\text{leak}})$, then $\mathrel{+}= \dot\gamma_{\text{gear}} \cdot dt$. The leak time constant $\tau_{\text{leak}}$ bounds the steady-state accumulator to $|\gamma_{\text{acc}}| \lesssim |\dot\gamma_{\text{gear}}| \cdot \tau_{\text{leak}}$.  *Benefit:* minimal change to the formulation; preserves the "decays to zero when gear off" property.  *Drawback:* introduces a free parameter $\tau_{\text{leak}}$ with no physical derivation from the inertia tensor; adds DC error for sustained constant gear loads; the formula is no longer equivalent to $-(1-H_2)\cdot\int\dot\gamma$.
+1. **Equivalent direct second-order filter on the rate (no free integrator).** Because
+   $\gamma_{\text{acc}} = \dot\gamma_{\text{gear}}/s$, the agreed transfer is algebraically
+   identical to a single proper second-order filter driven by the **rate** directly:
+   $$\Delta\theta_{\text{force}} = (H_2-1)\,\frac{\dot\gamma_{\text{gear}}}{s}
+   = \underbrace{-\frac{s + 2\zeta\omega_n}{s^2 + 2\zeta\omega_n s + \omega_n^2}}_{G(s)}\,
+   \dot\gamma_{\text{gear}}.$$
+   $G(s)$ has **no pole at the origin**, so it is bounded-input/bounded-output stable: a
+   bounded $\dot\gamma_{\text{gear}}$ yields a bounded $\Delta\theta$ with no accumulating
+   internal state. *Properties:* preserves **all of P1–P4** — it is the *same transfer
+   function*, so the step-onset behavior ($\Delta\theta(0)=0$, $\dot{\Delta\theta}(0) =
+   -\dot\gamma_{\text{gear}}$), the off-ground decay, and the gear-only forcing are identical.
+   *What changes:* only the numerical realization — the unbounded $\gamma_{\text{acc}}$ state
+   and the large-number cancellation are eliminated, which removes the rate-integration /
+   sculling-type error. *Drawback:* requires realizing $G(s)$'s numerator zero in
+   `FilterSS2Clip` (a one-zero/two-pole form) rather than reusing the plain low-pass. *Note:*
+   because it reproduces the agreed transfer exactly, it does **not** by itself reduce the
+   *steady-state* $\Delta\theta$ under one-sided periodic loading (that is OQ-LG-19); it only
+   guarantees that value stays bounded and physical.
 
-2. **Instantaneous bounded input to $H_2$.** Replace the accumulator entirely: drive $H_2$ with the gear upward specific force $f_z = -F_{\text{gear},\,\text{wind-z}}/(m)$ (units m/s²), scaled to a physically bounded angle: $u = f_z / (\omega_n^2 \cdot L_{\text{ref}})$ where $L_{\text{ref}}$ is a reference length (e.g. CG-to-nose-gear distance). $\Delta\theta = H_2(u)$ — filter output directly. *Benefit:* no accumulator, no drift; bounded for physical gear loads; decays to zero when gear off (since $u \to 0$). *Drawback:* departs from the agreed $-(1-H_2)\cdot\int\dot\gamma$ derivation; introduces $L_{\text{ref}}$ as a parameter not present in the design; the steady-state value of $\Delta\theta$ depends on $L_{\text{ref}}$ rather than on the inertia tensor alone.
+2. **Leaky accumulator.** Keep the accumulator but add a decay: $\gamma_{\text{acc}}
+   \mathrel{*}= (1 - dt/\tau_{\text{leak}})$ before adding $\dot\gamma_{\text{gear}}\,dt$. The
+   leak bounds $|\gamma_{\text{acc}}|$. *Properties:* preserves P3 and P4; **changes P2** — the
+   decay alters the transfer function (adds a pole / reduces DC gain), so the steady-state
+   deviation under a sustained *constant* load is attenuated by a non-physical factor, and P1's
+   decay time is set by $\tau_{\text{leak}}$ rather than by the inertia-derived $H_2$.
+   *Drawback:* introduces a free parameter $\tau_{\text{leak}}$ with no derivation from the
+   inertia tensor; it deforms the agreed transfer to mask the realization artifact rather than
+   removing it.
 
-3. **Higher $H_2$ natural frequency.** Increase $\omega_n$ so the filter recovers fully between bounces. For full recovery in 0.029 s, $\omega_n \gtrsim 4/0.029 \approx 138$ rad/s ($\approx 22$ Hz). *Benefit:* preserves the accumulator formulation exactly. *Drawback:* at $\omega_n \approx 138$ rad/s, $H_2$ is effectively a pass-through (no meaningful inertial lag); the deviation $\Delta\theta \approx 0$ at all times, giving no geometric correction; the Nyquist constraint ($\omega_n \cdot dt < \pi$) limits $\omega_n < 157$ rad/s for $dt = 0.02$ s; the physical motivation for this frequency (inertia tensor) no longer applies at these values.
+3. **Status quo (literal accumulator), bounded by external clamp.** Keep the literal
+   accumulator and clamp $\gamma_{\text{acc}}$ (or $\Delta\theta$) to a fixed range.
+   *Properties:* preserves P1–P4 within the clamp range but **violates them once clamped** (a
+   clamped $\Delta\theta$ no longer satisfies the linear transfer, so P2/P3 fail at the clamp).
+   *Drawback:* the clamp threshold is arbitrary; behavior at the clamp is discontinuous; this
+   masks rather than resolves the artifact.
 
-4. **FPA-domain smoothing.** Low-pass filter the flight-path angle $\gamma$ directly and use the smoothed–minus–instantaneous difference: $\Delta\theta = H_2(\gamma) - \gamma$. This avoids accumulation because $\gamma$ is always bounded. *Benefit:* bounded input; no new parameters; decays to zero when $\gamma$ is stable. *Drawback:* the input changes meaning from "gear-derived FPA rate" to "total FPA"; corrections appear for any rapid FPA change (e.g., during intentional maneuvers), not only gear-induced ones; the design's requirement that $\Delta\theta = 0$ when gear force = 0 is no longer satisfied — $\Delta\theta$ could be non-zero during rapid aero maneuvers with no gear contact.
+**Recommendation.** Alternative 1. It is the *correct realization of the already-agreed
+transfer function* — it changes no required property (P1–P4 are preserved exactly because the
+transfer function is unchanged) and directly removes the free-integrator drift and the
+associated rate-integration error. Alternatives 2 and 3 both deform or truncate the agreed
+behavior to suppress a numerical artifact, which is the wrong layer to fix it. Adopting
+Alternative 1 does not, on its own, determine whether the resulting (bounded) $\Delta\theta$
+under the one-sided bounce loading is the *desired* behavior — that is the separate behavioral
+question in OQ-LG-19, which must be resolved to know whether the FullStop scenario is expected
+to pass via this mechanism at all.
 
-**Recommendation.**
+---
 
-Alternative 1 (leaky accumulator) is the most conservative change to the agreed formulation and preserves the original formula's behavior in the normal single-landing case. The lack of physical derivation for $\tau_{\text{leak}}$ is a concern, but it can be bounded as: to recover fully within one bounce period $T_b = 1/(17.3) \approx 0.058$ s, set $\tau_{\text{leak}} \lesssim T_b / 4 \approx 0.015$ s. This is small enough to prevent accumulation at the bounce frequency while being large enough ($\gg dt = 0.02$ s) to preserve the intended lag for quasi-static gear loading. A user decision is needed on whether the leaky integral is an acceptable deviation from the derivation, and if so, what value of $\tau_{\text{leak}}$ (whether fixed, configurable, or derived from the gear natural frequency) is appropriate.
+### OQ-LG-19 — Required Δθ Behavior Under Non-Constant (One-Sided Periodic) Gear Loading
+
+**Status:** Open. Blocking acceptance of the rotation-deviation pitch channel for the FullStop
+scenario (IP-AGF-6). Symbols are defined in OQ-LG-18.
+
+**Problem description.**
+
+Agreed property **P2** specifies a "finite, bounded steady-state deviation under a sustained
+**constant** gear load." It does not state what $\Delta\theta$ is required to do under a
+**non-constant** gear load — in particular a *one-sided periodic* load, where the gear force
+pulses on and off (it can only push up, never pull down) at a fixed frequency. This is exactly
+the loading in the `LandingGear_FullStop_SpeedNearZero` scenario: at ~7 m/s the contact model
+produces a ~17.3 Hz bounce limit cycle, so $\dot\gamma_{\text{gear}} = -F_z^W/(mV)$ is a
+one-sided pulse train with a nonzero mean.
+
+Even with the correct, non-drifting realization (OQ-LG-18 Alternative 1), the agreed transfer
+$G(s)$ has a finite DC gain to the rate ($G(0) = -2\zeta/\omega_n \approx -0.6$ s for the test
+aircraft). A one-sided $\dot\gamma_{\text{gear}}$ with a sustained mean of order $0.5$ rad/s
+therefore drives a sustained $\Delta\theta$ of order $-0.3$ rad ($\approx -17°$) — bounded and
+physically representable, but not small. Whether that is *correct required behavior* or an
+*unwanted response* is undefined by P1–P4 as currently agreed.
+
+Two sub-questions must be answered:
+
+1. **Scope.** Is the ~17.3 Hz bounce limit cycle inside the operating envelope that the
+   $\Delta\theta$ model is required to handle correctly, or is it a separate artifact of the
+   **contact/penetration model** (the quasi-static strut and Pacejka slip model at low speed,
+   the subject of OQ-LG-15's root-cause analysis) that $\Delta\theta$ is not responsible for
+   damping? If the bounce itself is the defect, fixing it may belong in the contact model, and
+   $\Delta\theta$ need only behave correctly for physical (non-bouncing) ground contact.
+2. **Required response.** If the model *is* required to behave correctly under one-sided
+   periodic loading, what is the required $\Delta\theta$? Options include: (a) a bounded
+   non-zero mean deviation is acceptable (the body genuinely lags a repeatedly up-pushing
+   gear); or (b) the mean deviation must be near zero (the body should not accumulate a steady
+   pitch offset from symmetric bouncing), which would require the transfer to have **zero** DC
+   gain to a rectified/one-sided rate — a stricter property than P1–P4.
+
+**Alternatives.**
+
+1. **Declare the bounce out of scope; require P1–P4 only for physical contact.** Treat the
+   17.3 Hz limit cycle as a contact-model defect (OQ-LG-15 lineage) to be resolved separately;
+   accept whatever bounded $\Delta\theta$ the agreed transfer produces during the (non-physical)
+   bounce. *Benefit:* keeps the agreed P1–P4 unchanged; does not contort $\Delta\theta$ to
+   compensate for a defect originating elsewhere. *Drawback:* the FullStop scenario test cannot
+   be expected to pass on the strength of the $\Delta\theta$ mechanism alone; a separate
+   contact-model fix is then required before that test passes. *Prerequisite:* a decision on
+   where the bounce limit cycle is to be addressed.
+
+2. **Add a fifth required property: zero mean deviation under symmetric periodic loading.**
+   Strengthen the acceptance criteria so $\Delta\theta$ must have zero (or negligible) sustained
+   mean under a zero-net-FPA periodic load. *Benefit:* the $\Delta\theta$ mechanism would then
+   actively avoid a steady pitch offset during bouncing. *Drawback:* this is a new behavioral
+   requirement not previously agreed; it likely requires the force channel to respond to the
+   gear-induced FPA *change over a contact cycle* (which nets to zero when the aircraft returns
+   to the same height) rather than to the instantaneous one-sided rate — a different forcing
+   definition that must be derived and checked against P1–P4. *Prerequisite:* derivation of a
+   forcing signal that is gear-only (P4) yet nets to zero over a closed bounce.
+
+3. **Require P2 to hold for non-constant loads by bounding the steady mean explicitly.** Keep
+   P1–P4 and add only that the steady-state mean $|\Delta\theta|$ under any in-envelope gear
+   loading must not exceed a stated physical bound (e.g. the static-stance deviation). *Benefit:*
+   minimal addition; ties acceptance to a physically interpretable limit. *Drawback:* does not
+   by itself say how to achieve the bound if the agreed transfer exceeds it; may reduce to
+   Alternative 2 in practice.
+
+**Recommendation.** This question cannot be answered from analysis alone — it requires a design
+decision on **scope** (sub-question 1) that only the project owner can make: whether the bounce
+limit cycle is the responsibility of the $\Delta\theta$ rotation-deviation model or of the
+contact/penetration model. The recommendation is to resolve scope first. If the bounce is
+judged a contact-model artifact, Alternative 1 (declare out of scope) is appropriate and the
+$\Delta\theta$ design is complete once OQ-LG-18 Alternative 1 is implemented. If the
+$\Delta\theta$ model is required to suppress the steady offset during bouncing, Alternative 2
+is the principled path but requires deriving a gear-only forcing that nets to zero over a
+closed bounce cycle, which is additional design work.
 
 ## Test Strategy
 
