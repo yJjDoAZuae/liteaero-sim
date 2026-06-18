@@ -1,0 +1,62 @@
+#!/bin/sh
+# Pre-commit hook: strip transient data from staged Jupyter notebooks.
+#
+# Clears cell outputs, execution counts, and kernel identifiers (see
+# clean_notebooks.py) from every staged *.ipynb file, then re-stages the cleaned
+# result so only source is committed. The cleaner uses the standard library
+# only, so any Python interpreter works.
+#
+# Install (from the repo root):
+#   cp <this-dir>/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# Note: a notebook that is only partially staged (some hunks staged, others not)
+# is re-staged in full, since the hook cleans the working-tree file. Stage
+# notebooks completely before committing, or run the cleaner manually.
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+
+# Locate clean_notebooks.py next to this hook's source, falling back to the
+# known in-repo locations.
+for candidate in \
+    "$repo_root/python/scripts/clean_notebooks.py" \
+    "$repo_root/scripts/clean_notebooks.py"; do
+    [ -f "$candidate" ] && cleaner="$candidate" && break
+done
+
+# Staged added/copied/modified notebooks.
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.ipynb')
+[ -z "$staged" ] && exit 0
+
+if [ -z "$cleaner" ]; then
+    echo "pre-commit: clean_notebooks.py not found in repo; cannot clean notebooks." >&2
+    exit 1
+fi
+
+# Discover a working Python interpreter (prefer an in-repo venv; the cleaner has
+# no third-party dependency, so any interpreter that runs is acceptable).
+python_exe=""
+for candidate in \
+    "$repo_root/python/.venv/Scripts/python.exe" \
+    "$repo_root/.venv/Scripts/python.exe" \
+    "$repo_root/python/.venv/bin/python" \
+    "$repo_root/.venv/bin/python" \
+    python3 python py; do
+    if "$candidate" -c "import sys" >/dev/null 2>&1; then
+        python_exe="$candidate"
+        break
+    fi
+done
+
+if [ -z "$python_exe" ]; then
+    echo "pre-commit: no working Python interpreter found to clean notebooks." >&2
+    echo "pre-commit: install Python (or create a .venv) and retry." >&2
+    exit 1
+fi
+
+printf '%s\n' "$staged" | while IFS= read -r notebook; do
+    [ -n "$notebook" ] || continue
+    [ -f "$notebook" ] || continue
+    "$python_exe" "$cleaner" "$notebook"
+    git add -- "$notebook"
+done
