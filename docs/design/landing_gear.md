@@ -228,13 +228,26 @@ acceptance properties any realization must satisfy; symbols defined in OQ-LG-18)
   added dynamics may respond to non-gear effects (aerodynamic maneuvers, thrust). This
   guarantees $\Delta\theta$ and its forcing vanish identically off-ground.
 
-$\Delta\theta$ is forced by two gear-derived inputs:
+$\Delta\theta$ is forced by two gear-derived inputs **with distinct transfers** (these are *not*
+both a low-pass — see OQ-LG-18/19/20):
 
-1. the **gear normal force's flight-path contribution** (the load factor / path curvature it
-   imparts) — the body's inertial resistance to the gear arresting the descent; and
-2. the **gear moment** $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$, as $M^W/I$ (direct angular
-   forcing), per axis (pitch from $M_y^W/I_{yy}$, bank from $M_x^W/I_{xx}$; the yaw axis
-   $M_z^W/I_{zz}$ drives a lateral specific-force perturbation $\Delta a_y$).
+1. **Force channel** (pitch) — the **destanced gear vertical load**'s flight-path contribution
+   (the body's inertial resistance to the gear *arresting the descent*). Realized as the
+   high-pass-complement transfer $G(s) = -(s+2\zeta\omega_n)/D$ acting on the destanced,
+   dynamic-pressure-faded gear flight-path rate $u = \dot\gamma_{\text{arrest}}\,\Phi(V)$,
+   $\Phi(V)=\mathrm{sat}(V^2/V_{\text{ref}}^2)$ (OQ-LG-19 fade) — $\to 0$ in true steady roll and
+   at low speed. $G(s)$ is realized in the sim via the library's general `tustin_2_tf`+`tf2ss`
+   (OQ-LG-20), with **no free integrator**.
+2. **Moment channel** — the **gear moment** $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$ as $M^W/I$
+   (direct angular forcing) through the **low-pass** $H_2$, $\Delta\theta_{\text{moment}} =
+   (1/\omega_n^2)\,H_2(M/I)$ (finite DC = static stance), per axis (pitch from $M_y^W/I_{yy}$,
+   bank from $M_x^W/I_{xx}$; the yaw axis $M_z^W/I_{zz}$ drives a lateral specific-force
+   perturbation $\Delta a_y$). **Not faded** — gear torque persists at zero airspeed.
+
+The $H_2$ aerodynamic parameters ($\omega_n,\zeta$) are physical rotational-mode characteristics
+supplied as constants (the inertia tensor alone is dimensionally insufficient for a frequency);
+per OQ-LG-19 the aero-mediated parts scale with dynamic pressure, applied here as the explicit
+$\Phi(V)$ fade on the force channel.
 
 $\Delta\theta$ is summed into **both** the aero angle of attack and the gear-geometry attitude:
 
@@ -276,6 +289,16 @@ the relaxation also vanishes when the gear unloads; gating is on the **input**, 
 output (output-gating would inject a discontinuous lift jump at liftoff). No explicit
 dynamic-pressure washout is applied: lift authority fades emergently through
 $L_{\max}=q\,S\,C_{L,\max}$.
+
+$H_1$ is parameterized by its **own** natural frequency and damping
+($\omega_{n,H_1},\zeta_{H_1}$) representing the FBW **load-handoff** timescale — *not* the FBW
+inner command-tracking filter (that filter slews to a commanded load factor; $H_1$ governs the
+weight-transfer onto the gear, a slower outer-loop adaptation). $H_1$ is **slower than the body
+rotational mode $H_2$** ($\omega_{n,H_1} < \omega_{n,H_2}$). $H_1$ is symmetric (a single
+$\omega_n$; no asymmetric engage/release). The **destancing low-pass** in the force channel
+(§2a) is **not an independent parameter** — it shares this timescale,
+$\tau_\text{stance} = 1/\omega_{n,H_1}$, because both isolate the *same* physical quantity (the
+steady gear load that the FBW hands off to the wing).
 
 **DC-gain summary:**
 
@@ -988,9 +1011,11 @@ simulation rate.
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
 | OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete; not yet implemented** | — |
 | OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
-| OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: the two filters are independent — the rotation-deviation filter H₂ is parameterized from physical constants (the inertia tensor, per axis); the n_z-relaxation filter H₁ independently from FBW characteristics (natural frequency, damping ratio)** | — |
-| OQ-LG-18 | Realization of the agreed Δθ force-channel transfer: the literal accumulator contains a free integrator that drifts under one-sided gear loading; an algebraically-equivalent direct filter avoids it | Blocking IP-AGF-6 Δθ pitch channel |
-| OQ-LG-19 | Required Δθ behavior under non-constant (one-sided periodic) gear loading, and whether the ~17.3 Hz bounce limit cycle is in the Δθ model's scope or the contact model's | Blocking IP-AGF-6 Δθ pitch-channel acceptance |
+| OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: H₂ (rotation deviation) from physical rotational characteristics; H₁ (n_z relaxation) from its OWN FBW load-handoff ωₙ/ζ — distinct from the FBW command filter and slower than H₂; the force-channel destancing low-pass is not independent — it shares H₁'s timescale (τ = 1/ωₙ_H₁)** | — |
+| OQ-LG-18 | ~~Realization of the Δθ force-channel transfer (accumulator free integrator vs. direct filter)~~ **Resolved: Alternative 1 — realize the agreed transfer as a single proper second-order filter on the rate (no free integrator); preserves P1–P4 exactly** | — |
+| OQ-LG-19 | ~~Force-channel input definition: spurious, V→0-unbounded steady Δθ in steady ground roll~~ **Resolved: destanced gear vertical load (Alt A) with a dynamic-pressure authority fade $\Phi(V)$ that emulates aero/FBW authority decay on rollout/takeoff; realized as the C² smootherstep $\Phi(V)=\mathrm{smootherstep}(\mathrm{clamp}(V^2/V_{\text{ref}}^2,0,1))$ shared with OQ-LG-21** | — |
+| OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
+| OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
 
 ---
 
@@ -2046,9 +2071,10 @@ the mathematical model in the Integration Contract during implementation.
 
 ---
 
-### OQ-LG-18 — Realization of the Δθ Force Channel: Accumulator Free Integrator vs. Equivalent Direct Filter
+### OQ-LG-18 — Realization of the Δθ Force Channel: Accumulator Free Integrator vs. Equivalent Direct Filter *(Resolved)*
 
-**Status:** Open. Blocking implementation of the rotation-deviation pitch force channel (IP-AGF-6).
+**Status:** Resolved (Alternative 1). The realization is decided; the force-channel *input
+definition* it operates on remains open (OQ-LG-19).
 
 **Symbols (used here and in OQ-LG-19).**
 
@@ -2137,92 +2163,446 @@ because the choice of realization changes which agreed properties P1–P4 are pr
    *Drawback:* the clamp threshold is arbitrary; behavior at the clamp is discontinuous; this
    masks rather than resolves the artifact.
 
-**Recommendation.** Alternative 1. It is the *correct realization of the already-agreed
-transfer function* — it changes no required property (P1–P4 are preserved exactly because the
-transfer function is unchanged) and directly removes the free-integrator drift and the
-associated rate-integration error. Alternatives 2 and 3 both deform or truncate the agreed
-behavior to suppress a numerical artifact, which is the wrong layer to fix it. Adopting
-Alternative 1 does not, on its own, determine whether the resulting (bounded) $\Delta\theta$
-under the one-sided bounce loading is the *desired* behavior — that is the separate behavioral
-question in OQ-LG-19, which must be resolved to know whether the FullStop scenario is expected
-to pass via this mechanism at all.
+**Resolution: Alternative 1.** The force channel is realized as the single proper second-order
+filter $G(s) = -(s + 2\zeta\omega_n)/(s^2 + 2\zeta\omega_n s + \omega_n^2)$ driven directly by
+the force-channel rate, with **no free integrator** (no external $\gamma_{\text{acc}}$
+accumulator). This is the *correct realization of the already-agreed transfer function*: it
+preserves P1–P4 exactly (the transfer function is unchanged) while eliminating the unbounded
+accumulator state and the catastrophic cancellation that caused the $-99°$ drift. Alternatives 2
+(leaky accumulator) and 3 (clamp) were rejected because they deform or truncate the agreed
+behavior to mask a numerical artifact rather than removing it.
+
+*Caveat — coupling to OQ-LG-19.* This resolution fixes **how** the rate is filtered. It assumes
+the force-channel input is the rate $\dot\gamma_{\text{gear}} = -F_z^W/(mV)$. OQ-LG-19 shows that
+this input definition is itself wrong in steady ground roll, so the force channel is not correct
+until OQ-LG-19 is also resolved. If OQ-LG-19 changes the input to a non-rate quantity, the
+equivalent direct realization is re-derived on the same principle (no free integrator); the
+principle stands regardless.
 
 ---
 
-### OQ-LG-19 — Required Δθ Behavior Under Non-Constant (One-Sided Periodic) Gear Loading
+### OQ-LG-19 — Force-Channel Input Definition: Spurious, V→0-Unbounded Δθ in Steady Ground Roll *(Resolved)*
 
-**Status:** Open. Blocking acceptance of the rotation-deviation pitch channel for the FullStop
-scenario (IP-AGF-6). Symbols are defined in OQ-LG-18.
+**Status:** Resolved. **Input = destanced gear vertical load (Alternative A):**
+$a_{\text{arrest}} = (F_{\text{gear},D}^N - \mathrm{LP}_{\tau_s}(F_{\text{gear},D}^N))/m$, converted to
+the flight-path forcing $\dot\gamma_{\text{arrest}} = -a_{\text{arrest}}\cos\gamma/V$ and weighted
+by the **V² dynamic-pressure authority fade** $\Phi(V) = \mathrm{sat}(V^2/V_{\text{ref}}^2)$, which
+removes the $1/V$ singularity by emulating the decay of aerodynamic force/moment effectiveness and
+FBW pitch authority during rollout (and its build-up on takeoff roll). The fade applies to the
+aerodynamically-mediated parts (force channel and the $H_2$ aero restoring, $\propto q$), not to
+the direct gear-moment torque. This refines OQ-LG-17 (the $H_2$ aero parameters scale with dynamic
+pressure). The realization of the resulting transfer is OQ-LG-20. Symbols are defined in OQ-LG-18;
+the full analysis and rejected alternatives are retained below for reference.
 
 **Problem description.**
 
-Agreed property **P2** specifies a "finite, bounded steady-state deviation under a sustained
-**constant** gear load." It does not state what $\Delta\theta$ is required to do under a
-**non-constant** gear load — in particular a *one-sided periodic* load, where the gear force
-pulses on and off (it can only push up, never pull down) at a fixed frequency. This is exactly
-the loading in the `LandingGear_FullStop_SpeedNearZero` scenario: at ~7 m/s the contact model
-produces a ~17.3 Hz bounce limit cycle, so $\dot\gamma_{\text{gear}} = -F_z^W/(mV)$ is a
-one-sided pulse train with a nonzero mean.
+The force channel was agreed to be driven by the gear-derived flight-path rate
+$\dot\gamma_{\text{gear}} = -F_z^W/(mV)$, representing "the body's inertial resistance to the
+gear **arresting the descent**" (Integration Contract — `Aircraft` §2a). That intent is correct
+for a *transient* descent arrest: when the gear impulsively bends the flight path, the body
+should lag. But the input as defined does **not** isolate the descent-arrest transient — it
+uses the full gear normal force, including the part that merely **balances gravity** in steady
+contact.
 
-Even with the correct, non-drifting realization (OQ-LG-18 Alternative 1), the agreed transfer
-$G(s)$ has a finite DC gain to the rate ($G(0) = -2\zeta/\omega_n \approx -0.6$ s for the test
-aircraft). A one-sided $\dot\gamma_{\text{gear}}$ with a sustained mean of order $0.5$ rad/s
-therefore drives a sustained $\Delta\theta$ of order $-0.3$ rad ($\approx -17°$) — bounded and
-physically representable, but not small. Whether that is *correct required behavior* or an
-*unwanted response* is undefined by P1–P4 as currently agreed.
+In **steady level ground roll**, the gear normal force supports the aircraft weight (aero lift
+is negligible at low speed and the n_z relaxation $H_1$ has handed the load to the gear), so
+$F_z^W \approx -mg$ and therefore
 
-Two sub-questions must be answered:
+$$\dot\gamma_{\text{gear}} = \frac{-F_z^W}{mV} \approx \frac{g}{V},$$
 
-1. **Scope.** Is the ~17.3 Hz bounce limit cycle inside the operating envelope that the
-   $\Delta\theta$ model is required to handle correctly, or is it a separate artifact of the
-   **contact/penetration model** (the quasi-static strut and Pacejka slip model at low speed,
-   the subject of OQ-LG-15's root-cause analysis) that $\Delta\theta$ is not responsible for
-   damping? If the bounce itself is the defect, fixing it may belong in the contact model, and
-   $\Delta\theta$ need only behave correctly for physical (non-bouncing) ground contact.
-2. **Required response.** If the model *is* required to behave correctly under one-sided
-   periodic loading, what is the required $\Delta\theta$? Options include: (a) a bounded
-   non-zero mean deviation is acceptable (the body genuinely lags a repeatedly up-pushing
-   gear); or (b) the mean deviation must be near zero (the body should not accumulate a steady
-   pitch offset from symmetric bouncing), which would require the transfer to have **zero** DC
-   gain to a rectified/one-sided rate — a stricter property than P1–P4.
+a large, nonzero value — even though the flight-path angle is **constant** (the gear force is
+balanced by gravity; the actual $\dot\gamma$ is zero). Through the agreed transfer (DC gain to
+the rate $G(0) = -2\zeta/\omega_n \approx -0.59$ s for the test aircraft), this drives a
+**steady** deviation
+
+$$\Delta\theta_{\text{steady}} \approx -\frac{2\zeta}{\omega_n}\cdot\frac{g}{V}.$$
+
+| Speed $V$ | $\dot\gamma_{\text{gear}} = g/V$ | $\Delta\theta_{\text{steady}}$ |
+| --- | --- | --- |
+| 15 m/s (touchdown) | 0.65 rad/s | $-0.39$ rad ($-22°$) |
+| 5 m/s | 1.96 rad/s | $-1.16$ rad ($-66°$) |
+| $\to 0$ | $\to \infty$ | $\to -\infty$ |
+
+A $-22°$ nose-down deviation in a steady level roll is non-physical, and it feeds the
+gear-geometry attitude $\theta_{\text{geom}} = \text{FPA} + \alpha + \Delta\theta$: at $-22°$ the
+2 m-forward nose wheel is dipped $2\sin(22°)\approx 0.75$ m into the ground — worse than the
+original OQ-LG-15 defect, and **unbounded as the aircraft slows to a stop** (which the FullStop
+scenario requires). Property **P2** (finite, bounded steady-state) therefore fails as $V\to 0$,
+and the steady value is physically unreasonable even at touchdown speed. This is independent of
+the realization choice in OQ-LG-18 and independent of gear geometry (it depends only on the
+total weight resting on the gear and on $V$).
+
+The root cause is that the input conflates two physically distinct parts of the gear normal
+force: (i) the steady **stance load** that balances gravity (should produce *no* flight-path
+bending, hence no $\Delta\theta$), and (ii) the **excess/transient load** during a descent
+arrest (should produce the body-lag $\Delta\theta$). The agreed input includes both.
 
 **Alternatives.**
 
-1. **Declare the bounce out of scope; require P1–P4 only for physical contact.** Treat the
-   17.3 Hz limit cycle as a contact-model defect (OQ-LG-15 lineage) to be resolved separately;
-   accept whatever bounded $\Delta\theta$ the agreed transfer produces during the (non-physical)
-   bounce. *Benefit:* keeps the agreed P1–P4 unchanged; does not contort $\Delta\theta$ to
-   compensate for a defect originating elsewhere. *Drawback:* the FullStop scenario test cannot
-   be expected to pass on the strength of the $\Delta\theta$ mechanism alone; a separate
-   contact-model fix is then required before that test passes. *Prerequisite:* a decision on
-   where the bounce limit cycle is to be addressed.
+1. **Excess-over-stance input.** Drive the channel with only the gear force in excess of the
+   quasi-static stance load: $u \propto -(F_z^W - F_{z,\text{stance}}^W)/(mV)$, where
+   $F_{z,\text{stance}}^W$ is the gravity-balancing component. *Benefit:* zero in steady roll by
+   construction; keeps the "descent-arrest" intent; remains gear-derived (P4). *Drawback:*
+   requires identifying $F_{z,\text{stance}}^W$ (e.g. the low-pass of $F_z^W$, or $mg\cos\gamma$);
+   still contains $1/V$, so a velocity floor or further reformulation is needed near standstill.
 
-2. **Add a fifth required property: zero mean deviation under symmetric periodic loading.**
-   Strengthen the acceptance criteria so $\Delta\theta$ must have zero (or negligible) sustained
-   mean under a zero-net-FPA periodic load. *Benefit:* the $\Delta\theta$ mechanism would then
-   actively avoid a steady pitch offset during bouncing. *Drawback:* this is a new behavioral
-   requirement not previously agreed; it likely requires the force channel to respond to the
-   gear-induced FPA *change over a contact cycle* (which nets to zero when the aircraft returns
-   to the same height) rather than to the instantaneous one-sided rate — a different forcing
-   definition that must be derived and checked against P1–P4. *Prerequisite:* derivation of a
-   forcing signal that is gear-only (P4) yet nets to zero over a closed bounce.
+2. **Descent-rate (arrest) input.** Drive the channel from the gear-induced change in descent
+   rate rather than from the normal force divided by $V$.
 
-3. **Require P2 to hold for non-constant loads by bounding the steady mean explicitly.** Keep
-   P1–P4 and add only that the steady-state mean $|\Delta\theta|$ under any in-envelope gear
-   loading must not exceed a stated physical bound (e.g. the static-stance deviation). *Benefit:*
-   minimal addition; ties acceptance to a physically interpretable limit. *Drawback:* does not
-   by itself say how to achieve the bound if the agreed transfer exceeds it; may reduce to
-   Alternative 2 in practice.
+   **Definition of the gear-only $\dot v_D$ contribution.** The gear's contribution to the NED
+   descent acceleration is the down-component of the gear contact force over mass:
+   $$\dot v_{D,\text{gear}} = \frac{1}{m}\,\hat e_D^{\top}\!\left(R_{NB}\,\mathbf f_{\text{body}}^{\text{gear}}\right)
+     = \frac{F_{\text{gear},D}^N}{m},$$
+   where $\mathbf f_{\text{body}}^{\text{gear}}$ is the gear contact force in the body frame
+   (`contact_forces.force_body_n`), $R_{NB}$ the body→NED rotation, and $\hat e_D$ the NED-down
+   unit vector. This quantity is **purely gear-derived**: it is identically zero whenever the
+   gear is unloaded ($\mathbf f_{\text{body}}^{\text{gear}}=0$), so it satisfies P4 with **no
+   gate**, and it contains **no $1/V$**.
 
-**Recommendation.** This question cannot be answered from analysis alone — it requires a design
-decision on **scope** (sub-question 1) that only the project owner can make: whether the bounce
-limit cycle is the responsibility of the $\Delta\theta$ rotation-deviation model or of the
-contact/penetration model. The recommendation is to resolve scope first. If the bounce is
-judged a contact-model artifact, Alternative 1 (declare out of scope) is appropriate and the
-$\Delta\theta$ design is complete once OQ-LG-18 Alternative 1 is implemented. If the
-$\Delta\theta$ model is required to suppress the steady offset during bouncing, Alternative 2
-is the principled path but requires deriving a gear-only forcing that nets to zero over a
-closed bounce cycle, which is additional design work.
+   **But the raw contribution is not the arrest.** In steady level roll the gear supports the
+   weight, so $F_{\text{gear},D}^N \approx -mg$ and $\dot v_{D,\text{gear}} \approx -g$ — the
+   constant gravity-balancing **support**, not a transient arrest (the *net* descent
+   acceleration $\dot v_D^{\text{actual}} = g + \dot v_{D,\text{gear}} + \text{aero}_D/m$ is zero
+   there). The descent-**arrest** signal is the deviation of $\dot v_{D,\text{gear}}$ from its
+   quasi-static support, obtained by removing its slowly-varying part:
+   $$a_{\text{arrest}} = \dot v_{D,\text{gear}} - \mathrm{LP}_{\tau_s}\!\left(\dot v_{D,\text{gear}}\right),$$
+   with $\mathrm{LP}_{\tau_s}$ a low-pass tracking the stance support over time $\tau_s$. Then
+   $a_{\text{arrest}} = 0$ in steady roll (constant input ⇒ LP equals input), $= 0$ off-ground
+   (input zero ⇒ LP zero), and nonzero only during the transient arrest. The body-pitch
+   deviation lags the **flight-path rotation** this arrest produces,
+   $\dot\gamma_{\text{arrest}} = -a_{\text{arrest}}\cos\gamma / V$, which is then fed to the
+   OQ-LG-18 filter $G(s)$.
+
+   **Two corrections this definition forces:**
+   - *It does **not** avoid $1/V$.* (My earlier claim was wrong.) The force channel is
+     fundamentally about the velocity vector rotating, and $\dot\gamma = -\dot v_D/V$ is a
+     $1/V$ effect; only the moment channel is naturally $1/V$-free. What this alternative fixes
+     is the **steady-roll spurious term** — the numerator $a_{\text{arrest}}$ is zero in steady
+     roll, so $\dot\gamma_{\text{arrest}} = 0$ there *regardless of $V$* — not the $1/V$ itself.
+     Near standstill the arrest transient vanishes too, so the ratio stays bounded, but a $V$
+     floor is still prudent.
+   - *Destanced, it is the same quantity as Alternative 1.* Since
+     $a_{\text{arrest}} = \bigl(F_{\text{gear},D}^N - \mathrm{LP}(F_{\text{gear},D}^N)\bigr)/m$,
+     the low-pass of the gear force *is* the stance estimate $F_{z,\text{stance}}$. Alternatives
+     1 and 2 are therefore the **same signal** expressed as a force (Alt 1) versus a descent
+     acceleration (Alt 2); they are not independent options and should be merged.
+
+   **The genuinely distinct $\dot v_D$ form** (if a separate option is wanted) drives the channel
+   from the **net** descent acceleration gated by gear load, $a_{\text{arrest}} =
+   \dot v_D^{\text{actual}}\,w_{\text{wow}}$, where $w_{\text{wow}}\in[0,1]$ is a smooth
+   gear-load weight (→0 off-ground, avoiding hard switching). This needs **no** stance estimate
+   ($\dot v_D^{\text{actual}}$ is already zero in steady roll) but trades it for the gate, and
+   the gated quantity is "net, gated by gear" rather than strictly "gear-only."
+
+   *Benefit:* zero in steady roll and off-ground by construction; expresses the agreed
+   "resistance to arresting the descent" directly from available state. *Drawback:* introduces
+   the stance low-pass $\tau_s$ (or the gate $w_{\text{wow}}$) as a parameter; the P3 initial-rate
+   condition must be re-derived for the destanced input; retains $1/V$ with a floor near
+   standstill.
+
+3. **Bounded load-factor input (no $1/V$).** Replace the path-curvature rate with the bounded
+   gear load factor $n_{z,\text{gear}} = -F_z^B/(mg)$ as the channel input. *Benefit:* bounded
+   at all speeds including standstill; no $1/V$. *Drawback:* a load factor is not an angle rate,
+   so the agreed transfer (and the P3 initial-rate result $\dot{\Delta\theta}(0) =
+   -\dot\gamma_{\text{gear}}$) must be re-derived; in steady roll $n_{z,\text{gear}}\approx 1$ is
+   nonzero, so this still needs an excess-over-stance form (cf. Alternative 1) to be zero in
+   steady roll.
+
+4. **Velocity floor only.** Keep $\dot\gamma_{\text{gear}} = -F_z^W/(mV)$ but floor $V$ at a
+   small $V_{\text{eps}}$. *Benefit:* trivial; bounds the $V\to 0$ blow-up. *Drawback:* does
+   **not** fix the spurious steady-roll deviation ($-22°$ at 15 m/s is already non-physical and
+   well above any floor); insufficient alone.
+
+**Two corrections from the alternatives above:** Alternative 4 is insufficient (the defect
+appears at normal touchdown speed, not only near standstill), and **Alternatives 1 and 2 are the
+same signal** — the destanced gear-force and the destanced gear-only $\dot v_D$ contribution are
+identical, $a_{\text{arrest}} = (F_{\text{gear},D}^N - \mathrm{LP}(F_{\text{gear},D}^N))/m$ — so
+they merge into one "destanced gear vertical load" option. After destancing, every option still
+makes the force channel zero in steady roll; the remaining discriminator is **how each addresses
+the $1/V$ singularity.**
+
+**Addressing the 1/V singularity.** The $1/V$ is **intrinsic, not incidental**: the force channel
+produces a body attitude deviation from a gear *force*, and relating a force to an
+aerodynamically-held attitude requires dividing by dynamic pressure $q = \tfrac12\rho V^2$ (or,
+in the flight-path-rate form, by $V$). It is the mathematical signature of "the angle of attack
+needed to make the wing carry a given load grows without bound as $q\to0$." Each option carries
+it:
+
+- **(A) Destanced gear vertical load** and **(B) net gated $\dot v_D$:** both convert to the
+  flight-path forcing $\dot\gamma_{\text{arrest}} = -a_{\text{arrest}}\cos\gamma/V$ — explicit
+  $1/V$.
+- **(C) Bounded load-factor input:** $n_{z,\text{gear}}$ itself has no $1/V$, but converting a
+  load factor to the equivalent aerodynamic attitude deviation,
+  $\Delta\alpha = n_{z,\text{gear}}\,mg/(q\,S\,C_{L\alpha})$, reintroduces a $1/q$. The
+  singularity moves but does not disappear.
+- **(4) Velocity floor:** caps the blow-up numerically but is not physically motivated and
+  distorts the response across the whole low-speed range.
+
+**Physically-motivated resolution.** The deviation is **aerodynamically mediated** — it exists
+only insofar as the wing/tail and the FBW can produce and hold an attitude through aerodynamic
+forces, whose authority scales with dynamic pressure. During **rollout** that authority decays as
+the aircraft slows; during **takeoff roll** it builds as the aircraft accelerates. So the force
+channel is weighted by a **dynamic-pressure authority factor**
+
+$$\Phi(V) = \mathrm{sat}\!\left(\frac{q}{q_{\text{ref}}}\right) = \mathrm{sat}\!\left(\frac{V^2}{V_{\text{ref}}^2}\right) \in [0,1],$$
+
+with $q_{\text{ref}} = \tfrac12\rho V_{\text{ref}}^2$ a reference dynamic pressure at which
+aerodynamic/FBW authority is full (e.g. near stall/approach speed). The faded force-channel input
+is
+
+$$u = \dot\gamma_{\text{arrest}}\,\Phi(V)
+   = -\frac{a_{\text{arrest}}\cos\gamma}{V}\cdot\mathrm{sat}\!\left(\frac{V^2}{V_{\text{ref}}^2}\right)
+   \;\xrightarrow[V\le V_{\text{ref}}]{}\; -\frac{a_{\text{arrest}}\cos\gamma\;V}{V_{\text{ref}}^2},$$
+
+which is **bounded for all $V$ and decays smoothly to zero as $V\to0$** — the $1/V$ is cancelled
+by the $V^2$ of dynamic pressure. This is not a numerical patch: it states that as the aircraft
+rolls to a stop the aerodynamically-mediated pitch deviation vanishes and the body simply rides
+its gear, exactly as a real FBW relinquishes aerodynamic pitch authority on rollout (and
+reacquires it on takeoff roll). It formalizes the dynamic-pressure washout of FBW pitch authority
+noted earlier in this program.
+
+The fade applies to the **aerodynamically-mediated** parts of $\Delta\theta$ — the force channel,
+and the $H_2$ restoring/damping that represent aerodynamic static stability and pitch damping
+(both $\propto q$). It does **not** apply to the direct **gear-moment** torque on the body, which
+is inertial/contact-mediated and persists at zero airspeed. Consequently the $H_2$ aerodynamic
+parameters ($\omega_n,\zeta$) physically scale with dynamic pressure (the short-period mode
+frequency $\propto V$); this **refines OQ-LG-17** rather than contradicting it — the inertia
+tensor sets the $1/I$ scaling, dynamic pressure completes the dimensional form. Whether to apply
+$\Phi(V)$ as an explicit multiplier on a fixed-parameter $H_2$, or to scale $H_2$'s parameters
+with $q$ directly, is an implementation choice with the same physical content.
+
+**Recommendation.** Use **(A) destanced gear vertical load** for the input (Alternatives 1 and 2
+are the same signal, merged), combined with the **dynamic-pressure authority fade $\Phi(V)$** for
+the $1/V$. Rationale: (A) is purely gear-derived (P4-clean, no gate) and faithful to the agreed
+transfer; $\Phi(V)$ resolves the singularity through the actual physics — the decay of
+aerodynamic force/moment effectiveness and FBW authority on rollout/takeoff — rather than a
+floor, and unifies the low-speed behavior of the force channel with the n_z-relaxation $H_1$ load
+handoff. Option (C) is equivalent under the same fade and may be preferred if load-factor framing
+is wanted for consistency with $H_1$; option (B) is viable but adds a gate. Remaining work to
+close this OQ: confirm (A)+$\Phi(V)$; choose $V_{\text{ref}}$ (tie it to stall/approach dynamic
+pressure); decide whether $\Phi$ is an explicit multiplier or $q$-scaled $H_2$ parameters; and
+re-derive the P3 initial-rate condition with the fade present.
+
+*Note — the earlier framing of this question (required $\Delta\theta$ behavior under one-sided
+periodic bounce loading) was withdrawn: that bounce is a symptom of the broken attitude, not an
+external input the model must tolerate. A correctly-defined, bounded force channel is intended
+to prevent the attitude from tracking the FPA and so prevent the bounce from developing; whether
+it does is a verification step after this OQ and OQ-LG-18 are implemented, not a separate design
+question.*
+
+---
+
+### OQ-LG-20 — Realization of the Force-Channel Transfer $G(s)$ With the Available Filter Toolkit *(Resolved)*
+
+**Status:** Resolved. Realize $G(s) = -(s+2\zeta\omega_n)/D$ in the **sim** (`Aircraft`) using the
+library's existing **general** realization functions
+([`tustin_2_tf`](../liteaero-flight/include/liteaero/control/filter_realizations.hpp) +
+[`tf2ss`](../liteaero-flight/include/liteaero/control/filter_realizations.hpp), which already back
+every `FilterSS2` design): build the discrete state-space once
+(`num_s = [0, -1, -2\zeta\omega_n]`, `den_s = [1, 2\zeta\omega_n, \omega_n^2]`) and run the
+standard two-state update inline. This gives the exact transfer with **no free integrator** (so
+none of the numerical drift that disqualifies Alternative 1) **and adds no problem-specific filter
+design to the shared control library** — the problem-specific transfer lives in the sim, where it
+belongs, while the general realization math is reused from the control library. Alternative 1
+(destanced bounded-accumulator) is rejected: a free integrator (pole at $z=1$) accumulates
+floating-point round-off/bias drift over long runs regardless of the input being zero-DC. The
+originally-suggested "new `FilterSS2` design method" form of Alternative 2 is **not** adopted —
+a relative-degree-1 design is too problem-specific to belong in the shared flight control library.
+The full analysis is retained below for reference.
+
+**Problem description.**
+
+OQ-LG-18 resolved that the force channel is realized as the proper second-order transfer
+$$G(s) = -\frac{s + 2\zeta\omega_n}{s^2 + 2\zeta\omega_n s + \omega_n^2}$$
+driven by the (destanced, $\Phi(V)$-faded) gear flight-path rate — chosen specifically to avoid
+the unbounded **free integrator** of the literal accumulator. But the project's second-order
+filter class `FilterSS2` / `FilterSS2Clip` provides only these continuous-time designs (numerator
+over $D = s^2 + 2\zeta\omega_n s + \omega_n^2$):
+
+- `low_pass_second`: $(\tau_z\omega_n^2 s + \omega_n^2)/D$ — this is $H_2$ (with optional zero);
+- `high_pass_second` with `c_zero`: $(s^2 + c_{\text{zero}}\,2\zeta\omega_n s)/D$ — with
+  $c_{\text{zero}}=1$ this is exactly $1 - H_2 = s(s+2\zeta\omega_n)/D$;
+- `deriv` (first order), `notch_second`.
+
+**None realizes a degree-1 numerator over a degree-2 denominator**, which is the form of
+$G(s) = -(s+2\zeta\omega_n)/D$. So $G(s)$ cannot be instantiated directly with the existing
+toolkit.
+
+The picture is changed by OQ-LG-19: the resolved force-channel input (destanced gear vertical
+load) is **zero-DC** — the destancing removes the steady gravity-balancing component that made the
+raw input one-sided. The unbounded accumulator drift that motivated OQ-LG-18's no-integrator
+choice is therefore **no longer present**, so a bounded-accumulator realization is now numerically
+safe. The realization decision must be re-made in that light.
+
+**Alternatives.**
+
+1. **Destanced bounded-accumulator + $(1-H_2)$.** Maintain $\gamma_{\text{acc}} = \int u\,dt$ of
+   the destanced, faded rate $u$, and compute $\Delta\theta_{\text{force}} = -(1-H_2)(\gamma_{\text{acc}})$
+   using the existing `high_pass_second` design with $c_{\text{zero}}=1$. Algebraically identical
+   to $G(s)\,\dot\gamma$. *Benefit:* reuses an existing filter design. *Drawback — disqualifying:*
+   the accumulator is a **free integrator** (a discrete pole at $z=1$, no restoring term), so it
+   accumulates **numerical** round-off and bias drift over long runs *independently* of whether
+   the input is zero-DC in exact arithmetic. Destancing removes the *physical* DC, not the
+   floating-point integration error; and defining the desired dynamics only at the *output* does
+   not bound the *internal* state. Over a long taxi/rollout this internal state can wander and
+   eventually corrupt the output. Bounding it would require an artificial leak (which re-deforms
+   the transfer, cf. OQ-LG-18 Alt 2). Not acceptable.
+
+2. **Realize $G(s)$ directly via the existing Tustin 2nd-order machinery.** The project already
+   has general realization functions —
+   [`tustin_2_tf`](../liteaero-flight/include/liteaero/control/filter_realizations.hpp) (Tustin
+   transform of an arbitrary 2nd-order continuous TF given by its coefficient vectors) and
+   [`tf2ss`](../liteaero-flight/include/liteaero/control/filter_realizations.hpp) (TF→state-space)
+   — and *every* existing `FilterSS2` design (`low_pass_second`, `high_pass_second`, `notch_second`,
+   …) is just a thin wrapper that fills `num_s`/`den_s` and calls them. $G(s)=-(s+2\zeta\omega_n)/D$
+   is **relative-degree 1**, i.e. `num_s = [0, -1, -2\zeta\omega_n]`, `den_s = [1, 2\zeta\omega_n,
+   \omega_n^2]` — the same numerator structure already exercised by `low_pass_second` (with zero).
+   So $G(s)$ realizes with the *existing* machinery and the standard two-state `FilterSS2` form:
+   **no integrator, no drift.** The only addition is a thin public wrapper design method (e.g.
+   `lead_second`, or a general `biquad_second(num_s, den_s)`) — coefficient setup plus a call to
+   the functions that already back the other designs; serialization (the two-state $x$) and the
+   `FilterSS2Clip` clipping are unchanged. *Benefit:* exact, drift-free; reuses tested realization
+   code; gives a reusable relative-degree-1 primitive. *Drawback:* a small, additive change to the
+   shared `FilterSS2`/`FilterSS2Clip` interface (one design method + its unit test).
+
+3. **Hand-rolled state space in `Aircraft`.** Discretize $G(s)$ (Tustin) and carry the two-state
+   realization inline in `Aircraft`, bypassing `FilterSS2`. *Benefit:* exact $G(s)$; no
+   shared-library change. *Drawback:* duplicates the Tustin/`tf2ss` math that already exists in
+   the control library, against the project's filter-reuse pattern; separate serialization. Strictly
+   worse than Alternative 2 now that the realization functions are confirmed general.
+
+**Recommendation.** Realize $G(s)$ in the sim (Alternative 3's *location*) using the control
+library's existing general `tustin_2_tf` + `tf2ss` functions (Alternative 2's *reuse* of the
+existing machinery). This keeps the **problem-specific** transfer out of the shared flight control
+library — a relative-degree-1 / lead design is too specific to belong there — while reusing the
+library's general realization math (no duplication of the Tustin/`tf2ss` algorithms) and giving
+the exact transfer with no free integrator. Alternative 1 is rejected (free integrator drifts
+numerically regardless of destancing). Adding a *general* biquad primitive to the library was
+considered and set aside: it is not needed for this single use, and the sim-side realization keeps
+the control-library surface unchanged.
+
+---
+
+### OQ-LG-21 — Velocity-Derived Attitude Singularity at Low Horizontal Speed *(Resolved)*
+
+**Status:** Resolved — Alternative 1 (filtered-velocity blend via the C² smootherstep $\Phi(V)$,
+body rates from the committed attitude, near-stop hold). Implementation in `KinematicState`
+attitude propagation; the OQ-LG-19 fade is upgraded to the same C² factor and the interim gear-only
+body-rate override is removed. Design detail below.
+
+**Problem description.**
+
+The load-factor `Aircraft` derives its body attitude kinematically from the velocity vector:
+body pitch $\theta = \gamma + \alpha$, where the flight-path angle is
+
+$$\gamma = \operatorname{atan2}(-v_D,\; v_H), \qquad v_H = \sqrt{v_N^2 + v_E^2}.$$
+
+This is well-behaved in flight but **singular in sensitivity as $v_H \to 0$**: the derivative
+$\partial\gamma/\partial v_D = -v_H/(v_H^2+v_D^2)$ blows up when $v_H$ is small and $v_D$ is near
+zero, and more practically, when the aircraft has nearly stopped ($v_H \approx 1$ m/s) a small
+vertical wobble from a gear bounce ($v_D \approx \pm 2$ m/s) gives $\gamma = \operatorname{atan2}(2,1)
+\approx 63°$. Because the attitude has **no rotational inertia** (it is slaved to the velocity
+vector), it commits these swings directly: measured at the end of the FullStop rollout, the
+committed pitch jumps **+15.7° → −16.4° → +58.9° → +79.8° → +49.1° on successive 0.02 s steps**
+(≈50 Hz, finite-difference body rate up to **93 rad/s**). That whipping attitude feeds the landing
+gear an impossible contact-patch closing rate through $\omega\times r$ (δ̇ ≈ 13.5 m/s at an actual
+descent rate of ≈2 m/s), producing **20 g normal-force spikes** even though the gear model itself
+is sound (a clean 2 m/s touchdown gives 2.1 g — see the touchdown isolation test). It also makes
+the published kinematic body rate spike (the $(v\times a)/|V|^2$ path-curvature term) to ~1900 rad/s.
+
+This is distinct from the OQ-LG-19 fade (which scaled the **Δθ force-channel input**); the present
+singularity is in the **velocity → attitude kinematics** and is not addressed by that fade.
+
+Physically, at taxi/rollout speeds the velocity-vector flight-path angle is meaningless — the
+attitude is set by the gear on the ground, not by the (vertical-wobble-dominated) velocity
+direction. The *ability of vertical velocity/acceleration to tilt the body attitude must therefore
+decay below flight speed*, vanishing smoothly as $v_H \to 0$, while remaining negligible at any
+viable flight speed.
+
+**Proposed design.** Three coupled elements: (a) a C² dynamic-pressure authority factor $\Phi(V)$;
+(b) a **filtered-velocity attitude reference** that $\Phi$ blends toward at low speed (so the
+attitude is slope-correct, not zeroed to the horizon); (c) **body rates computed consistently with
+the committed attitude** (so a quiescent vehicle reports near-zero rates).
+
+**(a) Dynamic-pressure authority factor (C²).** Same motivation as the OQ-LG-19 force-channel fade
+(flight authority decays with dynamic pressure). Built on normalized dynamic pressure
+$\hat q = \operatorname{clamp}\!\big((V/V_{\text{ref}})^2,\,0,\,1\big)$:
+
+$$\Phi(V) = \mathrm{smootherstep}(\hat q) = \hat q^{3}\,(6\hat q^{2} - 15\hat q + 10).$$
+
+- **Negligible at flight speed:** $V \ge V_{\text{ref}} \Rightarrow \hat q=1,\ \Phi\equiv1$ — zero
+  effect in the flight envelope; the attitude tracks the instantaneous velocity exactly as today.
+- **Rapid sub-flight-speed decay:** near $V=0$, $\Phi \sim 10\,(V/V_{\text{ref}})^6$ — the
+  instantaneous vertical-velocity influence on attitude falls off as $V^6$ (≈100–200× by a few m/s).
+- **C² across the envelope:** smootherstep has zero 1st and 2nd derivative at $\hat q=0,1$ and
+  $\hat q(V)$ has zero slope at $V=0$; the clamp joins the constants $0$ and $1$ with matching value,
+  slope, and curvature. $\Phi \in C^2$ everywhere in $V$, no division → no singularity.
+
+$V_{\text{ref}}$ is tied to stall/approach dynamic pressure (consistent with OQ-LG-19; $\approx 24$
+m/s for the test aircraft).
+
+**(b) Slope-aware filtered-velocity reference.** Zeroing the flight-path angle at low speed (relaxing
+to the horizon) would be **wrong on a sloped runway** — a parked or rolling aircraft on a slope sits
+at the slope attitude, not level. Instead, maintain a **low-pass-filtered NED velocity**
+$\mathbf v_{\text{filt}}$ (cutoff below the gear-bounce band, above the slope/approach trend), and
+derive the attitude from a **blended reference velocity**:
+
+$$\mathbf v_{\text{ref}} = \Phi(V)\,\mathbf v + \big(1-\Phi(V)\big)\,\mathbf v_{\text{filt}},
+\qquad \gamma_{\text{att}} = \operatorname{atan2}(-v_{\text{ref},D},\, v_{\text{ref},H}),
+\qquad \theta_{\text{att}} = \alpha + \gamma_{\text{att}}\;(+\,\Delta\theta).$$
+
+At flight speed ($\Phi=1$): $\mathbf v_{\text{ref}}=\mathbf v$ — instantaneous, responsive, unchanged.
+At low speed ($\Phi\to0$): $\mathbf v_{\text{ref}}=\mathbf v_{\text{filt}}$ — the slow, wobble-free
+velocity, which **on a slope points down-slope**, so $\gamma_{\text{att}}\to$ the slope angle and the
+attitude correctly follows the runway. The high-frequency gear-bounce wobble is rejected by the
+filter, so the attitude stops whipping, while the genuine slope is retained. $\mathbf v_{\text{filt}}$
+is a first-order low-pass with time constant $\tau_v$ chosen to reject the bounce band (~few Hz) yet
+track the slope/approach trend ($\tau_v \sim 0.5$–$1$ s; may relate to the H₁ load-handoff timescale,
+TBD at implementation).
+
+**(c) Body rates consistent with the attitude.** The published body angular rate **and** the rate
+supplied to the gear are computed as the genuine rate of change of the **committed (blended)
+attitude** — not the raw $(v\times a)/|V|^2$ path curvature. Because $\mathbf v_{\text{ref}}$ is
+smooth (filtered at low speed), the attitude and its derivative are smooth: a quiescent vehicle
+rolling to a stop reports **near-zero body rates, consistent with its (slope-aligned, non-wobbling)
+attitude** — satisfying the requirement that outputs not show spurious high rates at quiescence. This
+**supersedes the interim gear-only body-rate override** (the finite-difference rate fed only to the
+gear): once the attitude and its rate are smooth and consistent, the *same* rate serves both the
+output and the gear, and the separate override is removed.
+
+**Near-stop behavior.** As the vehicle stops, $|\mathbf v_{\text{ref}}|\to0$ and the atan2 flight-path
+angle becomes ill-defined. Because $\mathbf v_{\text{ref}}=\mathbf v_{\text{filt}}$ there (slowly
+varying), the attitude rate $\to0$ and the attitude **smoothly freezes at its last slope-aligned
+value**; guard the atan2 by holding the attitude (zero rate) when $|\mathbf v_{\text{ref}}|$ is below
+a small $\varepsilon$. No discontinuity — the rate is already $\to0$ approaching the hold. (The held
+value is the slope captured while there was motion; the terrain slope is therefore tracked without a
+direct terrain query.)
+
+**Alternatives.**
+
+1. **Filtered-velocity blend via $\Phi(V)$, attitude+rates from $\mathbf v_{\text{ref}}$**
+   (recommended): the design above. Slope-correct, smooth (C²), bounded, consistent rates, no
+   singularity (near-stop hold).
+2. **Scale the FPA toward the horizon by $\Phi$** ($\gamma_{\text{att}}=\Phi\,\operatorname{atan2}(-v_D,v_H)$).
+   *Rejected:* relaxes to a **level** attitude at low speed — wrong on a sloped runway (should follow
+   the slope). Also leaves the rate-consistency requirement unaddressed.
+3. **Reference the terrain slope directly at low speed** (blend the FPA toward the gear-contact
+   terrain slope). *Viable but* couples the kinematic attitude to terrain queries it does not
+   currently hold; the filtered-velocity reference achieves the same slope-following from velocity
+   alone while there is motion, with the near-stop hold covering full stop — so the terrain query is
+   unnecessary.
+4. **Scale $v_D$ inside atan2, or floor $v_H$.** *Rejected:* $\operatorname{atan2}(y,v_H)\to\pm90°$
+   for any $y\ne0$ as $v_H\to0$ (scaling the numerator doesn't remove it); a floor is not smooth
+   (C⁰) and is not dynamic-pressure-motivated.
+
+**Recommendation.** Alternative 1 — the C² smootherstep $\Phi(\hat q)$, the filtered-velocity blend
+$\mathbf v_{\text{ref}}$, body rates derived from the committed attitude, and the near-stop hold.
+This satisfies every requirement: negligible in the flight envelope; rapid sub-flight-speed decay;
+C² across the envelope; no singularity; **correct on sloped runways**; and **output body rates
+consistent with the attitude** (near-zero at quiescence). **Consistency note:** upgrade the OQ-LG-19
+force-channel fade from $\operatorname{sat}(V^2/V_{\text{ref}}^2)$ (only C⁰) to this same C²
+smootherstep so both authority fades share one factor. **Supersession note:** the interim gear-only
+body-rate correction is removed once (c) is in place.
 
 ## Test Strategy
 

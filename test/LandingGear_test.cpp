@@ -22,7 +22,7 @@ private:
     float elev_;
 };
 
-// Tricycle gear: nose at +2 m, mains at ±1 m lateral, all 0.5 m below CG, r=0.2 m.
+// Tricycle gear: nose at +2 m, mains at −0.3 m aft of CG and ±1 m lateral, all 0.5 m below CG, r=0.2 m.
 // contact_altitude = aircraft_alt - 0.7 m (0.5 attach + 0.2 tyre radius).
 static nlohmann::json makeTricycleConfig() {
     return nlohmann::json::parse(R"({
@@ -44,7 +44,7 @@ static nlohmann::json makeTricycleConfig() {
                 "has_brake":                false
             },
             {
-                "attach_point_body_m": [0.0, -1.0, 0.5],
+                "attach_point_body_m": [-0.3, -1.0, 0.5],
                 "travel_axis_body":    [0.0,  0.0, 1.0],
                 "spring_stiffness_npm":      20000.0,
                 "damping_compression_nspm": 500.0,
@@ -59,7 +59,7 @@ static nlohmann::json makeTricycleConfig() {
                 "has_brake":                true
             },
             {
-                "attach_point_body_m": [0.0,  1.0, 0.5],
+                "attach_point_body_m": [-0.3,  1.0, 0.5],
                 "travel_axis_body":    [0.0,  0.0, 1.0],
                 "spring_stiffness_npm":      20000.0,
                 "damping_compression_nspm": 500.0,

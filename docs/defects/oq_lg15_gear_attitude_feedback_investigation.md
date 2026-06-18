@@ -11,6 +11,35 @@ root cause, and supporting data. The *fix* is design content and lives in the de
 
 ---
 
+## Post-implementation status (2026-06-15) — partial
+
+The fix is now partially implemented: corrected gear geometry (main gear moved aft of the CG),
+the H₁ n_z-relaxation, and the Δθ rotation-deviation state (force channel `G(s)` on the
+destanced, V²-dynamic-pressure-faded gear vertical load per OQ-LG-19/20; moment channel `H₂` on
+M/I). **The figures in this report have been regenerated from the current post-implementation
+diagnostic run; the root-cause text below describes the original pre-fix defect** (numerical
+values such as 17.3 Hz and +22.7 kN are from the original run and are retained as the diagnosis
+of record).
+
+**What the fix resolved (current run):**
+- The nose-wheelbarrow is gone — nose-wheel contact is now 7.6 % of the time (was ~92 %); both
+  mains are in contact 100 % (the aircraft sits nose-up on its mains, a normal tricycle attitude).
+- The high-frequency bounce dropped from 17.3 Hz to ~3.7 Hz.
+- **No net forward energy injection**: net horizontal contact work is **−31.4 kJ** over 300 s
+  (net *decelerating*), versus the original periodic +22.7 kN forward spikes.
+
+**What is still wrong (FullStop still fails, terminal ≈ 6.9 m/s):**
+- A **new** oscillation: the Δθ pitch deviation drives the realized α to swing **0°↔44°** (past
+  α_max = 24°), synchronized with the ~3.7 Hz nose touchdowns. While α is high the wing makes
+  near-max lift, offloading the mains and cutting rolling-resistance deceleration, so the speed
+  plateaus near 6.9 m/s instead of decaying to < 0.5 m/s.
+- Diagnosis in progress: the Δθ→α coupling is unbounded (α_body = α_cmd + Δθ with no limit) and
+  the moment channel appears to feed the touchdown-frequency pitch swing. Next steps: bound /
+  condition the Δθ→α coupling and re-examine the moment-channel gain and the force/moment
+  interaction at the contact frequency.
+
+---
+
 ## Symptom
 
 The `LandingGear_FullStop_SpeedNearZero` scenario test — aircraft at V = 15 m/s must

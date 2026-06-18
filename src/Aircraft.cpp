@@ -1,4 +1,5 @@
 #include "Aircraft.hpp"
+#include <liteaero/control/filter_realizations.hpp>
 #include "liteaerosim.pb.h"
 #include "navigation/WGS84.hpp"
 #include "propulsion/PropulsionEDF.hpp"
@@ -14,6 +15,16 @@
 using liteaero::control::Mat21;
 
 namespace liteaero::simulation {
+
+// C² dynamic-pressure authority factor Φ(V) = smootherstep(clamp((V/V_ref)², 0, 1))
+// (OQ-LG-19 force-channel fade and OQ-LG-21 attitude-reference blend). Zero (with zero 1st
+// and 2nd derivatives) at V=0, unity (likewise) at V≥V_ref, monotone, no division/singularity.
+static inline float phiAuthority(float V, float V_ref) {
+    if (V_ref <= 0.0f) return 1.0f;
+    float q = (V * V) / (V_ref * V_ref);
+    q = std::clamp(q, 0.0f, 1.0f);
+    return q * q * q * (q * (q * 6.0f - 15.0f) + 10.0f);   // 6q⁵ − 15q⁴ + 10q³
+}
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -77,7 +88,20 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _ny_zeta_nd          = ac.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = ac.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = ac.at("roll_rate_zeta_nd").get<float>();
-    _dtheta_zeta_nd = ac.value("dtheta_zeta_nd", 0.7f);
+    _dtheta_zeta_nd        = ac.value("dtheta_zeta_nd", 0.7f);
+    _dtheta_wn_pitch_rad_s = ac.value("dtheta_wn_pitch_rad_s", 3.0f);
+    _dtheta_wn_roll_rad_s  = ac.value("dtheta_wn_roll_rad_s",  4.0f);
+    _dtheta_wn_yaw_rad_s   = ac.value("dtheta_wn_yaw_rad_s",   2.0f);
+    _dtheta_vref_mps       = ac.value("dtheta_vref_mps",       24.0f);
+    // OQ-LG-21 attitude-reference velocity low-pass τ. Sets how heavily per-step gear-bounce
+    // wobble is rejected at low speed while retaining the runway-slope/approach trend.
+    _att_filt_tau_s        = ac.value("att_filt_tau_s",        0.7f);
+    // H₁ load-handoff: its own (slower) parameters, NOT the FBW command filter (nz_wn).
+    _nz_relax_wn_rad_s     = ac.value("nz_relax_wn_rad_s",     1.0f);
+    _nz_relax_zeta_nd      = ac.value("nz_relax_zeta_nd",      0.8f);
+    // Destancing LP shares the H₁ load-handoff timescale (same physical quantity: the steady
+    // gear load), so τ_stance is derived, not configured.
+    _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
     _cmd_filter_dt_s     = outer_dt_s / static_cast<float>(_cmd_filter_substeps);
     // Nyquist: wn * cmd_filter_dt_s must be < π for each axis.
     constexpr float kPi = 3.14159265f;
@@ -90,24 +114,41 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     if (_roll_rate_wn_rad_s * _cmd_filter_dt_s >= kPi)
         throw std::invalid_argument(
             "Aircraft::initialize: roll_rate_wn_rad_s * cmd_filter_dt_s must be < π (Nyquist)");
+    if (_nz_relax_wn_rad_s * _cmd_filter_dt_s >= kPi)
+        throw std::invalid_argument(
+            "Aircraft::initialize: nz_relax_wn_rad_s * cmd_filter_dt_s must be < π (Nyquist)");
     _nz_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
     _roll_rate_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _roll_rate_wn_rad_s, _roll_rate_zeta_nd, 0.f);
     _nz_filter.resetToInput(1.f);
-    // H₁: nz relaxation filter — parameterized from FBW Nz ωn/ζ (OQ-LG-17).
-    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    // H₁: nz relaxation filter — FBW load-handoff timescale (own ωn/ζ, slower than H₂; OQ-LG-17).
+    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_relax_wn_rad_s, _nz_relax_zeta_nd, 0.f);
     _nz_relax_filter.resetToInput(0.f);
-    // H₂: rotation-deviation filters — ωn computed from inertia tensor (OQ-LG-17).
-    constexpr float kGravInit = 9.80665f;
-    _dtheta_wn_pitch_rad_s = std::sqrt(_inertia.mass_kg * kGravInit / _inertia.Iyy_kgm2);
-    _dtheta_wn_roll_rad_s  = std::sqrt(_inertia.mass_kg * kGravInit / _inertia.Ixx_kgm2);
-    _dtheta_wn_yaw_rad_s   = std::sqrt(_inertia.mass_kg * kGravInit / _inertia.Izz_kgm2);
+    // H₂: gear-MOMENT rotation-deviation filters — 2nd-order LP on M/I (finite DC = static
+    // stance). ωn/ζ are physical rotational-mode parameters (config; OQ-LG-17). No fade — gear
+    // torque persists at zero airspeed.
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
     _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
     _dtheta_pitch_filter.resetToInput(0.f);
     _dtheta_roll_filter .resetToInput(0.f);
     _dtheta_yaw_filter  .resetToInput(0.f);
+    // Destancing low-pass for the gear vertical load (1st-order, τ = stance time constant).
+    _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
+    _fz_stance_filter.resetToInput(0.f);
+    // Force channel G(s) = -(s + 2ζωn)/(s² + 2ζωn s + ωn²), realized inline via the library's
+    // general Tustin 2nd-order machinery (OQ-LG-20; no problem-specific design added to the
+    // shared control library). num_s/den_s ordered [s², s¹, s⁰] per tustin_2_tf convention.
+    {
+        const float wn = _dtheta_wn_pitch_rad_s;
+        const float z  = _dtheta_zeta_nd;
+        liteaero::control::Vec3 num_s, den_s, num_z, den_z;
+        num_s << 0.0f, -1.0f, -2.0f * z * wn;
+        den_s << 1.0f, 2.0f * z * wn, wn * wn;
+        liteaero::control::tustin_2_tf(num_s, den_s, _cmd_filter_dt_s, wn, num_z, den_z);
+        liteaero::control::tf2ss(num_z, den_z, _force_phi, _force_gamma, _force_h, _force_j);
+        _force_x.setZero();
+    }
 
     // 5. Load factor allocator (references _liftCurve — must be emplaced after step 3)
     const auto& lfa_sec = config.at("load_factor_allocator");
@@ -186,11 +227,12 @@ void Aircraft::reset() {
     _dtheta_pitch_filter.resetToInput(0.f);
     _dtheta_roll_filter .resetToInput(0.f);
     _dtheta_yaw_filter  .resetToInput(0.f);
-    _dtheta_pitch_acc  = 0.f;
-    _dtheta_roll_acc   = 0.f;
-    _dtheta_yaw_acc    = 0.f;
+    _fz_stance_filter   .resetToInput(0.f);
+    _force_x.setZero();
     _prev_dtheta_roll  = 0.f;
     _prev_dtheta_yaw   = 0.f;
+    _v_filt_ned.setZero();
+    _v_filt_init = false;
     _body_in_hard_contact = false;
 }
 
@@ -245,6 +287,9 @@ void Aircraft::step(double time_sec,
     //     simultaneously and send the aircraft airborne.  Same-step forces
     //     eliminate that lag: once the gear compresses, n_z_shaped drops to 0
     //     in the same step.
+    // The gear uses the snapshot body rate directly. Since commitAttitude now derives that
+    // rate from the committed (slope-aware, filtered-reference) attitude (OQ-LG-21), it is
+    // consistent and free of the (v×a)/|V|² spike, so no separate gear-only override is needed.
     ContactForces contact_forces;
     if (_has_landing_gear && _terrain != nullptr) {
         contact_forces = _landing_gear.step(
@@ -293,16 +338,13 @@ void Aircraft::step(double time_sec,
         n_z_shaped = std::max(0.0f, n_z_shaped - nz_relax_dbg);
     }
 
-    // 5c. Δθ rotation-deviation state (OQ-LG-15 / OQ-LG-16 / OQ-LG-17).
-    //     Implements Δθ = H₂(γ_acc) − γ_acc per the agreed design, where
-    //     γ_acc = ∫ γ̇_gear dt accumulates the gear-derived FPA and moment inputs.
-    //
-    //     NOTE: The pitch force-channel accumulator diverges in the FullStop limit
-    //     cycle (OQ-LG-18 — open).  The H₁ step-5b filter and the moment/roll/yaw
-    //     channels here are implemented per design; the pitch FORCE channel is also
-    //     implemented per design but produces non-physical values (~−99°) when the
-    //     limit cycle keeps the aircraft bouncing at 17.3 Hz.  OQ-LG-18 must be
-    //     resolved before this channel gives correct results.
+    // 5c. Δθ rotation-deviation state (OQ-LG-15/16/17/18/19/20).
+    //     Two channels, both gear-derived and both with NO free integrator:
+    //       Force (pitch): G(s)·u, where u = γ̇_arrest·Φ(V) is the destanced, dynamic-pressure-
+    //         faded gear-induced flight-path rate. Zero in steady roll (destanced), bounded and
+    //         →0 at low speed (Φ(V) fade). G(s) realized inline (OQ-LG-20).
+    //       Moment (pitch/roll/yaw): H₂ low-pass on M/I (finite DC = static stance), no fade.
+    //     Δθ_pitch = Δθ_force + Δθ_moment_pitch feeds α and the gear geometry.
 
     // Compute gear force in wind frame once; reused in step 9 to avoid double transform.
     const Eigen::Vector3f F_gear_wind =
@@ -312,31 +354,42 @@ void Aircraft::step(double time_sec,
     float delta_rr_filt_rps  = 0.f;
     float delta_ay_filt_mps2 = 0.f;
     {
-        const float V_safe = std::max(V_air, 1.0f);
+        // --- Force channel (pitch): destanced gear vertical load → faded FPA rate → G(s). ---
+        // Gear contribution to NED-down acceleration (gear up → negative).
+        const float fz_ned    = (R_nb_mat * contact_forces.force_body_n).z();
+        const float fz_stance = _fz_stance_filter.step(fz_ned);      // steady support estimate
+        const float a_arrest  = (fz_ned - fz_stance) / _inertia.mass_kg;  // arrest transient only
 
-        // Force channel (pitch): FPA rate from gear upward force.
-        const float gamma_dot_pitch = -F_gear_wind.z() / (_inertia.mass_kg * V_safe);
+        const Eigen::Vector3f& vel_ned = _state.velocity_NED_mps();
+        const float v_horiz = vel_ned.head<2>().norm();
+        const float V_inertial = vel_ned.norm();
+        const float V_safe = std::max(V_inertial, 1.0f);
+        const float gamma  = std::atan2(-vel_ned.z(), std::max(v_horiz, 1e-3f));
+        const float gamma_dot_arrest = -a_arrest * std::cos(gamma) / V_safe;
 
-        // Moment channels: angular acceleration from gear moments in body frame.
+        // C² dynamic-pressure authority fade Φ(V) (OQ-LG-19, upgraded to the OQ-LG-21
+        // smootherstep so both fades share one C² factor): removes the 1/V singularity by
+        // emulating aero/FBW authority decay on rollout/takeoff.
+        const float phi = phiAuthority(V_inertial, _dtheta_vref_mps);
+        const float u_force = gamma_dot_arrest * phi;
+
+        // G(s) inline two-state update: y = h·x + j·u; x = phi·x + gamma·u.
+        const float dtheta_force = (_force_h * _force_x)(0, 0) + _force_j(0, 0) * u_force;
+        _force_x = _force_phi * _force_x + _force_gamma * u_force;
+
+        // --- Moment channels: H₂ low-pass on M/I, scaled by 1/ωn² (static deflection = M/(I ωn²)). ---
         const Eigen::Vector3f& M_body = contact_forces.moment_body_nm;
-        const float pitch_rate_gear = M_body.y() / _inertia.Iyy_kgm2;
-        const float roll_rate_gear  = M_body.x() / _inertia.Ixx_kgm2;
-        const float yaw_rate_gear   = M_body.z() / _inertia.Izz_kgm2;
+        const float inv_wn2_pitch = 1.0f / (_dtheta_wn_pitch_rad_s * _dtheta_wn_pitch_rad_s);
+        const float inv_wn2_roll  = 1.0f / (_dtheta_wn_roll_rad_s  * _dtheta_wn_roll_rad_s);
+        const float inv_wn2_yaw   = 1.0f / (_dtheta_wn_yaw_rad_s   * _dtheta_wn_yaw_rad_s);
+        const float dtheta_moment_pitch =
+            _dtheta_pitch_filter.step(M_body.y() / _inertia.Iyy_kgm2) * inv_wn2_pitch;
+        const float dtheta_roll =
+            _dtheta_roll_filter.step(M_body.x() / _inertia.Ixx_kgm2) * inv_wn2_roll;
+        const float dtheta_yaw =
+            _dtheta_yaw_filter.step(M_body.z() / _inertia.Izz_kgm2) * inv_wn2_yaw;
 
-        // Accumulate: γ_acc = ∫ (force_channel + moment_channel) dt per axis.
-        _dtheta_pitch_acc += (gamma_dot_pitch + pitch_rate_gear) * _outer_dt_s;
-        _dtheta_roll_acc  += roll_rate_gear  * _outer_dt_s;
-        _dtheta_yaw_acc   += yaw_rate_gear   * _outer_dt_s;
-
-        // H₂: body tracks accumulated angle with inertial lag (DC gain = 1).
-        const float h2_pitch = _dtheta_pitch_filter.step(_dtheta_pitch_acc);
-        const float h2_roll  = _dtheta_roll_filter .step(_dtheta_roll_acc);
-        const float h2_yaw   = _dtheta_yaw_filter  .step(_dtheta_yaw_acc);
-
-        // Δθ = H₂(acc) − acc  (negative when body lags gear-induced bend).
-        dtheta_pitch = h2_pitch - _dtheta_pitch_acc;
-        const float dtheta_roll = h2_roll - _dtheta_roll_acc;
-        const float dtheta_yaw  = h2_yaw  - _dtheta_yaw_acc;
+        dtheta_pitch = dtheta_force + dtheta_moment_pitch;
 
         // Roll: rate of change of deviation → roll rate contribution for commitAttitude.
         delta_rr_filt_rps  = (dtheta_roll - _prev_dtheta_roll) / _outer_dt_s;
@@ -474,7 +527,27 @@ void Aircraft::step(double time_sec,
 
     // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and
     //     after any terrain constraint modification.
-    _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s);
+    //
+    //     OQ-LG-21: the velocity-derived attitude is referenced to a dynamic-pressure
+    //     blend of the instantaneous velocity and a low-pass-filtered velocity. At flight
+    //     speed Φ(V)→1 and the reference is the raw velocity (unchanged behavior); as speed
+    //     decays toward stop Φ(V)→0 and the reference becomes the filtered velocity, which
+    //     follows the runway slope/approach trend but rejects the per-step gear-bounce wobble
+    //     that otherwise whips the zero-inertia attitude (and spikes the gear). The committed
+    //     attitude then yields a consistent (near-zero at quiescence) body rate for the gear.
+    const Eigen::Vector3f& v_final_ned = _state.velocity_NED_mps();
+    if (!_v_filt_init) {
+        _v_filt_ned  = v_final_ned;
+        _v_filt_init = true;
+    } else {
+        const float tau   = std::max(_att_filt_tau_s, 1e-3f);
+        const float alpha = 1.0f - std::exp(-dt_s / tau);
+        _v_filt_ned += alpha * (v_final_ned - _v_filt_ned);
+    }
+    const float phi_att = phiAuthority(v_final_ned.norm(), _dtheta_vref_mps);
+    const Eigen::Vector3f v_att_ref = phi_att * v_final_ned + (1.0f - phi_att) * _v_filt_ned;
+
+    _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s, v_att_ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,15 +572,21 @@ nlohmann::json Aircraft::serializeJson() const {
     j["dtheta_pitch_filter"]  = _dtheta_pitch_filter.serializeJson();
     j["dtheta_roll_filter"]   = _dtheta_roll_filter.serializeJson();
     j["dtheta_yaw_filter"]    = _dtheta_yaw_filter.serializeJson();
-    j["dtheta_pitch_acc"]     = _dtheta_pitch_acc;
-    j["dtheta_roll_acc"]      = _dtheta_roll_acc;
-    j["dtheta_yaw_acc"]       = _dtheta_yaw_acc;
+    j["fz_stance_filter"]     = _fz_stance_filter.serializeJson();
+    j["force_x"]              = nlohmann::json::array({_force_x(0, 0), _force_x(1, 0)});
     j["prev_dtheta_roll"]     = _prev_dtheta_roll;
     j["prev_dtheta_yaw"]      = _prev_dtheta_yaw;
+    j["att_filt_tau_s"]       = _att_filt_tau_s;
+    j["v_filt_ned"]           = nlohmann::json::array({_v_filt_ned.x(), _v_filt_ned.y(), _v_filt_ned.z()});
+    j["v_filt_init"]          = _v_filt_init;
     j["dtheta_wn_pitch_rad_s"] = _dtheta_wn_pitch_rad_s;
     j["dtheta_wn_roll_rad_s"]  = _dtheta_wn_roll_rad_s;
     j["dtheta_wn_yaw_rad_s"]   = _dtheta_wn_yaw_rad_s;
     j["dtheta_zeta_nd"]        = _dtheta_zeta_nd;
+    j["dtheta_vref_mps"]       = _dtheta_vref_mps;
+    j["nz_relax_wn_rad_s"]     = _nz_relax_wn_rad_s;
+    j["nz_relax_zeta_nd"]      = _nz_relax_zeta_nd;
+    j["dtheta_stance_tau_s"]   = _dtheta_stance_tau_s;   // derived (= 1/nz_relax_wn_rad_s)
     j["nz_filter"]             = _nz_filter.serializeJson();
     j["ny_filter"]            = _ny_filter.serializeJson();
     j["roll_rate_filter"]     = _roll_rate_filter.serializeJson();
@@ -553,19 +632,45 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _dtheta_wn_roll_rad_s  = j.value("dtheta_wn_roll_rad_s",  _dtheta_wn_roll_rad_s);
     _dtheta_wn_yaw_rad_s   = j.value("dtheta_wn_yaw_rad_s",   _dtheta_wn_yaw_rad_s);
     _dtheta_zeta_nd        = j.value("dtheta_zeta_nd",        _dtheta_zeta_nd);
-    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    _dtheta_vref_mps       = j.value("dtheta_vref_mps",       _dtheta_vref_mps);
+    _nz_relax_wn_rad_s     = j.value("nz_relax_wn_rad_s",     _nz_relax_wn_rad_s);
+    _nz_relax_zeta_nd      = j.value("nz_relax_zeta_nd",      _nz_relax_zeta_nd);
+    _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
+    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_relax_wn_rad_s, _nz_relax_zeta_nd, 0.f);
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
     _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     if (j.contains("nz_relax_filter"))     _nz_relax_filter.deserializeJson(j.at("nz_relax_filter"));
     if (j.contains("dtheta_pitch_filter")) _dtheta_pitch_filter.deserializeJson(j.at("dtheta_pitch_filter"));
     if (j.contains("dtheta_roll_filter"))  _dtheta_roll_filter.deserializeJson(j.at("dtheta_roll_filter"));
     if (j.contains("dtheta_yaw_filter"))   _dtheta_yaw_filter.deserializeJson(j.at("dtheta_yaw_filter"));
-    _dtheta_pitch_acc  = j.value("dtheta_pitch_acc",  0.f);
-    _dtheta_roll_acc   = j.value("dtheta_roll_acc",   0.f);
-    _dtheta_yaw_acc    = j.value("dtheta_yaw_acc",    0.f);
+    if (j.contains("fz_stance_filter"))    _fz_stance_filter.deserializeJson(j.at("fz_stance_filter"));
+    // Rebuild the force-channel G(s) state space from restored params, then restore its 2-state.
+    {
+        const float wn = _dtheta_wn_pitch_rad_s, z = _dtheta_zeta_nd;
+        liteaero::control::Vec3 num_s, den_s, num_z, den_z;
+        num_s << 0.0f, -1.0f, -2.0f * z * wn;
+        den_s << 1.0f, 2.0f * z * wn, wn * wn;
+        liteaero::control::tustin_2_tf(num_s, den_s, _cmd_filter_dt_s, wn, num_z, den_z);
+        liteaero::control::tf2ss(num_z, den_z, _force_phi, _force_gamma, _force_h, _force_j);
+        _force_x.setZero();
+        if (j.contains("force_x") && j.at("force_x").size() >= 2) {
+            _force_x(0, 0) = j.at("force_x").at(0).get<float>();
+            _force_x(1, 0) = j.at("force_x").at(1).get<float>();
+        }
+    }
     _prev_dtheta_roll  = j.value("prev_dtheta_roll",  0.f);
     _prev_dtheta_yaw   = j.value("prev_dtheta_yaw",   0.f);
+    _att_filt_tau_s    = j.value("att_filt_tau_s", _att_filt_tau_s);
+    if (j.contains("v_filt_ned") && j.at("v_filt_ned").size() >= 3) {
+        _v_filt_ned.x() = j.at("v_filt_ned").at(0).get<float>();
+        _v_filt_ned.y() = j.at("v_filt_ned").at(1).get<float>();
+        _v_filt_ned.z() = j.at("v_filt_ned").at(2).get<float>();
+    } else {
+        _v_filt_ned.setZero();
+    }
+    _v_filt_init       = j.value("v_filt_init", false);
     _nz_filter.deserializeJson(j.at("nz_filter"));
     _ny_filter.deserializeJson(j.at("ny_filter"));
     _roll_rate_filter.deserializeJson(j.at("roll_rate_filter"));
@@ -621,9 +726,23 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_dtheta_roll_filter_x1(_dtheta_roll_filter.x()(1,0));
     proto.set_dtheta_yaw_filter_x0(_dtheta_yaw_filter.x()(0,0));
     proto.set_dtheta_yaw_filter_x1(_dtheta_yaw_filter.x()(1,0));
-    proto.set_dtheta_pitch_acc(_dtheta_pitch_acc);
-    proto.set_dtheta_roll_acc(_dtheta_roll_acc);
-    proto.set_dtheta_yaw_acc(_dtheta_yaw_acc);
+    proto.set_force_x0(_force_x(0, 0));
+    proto.set_force_x1(_force_x(1, 0));
+    proto.set_fz_stance_filter_x0(_fz_stance_filter.x()(0, 0));
+    proto.set_fz_stance_filter_x1(_fz_stance_filter.x()(1, 0));
+    proto.set_dtheta_wn_pitch_rad_s(_dtheta_wn_pitch_rad_s);
+    proto.set_dtheta_wn_roll_rad_s(_dtheta_wn_roll_rad_s);
+    proto.set_dtheta_wn_yaw_rad_s(_dtheta_wn_yaw_rad_s);
+    proto.set_dtheta_zeta_nd(_dtheta_zeta_nd);
+    proto.set_dtheta_vref_mps(_dtheta_vref_mps);
+    proto.set_dtheta_stance_tau_s(_dtheta_stance_tau_s);
+    proto.set_nz_relax_wn_rad_s(_nz_relax_wn_rad_s);
+    proto.set_nz_relax_zeta_nd(_nz_relax_zeta_nd);
+    proto.set_att_filt_tau_s(_att_filt_tau_s);
+    proto.set_v_filt_ned_n(_v_filt_ned.x());
+    proto.set_v_filt_ned_e(_v_filt_ned.y());
+    proto.set_v_filt_ned_d(_v_filt_ned.z());
+    proto.set_v_filt_init(_v_filt_init);
 
     *proto.mutable_kinematic_state()  = parseSubMessage<las_proto::KinematicState>(_state.serializeProto());
     *proto.mutable_initial_state()    = parseSubMessage<las_proto::KinematicState>(_initial_state.serializeProto());
@@ -672,13 +791,19 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _ny_zeta_nd          = proto.ny_zeta_nd();
     _roll_rate_wn_rad_s  = proto.roll_rate_wn_rad_s();
     _roll_rate_zeta_nd   = proto.roll_rate_zeta_nd();
-    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
+    _dtheta_wn_pitch_rad_s = proto.dtheta_wn_pitch_rad_s();
+    _dtheta_wn_roll_rad_s  = proto.dtheta_wn_roll_rad_s();
+    _dtheta_wn_yaw_rad_s   = proto.dtheta_wn_yaw_rad_s();
+    _dtheta_zeta_nd        = proto.dtheta_zeta_nd();
+    _dtheta_vref_mps       = proto.dtheta_vref_mps();
+    _nz_relax_wn_rad_s     = proto.nz_relax_wn_rad_s();
+    _nz_relax_zeta_nd      = proto.nz_relax_zeta_nd();
+    _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
+    _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_relax_wn_rad_s, _nz_relax_zeta_nd, 0.f);
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
     _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
-    _dtheta_pitch_acc = proto.dtheta_pitch_acc();
-    _dtheta_roll_acc  = proto.dtheta_roll_acc();
-    _dtheta_yaw_acc   = proto.dtheta_yaw_acc();
+    _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     {
         Mat21 x;
         x(0,0) = proto.nz_relax_filter_x0();
@@ -693,6 +818,20 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
         x(0,0) = proto.dtheta_yaw_filter_x0();
         x(1,0) = proto.dtheta_yaw_filter_x1();
         _dtheta_yaw_filter.resetState(x);
+        x(0,0) = proto.fz_stance_filter_x0();
+        x(1,0) = proto.fz_stance_filter_x1();
+        _fz_stance_filter.resetState(x);
+    }
+    // Rebuild force-channel G(s) from restored params, then restore its 2-state.
+    {
+        const float wn = _dtheta_wn_pitch_rad_s, z = _dtheta_zeta_nd;
+        liteaero::control::Vec3 num_s, den_s, num_z, den_z;
+        num_s << 0.0f, -1.0f, -2.0f * z * wn;
+        den_s << 1.0f, 2.0f * z * wn, wn * wn;
+        liteaero::control::tustin_2_tf(num_s, den_s, _cmd_filter_dt_s, wn, num_z, den_z);
+        liteaero::control::tf2ss(num_z, den_z, _force_phi, _force_gamma, _force_h, _force_j);
+        _force_x(0, 0) = proto.force_x0();
+        _force_x(1, 0) = proto.force_x1();
     }
     _nz_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
@@ -709,6 +848,12 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     rr_x(0, 0) = proto.roll_rate_filter_x0();
     rr_x(1, 0) = proto.roll_rate_filter_x1();
     _roll_rate_filter.resetState(rr_x);
+
+    _att_filt_tau_s = (proto.att_filt_tau_s() > 0.0f) ? proto.att_filt_tau_s() : _att_filt_tau_s;
+    _v_filt_ned.x() = proto.v_filt_ned_n();
+    _v_filt_ned.y() = proto.v_filt_ned_e();
+    _v_filt_ned.z() = proto.v_filt_ned_d();
+    _v_filt_init    = proto.v_filt_init();
 
     if (_propulsion) {
         switch (proto.propulsion_case()) {

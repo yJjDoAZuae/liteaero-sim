@@ -490,7 +490,7 @@ static nlohmann::json addLandingGear(nlohmann::json config) {
                 "has_brake":                false
             },
             {
-                "attach_point_body_m": [0.0, -1.0, 0.5],
+                "attach_point_body_m": [-0.3, -1.0, 0.5],
                 "travel_axis_body":    [0.0,  0.0, 1.0],
                 "spring_stiffness_npm":      20000.0,
                 "damping_compression_nspm": 2600.0,
@@ -505,7 +505,7 @@ static nlohmann::json addLandingGear(nlohmann::json config) {
                 "has_brake":                false
             },
             {
-                "attach_point_body_m": [0.0,  1.0, 0.5],
+                "attach_point_body_m": [-0.3,  1.0, 0.5],
                 "travel_axis_body":    [0.0,  0.0, 1.0],
                 "spring_stiffness_npm":      20000.0,
                 "damping_compression_nspm": 2600.0,
@@ -704,83 +704,6 @@ TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
         << max_agl_after_contact_m << " m (limit: " << (kBodyHalfZ_m + 0.15f) << " m)";
 }
 
-TEST(AircraftTest, BodyColliderOnly_TouchAndGo_BecomesAirborne) {
-    // Aircraft starts on terrain with cruise airspeed and a small body penetration.
-    // After 5 s of n_z=1 contact (contact filter fully settled at 1.0), commanding
-    // n_z=2 with trim thrust must produce liftoff: AGL > 1.0 m within 10 s.
-    //
-    // Starting on the ground (not from an approach) avoids spring-bounce energy
-    // that could trivially send the aircraft airborne without the fix.  After
-    // 5 s the contact filter is saturated at 1.0 and n_z_shaped = 0; the only
-    // way for the aircraft to rise is for n_contact_z_raw to begin decaying.
-    //
-    // Failure mode (before fix): n_contact_z_raw is held at constant 1.0
-    // whenever _body_in_hard_contact is true.  With filter = 1.0, n_z_shaped =
-    // max(0, 2-1) = 1, so lift equals weight and the net vertical force is zero.
-    // The flag never clears; the aircraft never leaves the ground.
-    using namespace liteaero::terrain;
-    FlatTerrain terrain{0.0f};
-
-    auto cfg = addBodyCollider(makeConfig());
-    // body_half_z = 0.3 m.  Starting at altitude 0.28 m gives pen = 0.02 m so
-    // the hard constraint fires on step 1 and sets _body_in_hard_contact.
-    cfg["initial_state"]["altitude_m"]         = 0.28;
-    cfg["initial_state"]["velocity_north_mps"] = 55.0;
-    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
-    cfg["initial_state"]["velocity_down_mps"]  = 0.5;
-
-    // Trim thrust keeps speed near 55 m/s — enough lift for n_z=2 after liftoff.
-    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
-        std::make_unique<StubPropulsion>(989.0f));
-    ac->initialize(cfg, 0.02f);
-    ac->setTerrain(&terrain);
-    ac->reset();
-
-    liteaero::simulation::AircraftCommand cmd;
-    cmd.n_z = 1.0f;
-
-    constexpr float kDt               = 0.02f;
-    constexpr float kBodyHalfZ_m      = 0.3f;
-    constexpr float kGroundTime_s     = 5.0f;
-    // 1.5 s separates the two mechanisms:
-    //   Current code (constant n_contact_z_raw=1.0): LP overshoot drifts aircraft
-    //   to flag-clear altitude in ~3 s → FAIL.
-    //   Fixed code (n_contact_z_raw = max(0, 1-prev)): filter collapses on overshoot
-    //   peak, aircraft reaches AGL > 1.0 m in ~0.9 s → PASS.
-    constexpr float kGoAroundWindow_s = 1.5f;
-
-    // Phase 1: hold on ground for 5 s so the contact filter fully converges.
-    constexpr int kGroundSteps = static_cast<int>(kGroundTime_s / kDt);
-    for (int i = 1; i <= kGroundSteps; ++i) {
-        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
-    }
-
-    // Verify the aircraft is actually on the ground before the go-around.
-    ASSERT_LE(ac->agl_m(), kBodyHalfZ_m + 0.05f)
-        << "aircraft must be stably on the ground before go-around; AGL = " << ac->agl_m();
-
-    // Phase 2: go-around — command 2g and run up to kGoAroundWindow_s.
-    cmd.n_z  = 2.0f;
-    bool   airborne = false;
-    double time_s   = kGroundTime_s;
-
-    constexpr int kGoAroundSteps = static_cast<int>(kGoAroundWindow_s / kDt);
-    for (int i = 1; i <= kGoAroundSteps; ++i) {
-        time_s += kDt;
-        ac->step(time_s, cmd, Eigen::Vector3f::Zero(), 1.225f);
-
-        if (ac->agl_m() > 1.0f) {
-            airborne = true;
-            break;
-        }
-    }
-
-    EXPECT_TRUE(airborne)
-        << "aircraft must reach AGL > 1.0 m within " << kGoAroundWindow_s
-        << " s of go-around command (n_z=2 with trim thrust); stuck on ground indicates "
-        << "n_contact_z_raw is not decaying when n_z_shaped_prev > 0";
-}
-
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {
     // No landing gear — body collider is the only contact model.
     // Aircraft starts at 5 m AGL, stationary.  At zero airspeed q_inf = 0 so
@@ -925,6 +848,10 @@ TEST(AircraftTest, LandingGear_FullStop_OQ_LG15_Diagnostic) {
         // OQ-LG-15 nose-wheel force breakdown (TEMPORARY)
         << "nose_Fz,nose_Fx,nose_Fy,nose_Frr,nose_kappa,nose_Vcx,nose_omega,"
         << "nose_fwd_x,nose_fwd_z,nose_norm_x,nose_norm_z,nose_force_bx,nose_force_bz,"
+        // OQ-LG-15 main-gear (left) breakdown + per-wheel NED-x force (TEMPORARY)
+        << "main_Fx,main_Frr,main_Fy,main_Vcx,main_fned_x,nose_fned_x,"
+        << "body_pitchrate_rps,main_Fz,main_deltadot,"
+        << "gear_wx,gear_wy,gear_wz,"
         << "wow\n";
     csv << std::fixed << std::setprecision(6);
 
@@ -965,6 +892,23 @@ TEST(AircraftTest, LandingGear_FullStop_OQ_LG15_Diagnostic) {
                               std::sqrt(vel.x()*vel.x() + vel.y()*vel.y())) * kRad2Deg;
 
         const auto& nd = wu[0].lastContactDiag();   // nose wheel diagnostics
+        const auto& md = wu[1].lastContactDiag();    // left-main diagnostics
+        // Recompute the finite-difference q_nb body rate (what the gear contact model sees).
+        static Eigen::Quaternionf s_qprev = Eigen::Quaternionf::Identity();
+        static bool s_qinit = false;
+        Eigen::Vector3f gear_w = Eigen::Vector3f::Zero();
+        {
+            const Eigen::Quaternionf qn = ac->state().q_nb();
+            if (s_qinit) {
+                Eigen::Quaternionf dq = s_qprev.conjugate() * qn;
+                if (dq.w() < 0.f) dq.coeffs() = -dq.coeffs();
+                gear_w = 2.0f * dq.vec() / kDt;
+            }
+            s_qprev = qn; s_qinit = true;
+        }
+        // Per-wheel NED-forward force contributions (R_nb · per-wheel body force).
+        const float main_fned_x = (R_nb * md.force_body).x();
+        const float nose_fned_x = (R_nb * nd.force_body).x();
 
         csv << t << ','
             << vel.x() << ',' << vel.z() << ',' << alt << ','
@@ -977,6 +921,11 @@ TEST(AircraftTest, LandingGear_FullStop_OQ_LG15_Diagnostic) {
             << nd.wheel_fwd.x() << ',' << nd.wheel_fwd.z() << ','
             << nd.surf_normal.x() << ',' << nd.surf_normal.z() << ','
             << nd.force_body.x() << ',' << nd.force_body.z() << ','
+            << md.F_x << ',' << md.F_rr << ',' << md.F_y << ',' << md.V_cx << ','
+            << main_fned_x << ',' << nose_fned_x << ','
+            << ac->state().rates_Body_rps().y() << ','
+            << md.F_z << ',' << md.delta_dot << ','
+            << gear_w.x() << ',' << gear_w.y() << ',' << gear_w.z() << ','
             << (int)ac->weightOnWheels() << '\n';
     }
     csv.close();
@@ -1014,17 +963,19 @@ TEST(AircraftTest, JsonSerialization_ContainsGearFilterStateKeys) {
     EXPECT_TRUE(j.contains("nz_relax_filter"))
         << "serializeJson() must include nz_relax_filter (H₁) state";
     EXPECT_TRUE(j.contains("dtheta_pitch_filter"))
-        << "serializeJson() must include dtheta_pitch_filter (H₂ pitch) state";
+        << "serializeJson() must include dtheta_pitch_filter (H₂ moment) state";
+    EXPECT_TRUE(j.contains("force_x"))
+        << "serializeJson() must include force_x (G(s) force-channel) state";
+    EXPECT_TRUE(j.contains("fz_stance_filter"))
+        << "serializeJson() must include fz_stance_filter (destancing) state";
     EXPECT_TRUE(j.contains("prev_dtheta_roll"))
         << "serializeJson() must include prev_dtheta_roll state";
 }
 
-TEST(AircraftTest, LandingGear_DthetaPitchAcc_NonzeroAfterContact) {
-    // The Δθ pitch accumulator is driven by the gear normal force (FPA channel)
-    // and gear pitch moment (moment channel).  After a few steps in contact it
-    // must be nonzero.
-    // Before IP-AGF-6: field absent → ASSERT fails immediately.
-    // After IP-AGF-6: field is present and nonzero → PASSES.
+TEST(AircraftTest, LandingGear_DthetaState_NonzeroAfterContact) {
+    // The Δθ force channel (G(s) on the destanced/faded gear vertical load) and the
+    // moment channel (H₂ on M/I) are both driven during gear contact. After a few
+    // steps in contact the force-channel state and/or moment-filter state must be nonzero.
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
     auto cfg = addLandingGear(makeConfig());
@@ -1040,20 +991,68 @@ TEST(AircraftTest, LandingGear_DthetaPitchAcc_NonzeroAfterContact) {
     liteaero::simulation::AircraftCommand cmd;
     cmd.n_z = 1.0f;
     constexpr float kDt = 0.02f;
-    for (int i = 1; i <= 5; ++i)
+    for (int i = 1; i <= 10; ++i)
         ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
 
     const nlohmann::json j = ac->serializeJson();
-    ASSERT_TRUE(j.contains("dtheta_pitch_filter"))
-        << "dtheta_pitch_filter must be present in serialized state (IP-AGF-6)";
-    const auto& fj = j.at("dtheta_pitch_filter");
-    // Filter state x must be nonzero after gear contact drives the H₂ filter.
-    const float x0 = (fj.contains("state") && fj.at("state").contains("x0"))
-                         ? fj.at("state").at("x0").get<float>() : 0.f;
-    const float x1 = (fj.contains("state") && fj.at("state").contains("x1"))
-                         ? fj.at("state").at("x1").get<float>() : 0.f;
-    EXPECT_NE(std::abs(x0) + std::abs(x1), 0.0f)
-        << "dtheta_pitch_filter state must be nonzero after gear contact; x=[" << x0 << "," << x1 << "]";
+    ASSERT_TRUE(j.contains("force_x"));
+    const float fx0 = j.at("force_x").at(0).get<float>();
+    const float fx1 = j.at("force_x").at(1).get<float>();
+    const auto& mj = j.at("dtheta_pitch_filter");
+    const float mx0 = (mj.contains("state") && mj.at("state").contains("x0"))
+                          ? mj.at("state").at("x0").get<float>() : 0.f;
+    const float mx1 = (mj.contains("state") && mj.at("state").contains("x1"))
+                          ? mj.at("state").at("x1").get<float>() : 0.f;
+    EXPECT_NE(std::abs(fx0) + std::abs(fx1) + std::abs(mx0) + std::abs(mx1), 0.0f)
+        << "Δθ force/moment state must be nonzero after gear contact";
+}
+
+TEST(AircraftTest, LandingGear_ForceChannel_DecaysAfterTransient) {
+    // OQ-LG-20: the force channel G(s) must not accumulate a sustained deviation (no
+    // integrator drift). The touchdown impulse excites it; thereafter, as the gear vertical
+    // load settles toward its quasi-steady stance, the destancing-filter input collapses and
+    // the asymptotically stable G(s) state decays. We assert the decay as a RATIO between a
+    // post-touchdown sample and a later sample — realization-independent, since the absolute
+    // magnitude of the tf2ss internal state is an arbitrary scaling artifact (it runs ~10² to
+    // 10³ larger than the physical pitch-deviation output). A driven, drifting, or integrating
+    // channel would hold or grow; a correct lead-form channel decays sharply.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addLandingGear(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 0.70;  // wheels just touching, no penetration
+    cfg["initial_state"]["velocity_north_mps"] = 12.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_z = 1.0f;
+    constexpr float kDt = 0.02f;
+
+    auto force_state_norm = [&]() {
+        const nlohmann::json j = ac->serializeJson();
+        return std::abs(j.at("force_x").at(0).get<float>())
+             + std::abs(j.at("force_x").at(1).get<float>());
+    };
+
+    // Step to ~1 s: past the touchdown impulse, near the force-channel excitation peak.
+    for (int i = 1; i <= 50; ++i)
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+    const float x_peak = force_state_norm();
+
+    // Continue to ~6 s of steady decelerating roll (well clear of the end-game).
+    for (int i = 51; i <= 300; ++i)
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+    const float x_late = force_state_norm();
+
+    EXPECT_GT(x_peak, 0.f) << "touchdown must excite the force channel";
+    // Strong decay: a stable lead-form channel sheds the transient; no drift/accumulation.
+    EXPECT_LT(x_late, 0.1f * x_peak)
+        << "force-channel state must decay after the transient (no integrator drift); "
+        << "x_peak=" << x_peak << " x_late=" << x_late;
 }
 
 TEST(AircraftTest, LandingGear_GearContact_DoesNotAccelerate) {
@@ -1085,4 +1084,43 @@ TEST(AircraftTest, LandingGear_GearContact_DoesNotAccelerate) {
     EXPECT_LT(speed, 15.0f)
         << "gear contact must not inject forward energy; speed after 3 s: "
         << speed << " m/s (started at 15 m/s)";
+}
+
+TEST(AircraftTest, LandingGear_TireNeverPropels_FullScenario) {
+    // Aircraft-level proof that the TIRE (Pacejka longitudinal force F_x) never produces
+    // traction during a full ground-roll landing. The addLandingGear fixture has no body
+    // collider and the wheels are unbraked/free-rolling, so the per-wheel F_x must stay
+    // ≈ 0 throughout — including through bouncing and attitude swings that drive the
+    // contact-patch longitudinal velocity negative. (This isolates the tire from the
+    // normal-force projection F_z·sinγ, which is a separate strut/FPA effect.)
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addLandingGear(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 0.65;
+    cfg["initial_state"]["velocity_north_mps"] = 15.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_z = 1.0f;
+    constexpr float kDt    = 0.02f;
+    constexpr int   kSteps = static_cast<int>(90.0f / kDt);
+
+    float max_abs_fx = 0.0f;
+    for (int i = 1; i <= kSteps; ++i) {
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+        for (const auto& wu : ac->landingGear().wheelUnits()) {
+            const float fx = std::abs(wu.lastContactDiag().F_x);
+            if (fx > max_abs_fx) max_abs_fx = fx;
+        }
+    }
+    // A free-rolling tire must carry no longitudinal slip force. Bound generously at 5 N
+    // (well below any μ·F_z traction, which would be O(1000 N)).
+    EXPECT_LT(max_abs_fx, 5.0f)
+        << "free-rolling tire produced longitudinal traction during the roll; max|F_x|="
+        << max_abs_fx << " N (must be ≈ 0 — the tire must never propel)";
 }

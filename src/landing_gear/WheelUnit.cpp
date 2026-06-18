@@ -148,10 +148,18 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
 
     // Quasi-static omega for free-rolling: I_w = 0.15*r_w³ ≈ 0.0012 kg·m² gives a
     // Pacejka time constant of ~9 µs, three orders of magnitude shorter than dt = 20 ms.
-    // When no brake torque is applied the wheel must be at pure rolling (omega = V_cx/r_w);
-    // clamping to that value makes kappa=0, F_x=0, and only F_rr decelerates the aircraft.
+    // When no brake torque is applied the wheel must be at pure rolling (omega = V_cx/r_w),
+    // which makes kappa=0, F_x=0, and only F_rr decelerates the aircraft.
+    //
+    // The wheel must be allowed to spin in the SAME direction as the contact patch,
+    // INCLUDING backward (omega < 0 when V_cx < 0).  A contact patch can move aft
+    // transiently under any pitch rotation of a lever-arm wheel; clamping omega to >= 0
+    // there would model the free wheel as LOCKED against a rearward-moving patch, giving
+    // kappa = -V_cx/V_ref ≈ +1 and a large fictitious FORWARD traction (the tire would
+    // "propel" the aircraft — non-physical). Matching omega = V_cx/r_w keeps kappa = 0 for
+    // either sign, so a free wheel never produces longitudinal slip force.
     if (!_params.has_brake || brake_demand_nd < 1e-4f)
-        _wheel_speed_rps = std::max(0.0f, V_cx / r_w);
+        _wheel_speed_rps = V_cx / r_w;
 
     const float wheel_speed_mps = r_w * std::abs(_wheel_speed_rps);
     const float V_ref  = std::max(std::abs(V_cx), wheel_speed_mps) + kVeps;

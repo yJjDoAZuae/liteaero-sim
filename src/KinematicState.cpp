@@ -254,6 +254,37 @@ void KinematicState::commitAttitude(float rollRate_Wind_rps, float dt_s)
           * (snapshot_.q_nw.toRotationMatrix().transpose() * omega_wn_n);
 }
 
+// OQ-LG-21: propagate the attitude toward an externally-supplied reference velocity
+// (the dynamic-pressure blend of instantaneous and low-pass-filtered velocity) and derive
+// the body rate from the resulting committed attitude (consistent, no (v×a)/|V|² spike).
+void KinematicState::commitAttitude(float rollRate_Wind_rps, float dt_s,
+                                    const Eigen::Vector3f& attitude_ref_velocity_ned_mps)
+{
+    snapshot_.roll_rate_wind_rad_s = rollRate_Wind_rps;
+
+    if (!att_ref_init_) {
+        att_ref_prev_ned_mps_ = attitude_ref_velocity_ned_mps;
+        q_nb_prev_            = liteaero::nav::KinematicStateUtil::q_nb(snapshot_);
+        att_ref_init_         = true;
+    }
+
+    // Propagate q_nw toward the reference velocity (whips are filtered out of the reference).
+    stepQnw(att_ref_prev_ned_mps_, attitude_ref_velocity_ned_mps,
+            rollRate_Wind_rps, dt_s, snapshot_.q_nw);
+    att_ref_prev_ned_mps_ = attitude_ref_velocity_ned_mps;
+
+    // Body rate = genuine rate of change of the committed attitude (consistent with it).
+    const Eigen::Quaternionf q_nb_now = liteaero::nav::KinematicStateUtil::q_nb(snapshot_);
+    if (dt_s > 0.f) {
+        Eigen::Quaternionf dq = q_nb_prev_.conjugate() * q_nb_now;
+        if (dq.w() < 0.f) dq.coeffs() = -dq.coeffs();   // shortest rotation
+        snapshot_.rates_body_rps = (2.0f / dt_s) * dq.vec();
+    } else {
+        snapshot_.rates_body_rps = Eigen::Vector3f::Zero();
+    }
+    q_nb_prev_ = q_nb_now;
+}
+
 // ── Static simulation helpers ─────────────────────────────────────────────────
 
 void KinematicState::stepQnw(const Eigen::Vector3f& velocity_prev_NED_mps,

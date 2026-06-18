@@ -233,9 +233,23 @@ message AircraftState {
     float          dtheta_roll_filter_x1   = 31;
     float          dtheta_yaw_filter_x0    = 32;
     float          dtheta_yaw_filter_x1    = 33;
-    float          dtheta_pitch_acc        = 34;
-    float          dtheta_roll_acc         = 35;
-    float          dtheta_yaw_acc          = 36;
+    float          force_x0                = 34;
+    float          force_x1                = 35;
+    float          fz_stance_filter_x0     = 36;
+    float          fz_stance_filter_x1     = 37;
+    float          dtheta_wn_pitch_rad_s   = 38;
+    float          dtheta_wn_roll_rad_s    = 39;
+    float          dtheta_wn_yaw_rad_s     = 40;
+    float          dtheta_zeta_nd          = 41;
+    float          dtheta_vref_mps         = 42;
+    float          dtheta_stance_tau_s     = 43;
+    float          nz_relax_wn_rad_s       = 44;
+    float          nz_relax_zeta_nd        = 45;
+    float          att_filt_tau_s          = 46;  // OQ-LG-21 attitude-reference LP τ
+    float          v_filt_ned_n            = 47;  // OQ-LG-21 filtered attitude-reference velocity (NED)
+    float          v_filt_ned_e            = 48;
+    float          v_filt_ned_d            = 49;
+    bool           v_filt_init             = 50;
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

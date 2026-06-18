@@ -121,21 +121,47 @@ private:
     // H₁: lagged n_z-command relaxation from gear normal force load (LP, DC=1).
     // Parameterized from FBW Nz ωn/ζ (OQ-LG-17).
     liteaero::control::FilterSS2Clip _nz_relax_filter;
-    // H₂: body rotation-deviation filters (LP, DC=1, inertia-tensor ωn).
-    // Driven by accumulated FPA-bend (force channel) + gear moment angular rates.
+    // H₂: gear-MOMENT rotation-deviation filters (2nd-order LP on M/I, finite DC = static
+    // stance). Pitch/roll/yaw. Force channel is realized separately (G(s) below). OQ-LG-19/20.
     liteaero::control::FilterSS2Clip _dtheta_pitch_filter;
     liteaero::control::FilterSS2Clip _dtheta_roll_filter;
     liteaero::control::FilterSS2Clip _dtheta_yaw_filter;
-    float  _dtheta_pitch_acc      = 0.f;  // accumulated pitch angle input to H₂: ∫(γ̇_gear + M_y/I_yy) dt (rad)
-    float  _dtheta_roll_acc       = 0.f;  // accumulated roll angle input to H₂: ∫(M_x/I_xx) dt (rad)
-    float  _dtheta_yaw_acc        = 0.f;  // accumulated yaw angle input to H₂: ∫(M_z/I_zz) dt (rad)
+    // Force channel G(s) = -(s+2ζωn)/D, realized inline via tustin_2_tf/tf2ss (OQ-LG-20).
+    // phi/gamma/h/j are set once in initialize(); _force_x is the 2-state (serialized).
+    liteaero::control::Mat22 _force_phi   = liteaero::control::Mat22::Zero();
+    liteaero::control::Mat21 _force_gamma = liteaero::control::Mat21::Zero();
+    liteaero::control::Mat12 _force_h     = liteaero::control::Mat12::Zero();
+    liteaero::control::Mat11 _force_j     = liteaero::control::Mat11::Zero();
+    liteaero::control::Mat21 _force_x     = liteaero::control::Mat21::Zero();
+    // Destancing low-pass for the gear vertical load (removes the steady gravity-balancing
+    // support so the force channel is zero in steady roll). General 1st-order LP. OQ-LG-19.
+    liteaero::control::FilterSS2Clip _fz_stance_filter;
     float  _prev_dtheta_roll      = 0.f;  // Δθ_roll from previous step (for rate computation)
     float  _prev_dtheta_yaw       = 0.f;  // Δθ_yaw from previous step (for rate computation)
-    float  _dtheta_wn_pitch_rad_s = 2.4f; // H₂ ωn pitch (computed from inertia at init)
-    float  _dtheta_wn_roll_rad_s  = 2.8f; // H₂ ωn roll
-    float  _dtheta_wn_yaw_rad_s   = 2.0f; // H₂ ωn yaw
-    float  _dtheta_zeta_nd        = 0.7f; // H₂ damping ratio (config field)
+    // H₂ physical rotational-mode frequencies/damping (config; OQ-LG-17 numeric values set at
+    // implementation — supplied as physical constants, not derived from inertia alone, which is
+    // dimensionally insufficient for a frequency).
+    float  _dtheta_wn_pitch_rad_s = 3.0f;
+    float  _dtheta_wn_roll_rad_s  = 4.0f;
+    float  _dtheta_wn_yaw_rad_s   = 2.0f;
+    float  _dtheta_zeta_nd        = 0.7f;
+    float  _dtheta_vref_mps       = 24.0f; // V_ref for the V² authority fade Φ(V) (OQ-LG-19)
+    // H₁ FBW load-handoff parameters (OQ-LG-17): distinct from the FBW *command* filter
+    // (nz_wn) and slower than the body rotational mode H₂. The destancing low-pass shares
+    // this timescale (both isolate the steady gear load), so it is NOT an independent knob:
+    // _dtheta_stance_tau_s is derived as 1 / _nz_relax_wn_rad_s.
+    float  _nz_relax_wn_rad_s     = 1.0f;  // FBW load-handoff natural frequency (rad/s)
+    float  _nz_relax_zeta_nd      = 0.8f;  // FBW load-handoff damping ratio
+    float  _dtheta_stance_tau_s   = 1.0f;  // destancing LP τ — DERIVED = 1/_nz_relax_wn_rad_s
     bool   _body_in_hard_contact  = false; // set by step-11 hard constraint; read in step-5b
+    // OQ-LG-21: low-pass-filtered NED velocity used as the low-speed attitude reference, and
+    // the dynamic-pressure blend toward it. Rejects gear-bounce wobble while retaining the
+    // slope/approach trend, so the velocity-derived attitude is slope-correct and does not
+    // whip at low horizontal speed. The committed-attitude rate (consistent) then feeds the
+    // gear directly — superseding the earlier gear-only body-rate override.
+    Eigen::Vector3f _v_filt_ned   = Eigen::Vector3f::Zero();
+    bool            _v_filt_init  = false;
+    float           _att_filt_tau_s = 0.7f;  // attitude-reference velocity low-pass τ (s)
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

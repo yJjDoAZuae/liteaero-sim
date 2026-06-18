@@ -80,6 +80,15 @@ public:
     // dt_s must equal the same timestep passed to stepPV.
     void commitAttitude(float rollRate_Wind_rps, float dt_s);
 
+    // Overload for the load-factor Aircraft's low-speed attitude handling (OQ-LG-21).
+    // Propagates q_nw toward an externally-supplied attitude-reference velocity
+    // (a dynamic-pressure blend of the instantaneous and a low-pass-filtered velocity)
+    // instead of the raw velocity, and derives the body angular rate from the resulting
+    // committed attitude (consistent — near zero for a quiescent vehicle). The stored
+    // velocity is unchanged; only the attitude/rate use the reference.
+    void commitAttitude(float rollRate_Wind_rps, float dt_s,
+                        const Eigen::Vector3f& attitude_ref_velocity_ned_mps);
+
     // ── Snapshot access ───────────────────────────────────────────────────────
 
     const liteaero::nav::KinematicStateSnapshot& snapshot() const { return snapshot_; }
@@ -156,6 +165,11 @@ protected:
 
     liteaero::nav::KinematicStateSnapshot snapshot_;
     Eigen::Vector3f velocity_prev_ned_mps_{}; // set by stepPV, consumed by commitAttitude
+    // OQ-LG-21 attitude-reference-velocity overload state (transient; reinitializes on the
+    // first call after construction/deserialize — one-step rate transient only).
+    Eigen::Vector3f    att_ref_prev_ned_mps_{};                 // previous attitude-reference velocity
+    Eigen::Quaternionf q_nb_prev_{Eigen::Quaternionf::Identity()}; // previous committed q_nb (for rate)
+    bool               att_ref_init_ = false;
 
     static void stepQnw(const Eigen::Vector3f& velocity_prev_NED_mps,
                         const Eigen::Vector3f& velocity_NED_mps,
