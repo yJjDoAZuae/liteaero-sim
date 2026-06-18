@@ -41,6 +41,7 @@ from live_sim_session import SimSession  # noqa: E402
 _GA_JSON = json.dumps(
     {
         "schema_version": 1,
+        "propulsion": {"type": "none"},
         "aircraft": {
             "S_ref_m2": 16.2,
             "cl_y_beta": -0.60,
@@ -61,6 +62,9 @@ _GA_JSON = json.dumps(
             "tas_max_mps": 82.3,
             "mach_max_nd": 0.25,
         },
+        "load_factor_allocator": {
+            "alpha_dot_max_rad_s": 0.0,
+        },
         "inertia": {
             "mass_kg": 1045.0,
             "Ixx_kgm2": 1285.0,
@@ -75,6 +79,8 @@ _GA_JSON = json.dumps(
             "delta_alpha_stall_neg": 0.262,
             "cl_sep": 1.05,
             "cl_sep_neg": -0.80,
+            "alpha_max_rad": 0.42,
+            "alpha_min_rad": -0.26,
         },
         "initial_state": {
             "latitude_rad": 0.0,

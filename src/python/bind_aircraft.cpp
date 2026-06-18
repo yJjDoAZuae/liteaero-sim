@@ -76,7 +76,12 @@ static nlohmann::json load_json(const std::string& json_or_path)
 static std::unique_ptr<Propulsion> make_propulsion(const nlohmann::json& config)
 {
     if (!config.contains("propulsion"))
-        return std::make_unique<ZeroThrustPropulsion>();
+        throw std::invalid_argument(
+            "Aircraft: config is missing the required \"propulsion\" section. Add a "
+            "\"propulsion\" object with a \"type\" key (\"jet\", \"edf\", \"prop\", or "
+            "\"none\"); use \"none\" to model an unpowered airframe explicitly. An omitted "
+            "section is rejected so a config that forgets its engine cannot silently become "
+            "a zero-thrust aircraft that can never accelerate or take off.");
 
     const auto&       prop_cfg = config.at("propulsion");
     const std::string type     = prop_cfg.at("type").get<std::string>();
@@ -263,9 +268,9 @@ void bind_aircraft(py::module_& m)
              py::arg("config"),
              py::arg("dt_s") = 0.02f,
              "Construct from a JSON config string or file path.\n\n"
-             "Include a \"propulsion\" section with a \"type\" key "
-             "(\"jet\", \"edf\", \"prop\", or \"none\") to select a propulsion model; "
-             "omit the section to use a zero-thrust stub.")
+             "A \"propulsion\" section with a \"type\" key (\"jet\", \"edf\", \"prop\", or "
+             "\"none\") is required; \"none\" selects a zero-thrust stub for an unpowered "
+             "airframe. Omitting the section is an error.")
         .def("reset",
              [](PyAircraft& self) {
                  self.time_s = 0.0;

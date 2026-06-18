@@ -73,7 +73,10 @@ protected:
 static std::unique_ptr<Propulsion> make_propulsion(const nlohmann::json& config)
 {
     if (!config.contains("propulsion"))
-        return std::make_unique<ZeroThrustPropulsion>();
+        throw std::invalid_argument(
+            "live_sim: config is missing the required \"propulsion\" section. Add a "
+            "\"propulsion\" object with a \"type\" key (\"jet\", \"edf\", \"prop\", or "
+            "\"none\"); use \"none\" to model an unpowered airframe explicitly.");
 
     const auto&       prop_cfg = config.at("propulsion");
     const std::string type     = prop_cfg.at("type").get<std::string>();

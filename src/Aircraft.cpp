@@ -523,6 +523,15 @@ void Aircraft::step(double time_sec,
         }
         // pen in (-0.10, 0]: small pitch-induced clearance — keep flag set so
         // lift suppression and WoW reporting remain active across the gap.
+        // DBG-WOW TEMP: trace the airborne-but-WoW anomaly.
+        if (_has_landing_gear) {
+            const float agl_dbg = agl_m();
+            if (_contact_forces.weight_on_wheels && agl_dbg > 0.8f) {
+                printf("    [WOW t=%.2f] agl=%.2f pen=%.3f hardContact=%d wow=%d Fz_body=%.1f\n",
+                       (float)time_sec, agl_dbg, pen, (int)_body_in_hard_contact,
+                       (int)_contact_forces.weight_on_wheels, _contact_forces.force_body_n.z());
+            }
+        }
     }
 
     // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and

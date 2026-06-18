@@ -22,6 +22,7 @@ liteaero_sim_py = pytest.importorskip(
 _GA_JSON = json.dumps(
     {
         "schema_version": 1,
+        "propulsion": {"type": "none"},
         "aircraft": {
             "S_ref_m2": 16.2,
             "cl_y_beta": -0.60,
@@ -42,6 +43,9 @@ _GA_JSON = json.dumps(
             "tas_max_mps": 82.3,
             "mach_max_nd": 0.25,
         },
+        "load_factor_allocator": {
+            "alpha_dot_max_rad_s": 0.0,
+        },
         "inertia": {
             "mass_kg": 1045.0,
             "Ixx_kgm2": 1285.0,
@@ -56,6 +60,8 @@ _GA_JSON = json.dumps(
             "delta_alpha_stall_neg": 0.262,
             "cl_sep": 1.05,
             "cl_sep_neg": -0.80,
+            "alpha_max_rad": 0.42,
+            "alpha_min_rad": -0.26,
         },
         "initial_state": {
             "latitude_rad": 0.0,
@@ -152,12 +158,13 @@ def test_runner_batch_elapsed_time():
 def test_runner_batch_advances_aircraft_state():
     cfg = liteaero_sim_py.RunnerConfig(dt_s=0.02, duration_s=1.0, mode="batch")
     ac = liteaero_sim_py.Aircraft(_GA_JSON, dt_s=0.02)
-    alt_before = ac.state().altitude_m
+    speed_before = ac.state().airspeed_m_s
     runner = liteaero_sim_py.SimRunner()
     runner.initialize(cfg, ac)
     runner.start()
-    # Zero thrust → aircraft descends; altitude must differ from initial
-    assert ac.state().altitude_m != pytest.approx(alt_before, abs=0.1)
+    # The runner must advance aircraft state: at n_z=1 the load-factor model holds
+    # altitude, but with zero thrust drag bleeds airspeed measurably over 1 s.
+    assert ac.state().airspeed_m_s < speed_before - 0.1
 
 
 # ---------------------------------------------------------------------------
