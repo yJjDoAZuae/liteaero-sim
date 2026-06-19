@@ -263,6 +263,38 @@ TEST(BodyColliderTest, MaxCornerPenetration_ZeroWhenJustAbove) {
 }
 
 // ---------------------------------------------------------------------------
+// minCornerClearance_m — signed clearance for hard-contact-latch release
+// ---------------------------------------------------------------------------
+
+TEST(BodyColliderTest, MinCornerClearance_PositiveWhenAboveTerrain) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f));
+    FlatTerrain terrain{0.f};
+
+    // Bottom corners at 10 - 0.2 = 9.8 m above terrain — positive clearance.
+    EXPECT_NEAR(c.minCornerClearance_m(makeSnap(10.f), terrain), 9.8f, 1e-3f);
+}
+
+TEST(BodyColliderTest, MinCornerClearance_NegativeWhenPenetrating) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f));
+    FlatTerrain terrain{0.f};
+
+    // Level aircraft at 0.1 m: bottom corners at -0.1 m → clearance = -0.1 m.
+    // (maxCornerPenetration_m clamps this to +0.1; the signed clearance does not.)
+    EXPECT_NEAR(c.minCornerClearance_m(makeSnap(0.1f), terrain), -0.1f, 1e-4f);
+}
+
+TEST(BodyColliderTest, MinCornerClearance_ZeroWhenJustTouching) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f));
+    FlatTerrain terrain{0.f};
+
+    // Bottom corners exactly at terrain level: clearance = 0.
+    EXPECT_NEAR(c.minCornerClearance_m(makeSnap(0.2f), terrain), 0.f, 1e-4f);
+}
+
+// ---------------------------------------------------------------------------
 // Penetration cap — prevents explosive forces during extreme embedding
 // ---------------------------------------------------------------------------
 

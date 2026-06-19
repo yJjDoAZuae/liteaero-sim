@@ -290,6 +290,32 @@ output (output-gating would inject a discontinuous lift jump at liftoff). No exp
 dynamic-pressure washout is applied: lift authority fades emergently through
 $L_{\max}=q\,S\,C_{L,\max}$.
 
+**Command authority is preserved — this is apportionment, not suppression.** The total
+delivered load factor is
+
+$$n_{z,\text{aero}} + n_{z,\text{gear}} = \bigl(n_{z,\text{cmd}} - n_{z,\text{gear}}\bigr) +
+n_{z,\text{gear}} = n_{z,\text{cmd}}.$$
+
+The wing supplies only the portion of the commanded load factor that the gear is **not physically
+carrying**; the relaxation never reduces the commanded total. The gear has no command authority.
+Two consequences follow that the integration **must** honor:
+
+- **$n_{z,\text{gear}}$ equals the actual unilateral ground reaction** $\max(0,-F_z^B/(mg))$ (gear
+  strut force, plus any body-collider penalty reaction). It is non-negative (the ground only pushes)
+  and falls continuously to zero as the gear unloads. Feeding the relaxation a value larger than the
+  reaction actually applied — e.g. a constant "full weight" while the gear is unloaded — credits the
+  gear with support it is not providing and silently caps the FBW command. The terrain hard
+  constraint corrects position/velocity rather than applying a force, but it does not zero the strut
+  reaction either; per **OQ-LG-22 (resolved, Alternative 4)** the hard constraint is a pure
+  deep-penetration safety net and does **not** feed the relaxation — $n_{z,\text{gear}}$ tracks the
+  real reaction force only.
+- **A go-around must rotate the aircraft.** With $n_{z,\text{gear}}$ tracking the true reaction, a
+  command above 1 g produces wing lift exceeding the gear's diminishing share; the strut unloads,
+  $n_{z,\text{gear}}\to 0$, the full command is delivered to the wing, and the aircraft rotates and
+  climbs. If the FBW commands $n_z=2$ and the realized normal load factor never exceeds ~1 g while
+  the aircraft sits on the runway with the wing capable of the lift, the relaxation input is wrong
+  (over-credited), not the apportionment model.
+
 $H_1$ is parameterized by its **own** natural frequency and damping
 ($\omega_{n,H_1},\zeta_{H_1}$) representing the FBW **load-handoff** timescale — *not* the FBW
 inner command-tracking filter (that filter slews to a commanded load factor; $H_1$ governs the
@@ -320,11 +346,29 @@ damping following from the aircraft's physical rotational characteristics. The
 ($\omega_n,\zeta$)**. They are never co-parameterized with each other. Numeric values are set at
 implementation.
 
-*Current implementation (to be replaced when the above is built):* the code presently uses a
-two-speed hold-time n_z suppression filter (`contact_nz_filter_tau_s`, state `_wow0_elapsed_s`,
-proto field 33) and has the roll/yaw moment perturbations active with the pitch (n_z) moment
-path disabled. These are the artifacts diagnosed in OQ-LG-15 and are superseded by the design
-above.
+*Current implementation status:* the §2 design — the rotation-deviation state $\Delta\theta$
+(force channel $G(s)$ and moment channels $H_2$) and the $H_1$ n_z relaxation — is implemented.
+
+*Known defect (correction pending; regression-guarded by the powered go-around test, §Test
+Strategy):* the relaxation's ground-reaction input is wrong during and after a terrain
+hard-constraint event. When the body-collider hard constraint engages, the code substitutes a
+synthetic full-weight load factor ($n_{z,\text{gear}}=1$) for the actual reaction, gated on a
+persistent `_body_in_hard_contact` flag. That flag's clear condition is **unreachable**:
+`BodyCollider::maxCornerPenetration_m()` returns penetration depth clamped to $[0,\infty)$, while
+the clear test requires a **negative** clearance, so once the flag is set at touchdown it never
+releases. The synthetic full-weight credit therefore persists in flight — capping
+$n_{z,\text{shaped}}$ at $n_{z,\text{cmd}}-1$ with **zero** actual contact force (measured: at
+3.5 m AGL the flag is still set, contact force 0, realized $n_z\approx 1$ under a commanded 2 g),
+which suppresses a go-around: the aircraft accelerates but will not rotate (FPA stays $\approx
++0.3°$). This violates the command-authority requirement above. **Corrected design (OQ-LG-22,
+resolved — Alternative 4):** (i) $n_{z,\text{gear}}$ tracks the actual ground reaction
+$\max(0,-F_z^B/(mg))$ only — the synthetic full-weight substitution is **removed**; (ii) the
+body-collider terrain hard constraint is a pure deep-penetration safety net and does **not** feed
+the relaxation; (iii) the `_body_in_hard_contact` flag is still corrected to clear on genuine
+separation (signed corner clearance, not the clamped penetration) so `weight_on_wheels` reporting
+is accurate, but it is no longer a relaxation input. Because the hard constraint does not zero the
+strut reaction and `force_body_n` already carries it, this delivers the correct, continuously
+tracking value for a gear-equipped aircraft (see OQ-LG-22 for the gear-less caveat).
 
 **3. Direct wind-frame moment — `Aircraft6DOF` only.** In the full `Aircraft6DOF` model the
 assembled `moment_body_nm` is applied directly to the rotational EOM with no perturbation
@@ -1009,7 +1053,7 @@ simulation rate.
 | OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
 | OQ-LG-13 | ~~High-pass filter design for moment perturbation paths~~ **Resolved, then superseded by the OQ-LG-15 gear-F&M integration: the moment→rate high-pass (integrated into `q_nw`) is replaced by a moment→deflection stable low-pass kept as a self-decaying state, not integrated into `q_nw`** | — |
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
-| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete; not yet implemented** | — |
+| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete and implemented; a relaxation ground-reaction-input defect found during go-around verification is resolved in OQ-LG-22 (Alternative 4) — fix pending implementation, see the §2b implementation note** | — |
 | OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
 | OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: H₂ (rotation deviation) from physical rotational characteristics; H₁ (n_z relaxation) from its OWN FBW load-handoff ωₙ/ζ — distinct from the FBW command filter and slower than H₂; the force-channel destancing low-pass is not independent — it shares H₁'s timescale (τ = 1/ωₙ_H₁)** | — |
 | OQ-LG-18 | ~~Realization of the Δθ force-channel transfer (accumulator free integrator vs. direct filter)~~ **Resolved: Alternative 1 — realize the agreed transfer as a single proper second-order filter on the rate (no free integrator); preserves P1–P4 exactly** | — |
@@ -2604,6 +2648,46 @@ force-channel fade from $\operatorname{sat}(V^2/V_{\text{ref}}^2)$ (only C⁰) t
 smootherstep so both authority fades share one factor. **Supersession note:** the interim gear-only
 body-rate correction is removed once (c) is in place.
 
+### OQ-LG-22 — Ground-Support Representation in the n_z Relaxation During an Active Terrain Hard Constraint *(Resolved)*
+
+**Resolution (Alternative 4 — gear strut reaction only; the hard constraint does not feed the n_z
+relaxation).** The n_z relaxation derives $n_{z,\text{gear}}$ from the **actual ground reaction force**
+$\max(0, -F_z^B/(mg))$ in all cases. The body-collider terrain hard constraint reverts to a pure
+deep-penetration safety net (a post-integration position/velocity projection): it does **not**
+substitute a synthetic load factor into the relaxation, and the `_body_in_hard_contact` flag is no
+longer an input to the load handoff.
+
+**Rationale.** A measurement of the integration order settled this. The terrain hard constraint
+(`KinematicState::applyTerrainHardConstraint`) only adds the penetration to altitude and clamps a
+descending vertical velocity to zero — it touches **no forces**, and in particular it does **not** zero
+the gear strut reaction. The gear strut force is computed in the gear step and applied to the EOM
+during integration; the hard constraint runs afterward as a separate kinematic correction *on top of*
+it. Consequently:
+
+- `force_body_n.z()` already includes the gear strut reaction whenever the gear is carrying load, so
+  $\max(0, -F_z^B/(mg))$ is the correct, continuously-tracking value for a gear-equipped aircraft. The
+  earlier synthetic "full weight" substitution would **override and discard** that real strut reaction
+  (a double-count / mis-credit), and was only ever correct for a gear-*less* airframe.
+- The "$F_z^B \approx 0$ while the hard constraint is engaged" condition that motivated the synthetic
+  value refers to the **body-collider penalty spring** relaxing to zero once the constraint has zeroed
+  the body's penetration — not the strut. In a normal gear landing the gear holds the fuselage clear of
+  the terrain, so the body never penetrates and the hard constraint should not fire at all.
+
+**Caveat (accepted limitation).** A gear-less / belly-landing airframe has no strut reaction, and its
+body-collider penalty force relaxes to ~0 once the hard constraint holds it at the surface, so it
+receives no relaxation support during a sustained hard-constraint event and could over-command lift.
+This is accepted for the load-factor `Aircraft` model, whose intended use is gear-equipped GA/UAS. If
+gear-less load-handoff fidelity is later required, revisit with a measured-equivalent constraint force
+(the former Alternative 3) so every support path is a real force.
+
+**Related correction (still required, now decoupled).** The `_body_in_hard_contact` flag's clear
+condition is unreachable (`maxCornerPenetration_m()` is clamped to $[0,\infty)$ while the clear test
+needs a negative clearance), so the flag latches true after first contact and forces
+`weight_on_wheels = true` in flight. Under this resolution that latch no longer suppresses the FBW
+command (the relaxation reads the actual force, which is zero when airborne), but the flag must still
+be corrected — clear it on genuine separation via a signed corner clearance — so `weight_on_wheels`
+reporting is accurate.
+
 ## Test Strategy
 
 All tests follow TDD: a failing test is written before the corresponding production code.
@@ -2750,6 +2834,38 @@ Setup: ground roll with a small initial heading offset of 2°; nose-wheel steeri
 a restoring angle of 3° for 5 s then releases.
 
 Pass criterion: heading offset corrects to $< 0.5°$ within 200 m.
+
+---
+
+#### Powered Go-Around — FBW Command Authority on the Ground
+
+Regression guard for the command-authority requirement of
+[Integration Contract — `Aircraft` §2b](#integration-contract--aircraft) and the defect recorded
+there (a latched hard-contact flag pinning the n_z relaxation to full weight, which suppressed the
+go-around — see OQ-LG-22). This replaces the deleted `BodyColliderOnly_TouchAndGo_BecomesAirborne`
+test, and must be driven through the real config→propulsion path (a config with an engine — not a
+thrust stub) so it also guards against an unpowered configuration silently failing to climb.
+
+**Test:** `Scenario_TouchAndGo_RotatesToClimbFPA`
+
+Setup:
+
+- `FlatTerrain`, zero wind, a config that carries a real propulsion model (e.g. the prop engine
+  in `small_uas_ksba.json`) and landing gear.
+- Approach to touchdown; once weight-on-wheels settles, command the go-around: full throttle and a
+  **closed-loop normal-load-factor command that pulls for a target climb flight-path angle**,
+  $n_z = 1 + k\,(\gamma_{\text{target}} - \gamma)$ (clamped to the airframe $g$ limits), rather than
+  a fixed open-loop $n_z$. A fixed $n_z$ can pass on a technicality (AGL creeping up a few meters);
+  the FPA-target loop asserts the aircraft actually rotates and holds a commanded climb gradient.
+
+Pass criteria:
+
+- WOW transitions true → false (genuine lift-off) within a bounded time after the go-around command.
+- The aircraft reaches and holds the target climb FPA $\gamma_{\text{target}}$ (within tolerance);
+  equivalently, sustained climb rate $-v_D > 0$ once established.
+- The realized normal load factor follows the command during rotation (it is **not** clamped to
+  $\approx 1$ g while the wing is capable of more) — the direct assertion that the gear/relaxation
+  is not suppressing the FBW command.
 
 ---
 

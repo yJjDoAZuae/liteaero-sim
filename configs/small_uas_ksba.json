@@ -1,5 +1,23 @@
 {
     "schema_version": 1,
+    "propulsion": {
+        "type": "prop",
+        "diameter_m": 0.254,
+        "pitch_m": 0.178,
+        "blade_count": 2,
+        "blade_solidity": 0.10,
+        "dt_s": 0.02,
+        "rotor_tau_s": 0.10,
+        "motor": {
+            "type": "electric",
+            "kv_rps_per_v": 121.5,
+            "r_terminal_ohm": 0.05,
+            "inertia_motor_kg_m2": 5e-5,
+            "supply_voltage_v": 22.2,
+            "i_max_a": 40.0,
+            "esc_efficiency_nd": 0.90
+        }
+    },
     "aircraft": {
         "S_ref_m2": 1.021,
         "cl_y_beta": -0.40,

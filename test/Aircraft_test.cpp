@@ -655,13 +655,17 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
 }
 
 TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
-    // After belly-landing at approach speed with no thrust, the body collider
-    // must hold the aircraft on terrain.  AGL (measured at the CG) must not
-    // exceed body_half_height_z (0.3 m) + 0.15 m tolerance once contact is made.
+    // Gear-less belly landing at approach speed, n_z=1, no thrust. The body collider
+    // must keep the aircraft near terrain — a bounded float that does not take off, and
+    // settling (not climbing away) as it decelerates.
     //
-    // This test checks the actual physical outcome (CG altitude), not the
-    // weight_on_wheels flag, which can be set by the _body_in_hard_contact
-    // persistence mechanism independently of true ground proximity.
+    // OQ-LG-22 (resolved, Alternative 4): the gear-less case no longer suppresses lift
+    // (the synthetic full-weight n_z-relaxation input was removed). So while the wing is
+    // still flying (V well above stall) the aircraft skims just above the surface — the
+    // contact arrests the descent, it floats a few tenths of a metre, then settles as
+    // speed bleeds off — instead of being artificially pinned to the ground. This is the
+    // accepted gear-less behavior; the test verifies the float stays bounded near terrain
+    // and converges (settling), not the earlier (superseded) lift-suppressed pinning.
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
 
@@ -681,6 +685,7 @@ TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
 
     bool  first_contact           = false;
     float max_agl_after_contact_m = 0.0f;
+    float last_v_down_mps         = 0.0f;
 
     constexpr float kDt          = 0.02f;
     constexpr float kBodyHalfZ_m = 0.3f;  // half_extents_body_m z component
@@ -690,18 +695,24 @@ TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
         ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
 
         const float agl = ac->agl_m();
-        if (!first_contact && agl <= kBodyHalfZ_m + 0.05f) {
+        if (!first_contact && agl <= kBodyHalfZ_m + 0.15f) {  // belly reaches the surface
             first_contact = true;
         }
         if (first_contact) {
             max_agl_after_contact_m = std::max(max_agl_after_contact_m, agl);
         }
+        last_v_down_mps = ac->state().velocity_NED_mps().z();
     }
 
     EXPECT_TRUE(first_contact) << "body collider must bring aircraft to terrain";
-    EXPECT_LE(max_agl_after_contact_m, kBodyHalfZ_m + 0.15f)
+    // Bounded float near terrain — must not climb away (start was 5 m; float peaks well below 1 m).
+    EXPECT_LE(max_agl_after_contact_m, 1.0f)
         << "aircraft must remain near terrain after belly landing; max AGL after contact: "
-        << max_agl_after_contact_m << " m (limit: " << (kBodyHalfZ_m + 0.15f) << " m)";
+        << max_agl_after_contact_m << " m";
+    // Settling, not climbing: NED-down velocity must not be appreciably negative at the end.
+    EXPECT_GT(last_v_down_mps, -0.10f)
+        << "belly-landed aircraft must be settling, not climbing away; final v_down: "
+        << last_v_down_mps << " m/s";
 }
 
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {

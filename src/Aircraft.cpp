@@ -314,23 +314,26 @@ void Aircraft::step(double time_sec,
         _contact_forces.weight_on_wheels = true;
     }
 
-    // 5b. H₁: lagged n_z-command relaxation.
-    //     The gear normal force provides a fraction of the commanded load factor;
-    //     H₁ (2nd-order LP, FBW Nz ωn/ζ, DC=1) smooths the gear load contribution
-    //     and subtracts it from n_z_shaped so the aero system only targets the
-    //     residual load not already provided by ground contact.
+    // 5b. H₁: lagged n_z-command relaxation (apportionment, not suppression).
+    //     The gear supplies part of the commanded load factor; H₁ (2nd-order LP,
+    //     FBW Nz ωn/ζ, DC=1) smooths the gear's share and subtracts it from
+    //     n_z_shaped so the wing targets only the residual not already carried by
+    //     the ground. The total delivered load factor stays n_z_cmd, so full FBW
+    //     command authority is preserved.
     //
-    //     Input gating: n_z_gear_input is zero when WoW=false, so H₁ decays
-    //     naturally on takeoff — no explicit hold-time logic required.
-    //     Body-collider hard-constraint case: the penalty spring sees pen=0 (altitude
-    //     was corrected last step) so force_body_n.z()≈0, but _body_in_hard_contact
-    //     flags that the aircraft IS on terrain; use full load (1.0) as the input.
+    //     OQ-LG-22 (resolved, Alternative 4): the relaxation input is the ACTUAL
+    //     ground reaction only, max(0, -F_z^B/(m g)). It is zero off-ground and falls
+    //     continuously to zero as the gear unloads, so a go-around command above 1 g
+    //     is delivered to the wing as the strut releases. The terrain hard constraint
+    //     does NOT feed this: it is a deep-penetration safety net that applies no
+    //     force and does not zero the strut reaction, which force_body_n already
+    //     carries. (The earlier synthetic full-weight input under _body_in_hard_contact
+    //     was removed — it over-credited the ground and, via a latched flag, capped a
+    //     go-around at n_z_cmd-1 with zero contact force.)
     float nz_relax_dbg = 0.f;
     {
         float nz_gear_input = 0.f;
-        if (_body_in_hard_contact) {
-            nz_gear_input = 1.0f;
-        } else if (contact_forces.weight_on_wheels) {
+        if (contact_forces.weight_on_wheels) {
             nz_gear_input = std::max(0.f,
                 -contact_forces.force_body_n.z() / (_inertia.mass_kg * kGravity_mps2));
         }
@@ -504,34 +507,26 @@ void Aircraft::step(double time_sec,
     //     for monitoring; applyTerrainHardConstraint is called after so the
     //     collider's pen_dot sees the impact velocity before it is zeroed.
     if (_has_body_collider && _terrain != nullptr) {
-        const float pen = _body_collider.maxCornerPenetration_m(
+        // Signed clearance of the lowest body corner: < 0 penetrating, > 0 clear.
+        // (maxCornerPenetration_m is clamped to >= 0 and so cannot detect separation;
+        // the latch released on a negative penetration that never occurred — OQ-LG-22.)
+        const float clearance = _body_collider.minCornerClearance_m(
             _state.snapshot(), *_terrain);
+        const float pen = std::max(0.f, -clearance);   // deepest penetration (>= 0)
+        constexpr float kBodySeparationMargin_m = 0.05f;
         if (pen > 0.f) {
             const auto bc_impact = _body_collider.step(_state.snapshot(), *_terrain);
             _contact_forces.force_body_n   += bc_impact.force_body_n;
             _contact_forces.moment_body_nm += bc_impact.moment_body_nm;
             _contact_forces.weight_on_wheels = true;
-            // Keep the flag set each step the hard constraint fires.  Step-5b
-            // uses it to supply n_contact_z_raw = 1.0 when the penalty spring
-            // sees pen=0 after altitude correction.
             _body_in_hard_contact = true;
             _state.applyTerrainHardConstraint(pen);
-        } else if (pen < -0.10f) {
-            // All corners are well above terrain — aircraft has genuinely departed
-            // the surface.  Clear the flag so the LFA is free to restore lift.
+        } else if (clearance > kBodySeparationMargin_m) {
+            // The body has genuinely separated from the terrain — release the
+            // hard-contact latch so weight_on_wheels reporting is accurate.
             _body_in_hard_contact = false;
         }
-        // pen in (-0.10, 0]: small pitch-induced clearance — keep flag set so
-        // lift suppression and WoW reporting remain active across the gap.
-        // DBG-WOW TEMP: trace the airborne-but-WoW anomaly.
-        if (_has_landing_gear) {
-            const float agl_dbg = agl_m();
-            if (_contact_forces.weight_on_wheels && agl_dbg > 0.8f) {
-                printf("    [WOW t=%.2f] agl=%.2f pen=%.3f hardContact=%d wow=%d Fz_body=%.1f\n",
-                       (float)time_sec, agl_dbg, pen, (int)_body_in_hard_contact,
-                       (int)_contact_forces.weight_on_wheels, _contact_forces.force_body_n.z());
-            }
-        }
+        // clearance in [0, margin]: small hysteresis band — hold the flag as-is.
     }
 
     // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and

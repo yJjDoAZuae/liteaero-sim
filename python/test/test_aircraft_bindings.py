@@ -253,7 +253,16 @@ def _repo_config(name):
     return os.path.join(here, "..", "..", "configs", name)
 
 
-def test_powered_go_around_climbs():
+def test_touch_and_go_rotates_to_climb_fpa():
+    # Scenario_TouchAndGo_RotatesToClimbFPA (landing_gear.md §Test Strategy): a powered
+    # go-around must ROTATE the aircraft to a commanded climb gradient, not merely creep
+    # upward. The command is a closed loop that pulls for a target flight-path angle,
+    # n_z = clamp(1 + k(gamma_target - gamma)), so the test fails if the gear/relaxation
+    # caps the realized load factor (OQ-LG-22: the latched hard-contact flag pinned the
+    # relaxation to full weight, so a 2 g command realized ~1 g and the FPA stuck at +0.3°).
+    # Driven through the real config->propulsion path (small_uas_ksba.json has a prop engine).
+    import math
+
     cfg_path = _repo_config("small_uas_ksba.json")
     if not os.path.isfile(cfg_path):
         pytest.skip(f"config not found: {cfg_path}")
@@ -264,10 +273,14 @@ def test_powered_go_around_climbs():
     )
 
     dt = 0.01
-    # Start just above the runway on a shallow approach so it touches down quickly.
+    g = 9.80665
+    gamma_target = math.radians(6.0)   # commanded climb flight-path angle
+    k_fpa = 6.0                        # FPA-error -> load-factor gain
+    nz_max = 2.5
+
     cfg["initial_state"].update(
-        {"altitude_m": 5.0, "velocity_north_mps": 16.0,
-         "velocity_east_mps": 0.0, "velocity_down_mps": 1.5}
+        {"altitude_m": 20.0, "velocity_north_mps": 15.0 * math.cos(math.radians(6.0)),
+         "velocity_east_mps": 0.0, "velocity_down_mps": 15.0 * math.sin(math.radians(6.0))}
     )
     ac = liteaero_sim_py.Aircraft(json.dumps(cfg), dt_s=dt)
     ac.set_terrain(liteaero_sim_py.FlatTerrain(0.0))
@@ -279,32 +292,51 @@ def test_powered_go_around_climbs():
     first_wow_t = None
     go = False
     settled_agl = None
-    max_agl_after_go = -1.0e9
+    wow_cleared_after_go = False
+    nz_peak = 0.0
+    prev_gamma = 0.0
 
-    for _ in range(int(45.0 / dt)):
+    n_steps = int(45.0 / dt)
+    for i in range(n_steps):
         s = ac.state()
         wow = ac.contact_forces().weight_on_wheels
         t = s.time_s
+        vN, vD = s.velocity_north_mps, s.velocity_down_mps
+        V = math.hypot(vN, vD)
+        gamma = math.atan2(-vD, max(abs(vN), 1e-3))
+
         if wow and first_wow_t is None:
             first_wow_t = t
         if first_wow_t is not None and (t - first_wow_t) >= 3.0 and not go:
             go = True
             settled_agl = s.altitude_m
+
         if go:
             cmd.throttle_nd = 1.0
-            cmd.n_z = 2.0
-            max_agl_after_go = max(max_agl_after_go, s.altitude_m)
+            cmd.n_z = max(0.0, min(nz_max, 1.0 + k_fpa * (gamma_target - gamma)))
+            if not wow:
+                wow_cleared_after_go = True
+            # Realized normal load factor from path curvature: n = cos(gamma) + V*gammadot/g.
+            gammadot = (gamma - prev_gamma) / dt
+            nz_peak = max(nz_peak, math.cos(gamma) + V * gammadot / g)
+        prev_gamma = gamma
         ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
 
     assert first_wow_t is not None, "aircraft never touched down"
     assert go, "go-around phase never triggered (never settled on the gear)"
+
     final = ac.state()
-    # The powered go-around must produce a real climb: well above the settled
-    # ground height, climbing (negative NED-down velocity) at the end.
-    assert max_agl_after_go > settled_agl + 1.5, (
-        f"aircraft failed to climb on go-around: settled={settled_agl:.2f} m, "
-        f"peak after go-around={max_agl_after_go:.2f} m"
+    final_gamma_deg = math.degrees(
+        math.atan2(-final.velocity_down_mps, max(abs(final.velocity_north_mps), 1e-3))
     )
-    assert final.velocity_down_mps < 0.0, (
-        f"aircraft not climbing at end of go-around (vD={final.velocity_down_mps:.2f} m/s)"
+
+    # 1. Genuine lift-off: weight-on-wheels released after the go-around.
+    assert wow_cleared_after_go, "weight-on-wheels never cleared after go-around (gear latch)"
+    # 2. The aircraft actually rotated: realized load factor followed the >1 g command,
+    #    not capped near 1 g by the relaxation. (Suppressed case peaked at ~1.09 g.)
+    assert nz_peak > 1.3, f"realized load factor never exceeded 1.3 g (peak {nz_peak:.2f}); command suppressed"
+    # 3. It reaches and holds a real climb gradient near the target (suppressed case held +0.3°).
+    assert final_gamma_deg > 3.0, (
+        f"aircraft did not rotate to a climb (final FPA {final_gamma_deg:.1f}°, target 6°)"
     )
+    assert final.velocity_down_mps < 0.0, "aircraft not climbing at end of go-around"

@@ -1,5 +1,8 @@
 {
     "schema_version": 1,
+    "propulsion": {
+        "type": "none"
+    },
     "aircraft": {
         "S_ref_m2": 2.0,
         "cl_y_beta": 0.0,

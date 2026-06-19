@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -162,6 +163,47 @@ float BodyCollider::maxCornerPenetration_m(
     }
 
     return max_pen;
+}
+
+float BodyCollider::minCornerClearance_m(
+    const liteaero::nav::KinematicStateSnapshot& snap,
+    const liteaero::terrain::Terrain& terrain) const
+{
+    if (_volumes.empty()) return std::numeric_limits<float>::max();
+
+    const float h_ac      = snap.position.altitude_m;
+    const float terrain_h = terrain.elevation_m(snap.position.latitude_rad,
+                                                  snap.position.longitude_rad);
+
+    const Eigen::Matrix3f R_nb =
+        liteaero::nav::KinematicStateUtil::q_nb(snap).toRotationMatrix();
+
+    float min_clearance = std::numeric_limits<float>::max();
+
+    for (const auto& vol : _volumes) {
+        const float hx = vol.half_extents_body_m.x();
+        const float hy = vol.half_extents_body_m.y();
+        const float hz = vol.half_extents_body_m.z();
+
+        const std::array<Eigen::Vector3f, 8> corners = {{
+            vol.center_offset_body_m + Eigen::Vector3f{ hx,  hy,  hz},
+            vol.center_offset_body_m + Eigen::Vector3f{ hx,  hy, -hz},
+            vol.center_offset_body_m + Eigen::Vector3f{ hx, -hy,  hz},
+            vol.center_offset_body_m + Eigen::Vector3f{ hx, -hy, -hz},
+            vol.center_offset_body_m + Eigen::Vector3f{-hx,  hy,  hz},
+            vol.center_offset_body_m + Eigen::Vector3f{-hx,  hy, -hz},
+            vol.center_offset_body_m + Eigen::Vector3f{-hx, -hy,  hz},
+            vol.center_offset_body_m + Eigen::Vector3f{-hx, -hy, -hz},
+        }};
+
+        for (const auto& corner_body : corners) {
+            const float corner_altitude = h_ac - (R_nb * corner_body).z();
+            const float clearance = corner_altitude - terrain_h;
+            if (clearance < min_clearance) min_clearance = clearance;
+        }
+    }
+
+    return min_clearance;
 }
 
 // ---------------------------------------------------------------------------

@@ -50,6 +50,17 @@ public:
         const liteaero::nav::KinematicStateSnapshot& snap,
         const liteaero::terrain::Terrain& terrain) const;
 
+    // Return the signed clearance (m) of the lowest corner of any volume above
+    // terrain: positive means every corner is above terrain (the smallest such
+    // margin), negative means the deepest corner is that far below terrain.
+    // Unlike maxCornerPenetration_m (clamped to >= 0), this is signed, so the
+    // simulation loop can detect genuine separation from the surface — not just
+    // penetration — to release a hard-contact latch. Returns a large positive
+    // value when no volumes are configured.
+    [[nodiscard]] float minCornerClearance_m(
+        const liteaero::nav::KinematicStateSnapshot& snap,
+        const liteaero::terrain::Terrain& terrain) const;
+
     [[nodiscard]] nlohmann::json       serializeJson()                               const;
     void                               deserializeJson(const nlohmann::json& j);
     [[nodiscard]] std::vector<uint8_t> serializeProto()                              const;
