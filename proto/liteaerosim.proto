@@ -250,6 +250,16 @@ message AircraftState {
     float          v_filt_ned_e            = 48;
     float          v_filt_ned_d            = 49;
     bool           v_filt_init             = 50;
+    float          settle_gain_nd          = 51;  // OQ-LG-23 additive settle/rotation term (§2b-ii)
+    float          settle_clip_nd          = 52;
+    float          settle_tau_s            = 53;
+    float          settle_wheel_rr_nd      = 54;
+    float          settle_vland_ratio      = 55;
+    float          settle_vtakeoff_ratio   = 56;
+    float          settle_vwidth_ratio     = 57;
+    float          stall_speed_mps         = 58;
+    float          settle_axbar            = 59;  // low-pass state of ā_x
+    float          prev_aero_drag_n        = 60;
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

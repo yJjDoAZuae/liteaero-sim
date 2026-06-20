@@ -295,6 +295,8 @@ def test_touch_and_go_rotates_to_climb_fpa():
     wow_cleared_after_go = False
     nz_peak = 0.0
     prev_gamma = 0.0
+    max_abs_pitch_deg = 0.0
+    max_abs_pitch_post_td_deg = 0.0  # tracked from first touchdown onward
 
     n_steps = int(45.0 / dt)
     for i in range(n_steps):
@@ -304,9 +306,13 @@ def test_touch_and_go_rotates_to_climb_fpa():
         vN, vD = s.velocity_north_mps, s.velocity_down_mps
         V = math.hypot(vN, vD)
         gamma = math.atan2(-vD, max(abs(vN), 1e-3))
+        pitch_deg = abs(math.degrees(s.pitch_rad))
+        max_abs_pitch_deg = max(max_abs_pitch_deg, pitch_deg)
 
         if wow and first_wow_t is None:
             first_wow_t = t
+        if first_wow_t is not None:
+            max_abs_pitch_post_td_deg = max(max_abs_pitch_post_td_deg, pitch_deg)
         if first_wow_t is not None and (t - first_wow_t) >= 3.0 and not go:
             go = True
             settled_agl = s.altitude_m
@@ -330,6 +336,14 @@ def test_touch_and_go_rotates_to_climb_fpa():
         math.atan2(-final.velocity_down_mps, max(abs(final.velocity_north_mps), 1e-3))
     )
 
+    # 0. The trajectory must stay SANE throughout — no attitude blow-up. A 15 m/s approach,
+    #    touchdown, and go-around should never pitch past a steep-but-plausible bound; a
+    #    velocity-derived-attitude whip drives it to 80-150° (tumbling). This is the check the
+    #    old endpoint-only assertions missed (they passed on a looping trajectory).
+    assert max_abs_pitch_post_td_deg < 35.0, (
+        f"attitude blew up after touchdown: max |pitch| = {max_abs_pitch_post_td_deg:.1f}° "
+        "(expected a bounded rotation, not a tumble)"
+    )
     # 1. Genuine lift-off: weight-on-wheels released after the go-around.
     assert wow_cleared_after_go, "weight-on-wheels never cleared after go-around (gear latch)"
     # 2. The aircraft actually rotated: realized load factor followed the >1 g command,
@@ -340,3 +354,62 @@ def test_touch_and_go_rotates_to_climb_fpa():
         f"aircraft did not rotate to a climb (final FPA {final_gamma_deg:.1f}°, target 6°)"
     )
     assert final.velocity_down_mps < 0.0, "aircraft not climbing at end of go-around"
+
+
+def test_full_stop_landing_settles_on_gear():
+    # Scenario_FullStopLanding_SettlesOnGear (landing_gear.md §Test Strategy): a normal landing
+    # must SETTLE ONTO THE GEAR, not float on the wing. The apportionment relaxation alone is
+    # degenerate and rests in a floating equilibrium (wing ~0.8 W, gear ~0.18 W) at roll-out speed;
+    # the additive axial-acceleration settle term (§2b-ii, OQ-LG-23) must put ~full weight on the
+    # gear throughout the roll-out. Driven through the real config (small_uas_ksba.json, which has
+    # both gear and a body collider).
+    import math
+
+    cfg_path = _repo_config("small_uas_ksba.json")
+    if not os.path.isfile(cfg_path):
+        pytest.skip(f"config not found: {cfg_path}")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    weight = cfg["inertia"]["mass_kg"] * 9.80665
+
+    dt = 0.01
+    cfg["initial_state"].update(
+        {"altitude_m": 20.0, "velocity_north_mps": 15.0 * math.cos(math.radians(6.0)),
+         "velocity_east_mps": 0.0, "velocity_down_mps": 15.0 * math.sin(math.radians(6.0))}
+    )
+    ac = liteaero_sim_py.Aircraft(json.dumps(cfg), dt_s=dt)
+    ac.set_terrain(liteaero_sim_py.FlatTerrain(0.0))
+
+    cmd = liteaero_sim_py.AircraftCommand()
+    cmd.n_z = 1.0
+    cmd.throttle_nd = 0.0
+
+    first_wow_t = None
+    min_gear_frac_at_speed = 1.0e9  # min gear load (as fraction of weight) during powered roll-out
+
+    for _ in range(int(40.0 / dt)):
+        s = ac.state()
+        cf = ac.contact_forces()
+        wow = cf.weight_on_wheels
+        t = s.time_s
+        speed = math.hypot(s.velocity_north_mps, s.velocity_down_mps)
+
+        if wow and first_wow_t is None:
+            first_wow_t = t
+        # Sample the STEADY roll-out: after the touchdown impact/bounce transient has settled
+        # (≥3 s after first contact) and still rolling fast enough that the wing could float the
+        # aircraft (well above this UAS's ~6.6 m/s stall). The float defect leaves the gear near
+        # zero here; a correct settle keeps it carrying ~full weight. (The brief touchdown bounce
+        # is a separate touchdown-dynamics matter, excluded here.)
+        if first_wow_t is not None and (t - first_wow_t) >= 3.0 and wow and speed > 7.0:
+            min_gear_frac_at_speed = min(min_gear_frac_at_speed, -cf.force_body_n[2] / weight)
+        ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
+
+    assert first_wow_t is not None, "aircraft never touched down"
+    assert min_gear_frac_at_speed < 1.0e8, "no roll-out samples above 7 m/s after settling"
+    # The gear must carry essentially the weight throughout the roll-out — not be unloaded while
+    # the wing floats the aircraft. (Floating defect: ~0.18 W.)
+    assert min_gear_frac_at_speed > 0.7, (
+        f"aircraft floats on the wing during roll-out: min gear load "
+        f"{min_gear_frac_at_speed:.2f} W (expected ~1 W on the gear)"
+    )

@@ -162,6 +162,22 @@ private:
     Eigen::Vector3f _v_filt_ned   = Eigen::Vector3f::Zero();
     bool            _v_filt_init  = false;
     float           _att_filt_tau_s = 0.7f;  // attitude-reference velocity low-pass τ (s)
+    // OQ-LG-23: additive axial-acceleration settle/rotation term (§2b-ii). On the ground the
+    // wing lift is biased by a single gain on the *steady* longitudinal-force deficit
+    // ā_x = LP[(T − D_aero − D_wheel(V))/m] — not the raw (oscillatory) gear force — so the
+    // aircraft settles onto the gear on landing and rotates on takeoff without a degenerate
+    // float. Ground-faded by a stall-referenced speed smoothstep × WoW (separate landing/takeoff
+    // transition speeds, shared width); the increment is low-pass filtered and clipped.
+    float  _settle_gain_nd        = 25.0f;  // k_s: deficit (g) → load-factor increment gain
+    float  _settle_clip_nd        = 1.0f;   // Δ_max: clip on the settle increment (g)
+    float  _settle_tau_s          = 0.3f;   // low-pass τ on ā_x (s)
+    float  _settle_wheel_rr_nd    = 0.05f;  // steady rolling-drag coeff for D_wheel(V) model
+    float  _settle_vland_ratio    = 1.00f;  // landing transition speed / V_stall
+    float  _settle_vtakeoff_ratio = 1.15f;  // takeoff transition speed / V_stall
+    float  _settle_vwidth_ratio   = 0.50f;  // shared smoothstep width / V_stall
+    float  _stall_speed_mps       = 1.0f;   // computed at init from W, S_ref, CL_max
+    float  _settle_axbar          = 0.f;    // low-pass state of ā_x (serialized)
+    float  _prev_aero_drag_n      = 0.f;    // previous-step aerodynamic drag magnitude (serialized)
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

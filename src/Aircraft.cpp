@@ -26,6 +26,14 @@ static inline float phiAuthority(float V, float V_ref) {
     return q * q * q * (q * (q * 6.0f - 15.0f) + 10.0f);   // 6q⁵ − 15q⁴ + 10q³
 }
 
+// C¹ smoothstep rising from 0 (x ≤ lo) to 1 (x ≥ hi). Used for the OQ-LG-23 ground fade
+// S_unload(V): the settle/rotation term is active above the (stall-referenced) transition speed.
+static inline float smoothstepEdges(float x, float lo, float hi) {
+    if (hi <= lo) return x >= hi ? 1.0f : 0.0f;
+    const float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -102,6 +110,20 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     // Destancing LP shares the H₁ load-handoff timescale (same physical quantity: the steady
     // gear load), so τ_stance is derived, not configured.
     _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
+    // OQ-LG-23: additive axial-acceleration settle/rotation term (§2b-ii). Transition speeds are
+    // expressed as multiples of stall speed so they auto-scale per aircraft.
+    _settle_gain_nd        = ac.value("settle_gain_nd",        4.0f);
+    _settle_clip_nd        = ac.value("settle_clip_nd",        1.0f);
+    _settle_tau_s          = ac.value("settle_tau_s",          0.3f);
+    _settle_wheel_rr_nd    = ac.value("settle_wheel_rr_nd",    0.03f);
+    _settle_vland_ratio    = ac.value("settle_vland_ratio",    1.30f);
+    _settle_vtakeoff_ratio = ac.value("settle_vtakeoff_ratio", 1.15f);
+    _settle_vwidth_ratio   = ac.value("settle_vwidth_ratio",   0.40f);
+    {
+        const float clmax   = std::max(lcp.cl_max, 0.1f);
+        const float vstall2 = 2.0f * _inertia.mass_kg * 9.80665f / (1.225f * S_ref_m2 * clmax);
+        _stall_speed_mps    = std::sqrt(std::max(vstall2, 1.0f));
+    }
     _cmd_filter_dt_s     = outer_dt_s / static_cast<float>(_cmd_filter_substeps);
     // Nyquist: wn * cmd_filter_dt_s must be < π for each axis.
     constexpr float kPi = 3.14159265f;
@@ -233,6 +255,8 @@ void Aircraft::reset() {
     _prev_dtheta_yaw   = 0.f;
     _v_filt_ned.setZero();
     _v_filt_init = false;
+    _settle_axbar = 0.f;
+    _prev_aero_drag_n = 0.f;
     _body_in_hard_contact = false;
 }
 
@@ -332,13 +356,42 @@ void Aircraft::step(double time_sec,
     //     go-around at n_z_cmd-1 with zero contact force.)
     float nz_relax_dbg = 0.f;
     {
+        // (b-i) apportionment relaxation on the ACTUAL gear reaction (OQ-LG-22; retained).
         float nz_gear_input = 0.f;
         if (contact_forces.weight_on_wheels) {
             nz_gear_input = std::max(0.f,
                 -contact_forces.force_body_n.z() / (_inertia.mass_kg * kGravity_mps2));
         }
         nz_relax_dbg = _nz_relax_filter.step(nz_gear_input);
-        n_z_shaped = std::max(0.0f, n_z_shaped - nz_relax_dbg);
+
+        // (b-ii) additive axial-acceleration settle/rotation term (OQ-LG-23). The eligible signal
+        // is the STEADY modeled longitudinal-force deficit
+        //   ā_x = LP[(T − D_aero − D_wheel(V))/m]
+        // built from the previous-step thrust and aerodynamic drag and a steady speed-based wheel
+        // drag — NOT the raw (oscillatory) gear contact force — so no contact-oscillation is fed
+        // back into the lift (no limit cycle). Decelerating (ā_x<0) sheds lift → the aircraft
+        // settles onto the gear; accelerating (ā_x>0) builds lift → rotation. Ground fade =
+        // stall-referenced speed smoothstep (separate landing/takeoff transition speeds, shared
+        // width) × WoW; increment clipped. The low-pass also keeps the applied force continuous
+        // across WoW changes, so the WoW factor can be a raw binary.
+        const float V_ground = _state.velocity_NED_mps().head<2>().norm();
+        const float thrust_n = _propulsion->thrust_n();                       // previous-step thrust
+        const float sigma    = V_ground / std::sqrt(V_ground * V_ground + 0.25f);  // smooth sign(V)
+        const float d_wheel  = _settle_wheel_rr_nd * _inertia.mass_kg * kGravity_mps2 * sigma;
+        const float ax_inst  = (thrust_n - _prev_aero_drag_n - d_wheel) / _inertia.mass_kg;
+        const float lp_a     = 1.0f - std::exp(-_cmd_filter_dt_s / std::max(_settle_tau_s, 1e-3f));
+        _settle_axbar       += lp_a * (ax_inst - _settle_axbar);
+
+        const float v_trans  = (_settle_axbar >= 0.f ? _settle_vtakeoff_ratio
+                                                     : _settle_vland_ratio) * _stall_speed_mps;
+        const float half_w   = 0.5f * _settle_vwidth_ratio * _stall_speed_mps;
+        const float s_unload = smoothstepEdges(V_ground, v_trans - half_w, v_trans + half_w);
+        const float phi_g    = (contact_forces.weight_on_wheels ? 1.0f : 0.0f) * s_unload;
+        float settle_incr    = _settle_gain_nd * (_settle_axbar / kGravity_mps2) * phi_g;
+        settle_incr          = std::clamp(settle_incr, -_settle_clip_nd, _settle_clip_nd);
+
+        // Combine both load-handoff parts before the single non-negativity clamp.
+        n_z_shaped = std::max(0.0f, n_z_shaped - nz_relax_dbg + settle_incr);
     }
 
     // 5c. Δθ rotation-deviation state (OQ-LG-15/16/17/18/19/20).
@@ -420,6 +473,10 @@ void Aircraft::step(double time_sec,
     // 7. Aerodynamic forces in Wind frame
     const AeroForces F =
         _aeroPerf->compute(lfa_out.alpha_rad, lfa_out.beta_rad, q_inf, cl);
+
+    // Aerodynamic drag magnitude (wind-x is forward; drag opposes → −F.x_n), stored for next
+    // step's OQ-LG-23 settle term, which uses the steady longitudinal-force deficit.
+    _prev_aero_drag_n = std::max(0.0f, -F.x_n);
 
     // 8. Advance propulsion
     const float T = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3);
@@ -583,6 +640,16 @@ nlohmann::json Aircraft::serializeJson() const {
     j["att_filt_tau_s"]       = _att_filt_tau_s;
     j["v_filt_ned"]           = nlohmann::json::array({_v_filt_ned.x(), _v_filt_ned.y(), _v_filt_ned.z()});
     j["v_filt_init"]          = _v_filt_init;
+    j["settle_gain_nd"]        = _settle_gain_nd;
+    j["settle_clip_nd"]        = _settle_clip_nd;
+    j["settle_tau_s"]          = _settle_tau_s;
+    j["settle_wheel_rr_nd"]    = _settle_wheel_rr_nd;
+    j["settle_vland_ratio"]    = _settle_vland_ratio;
+    j["settle_vtakeoff_ratio"] = _settle_vtakeoff_ratio;
+    j["settle_vwidth_ratio"]   = _settle_vwidth_ratio;
+    j["stall_speed_mps"]       = _stall_speed_mps;
+    j["settle_axbar"]          = _settle_axbar;
+    j["prev_aero_drag_n"]      = _prev_aero_drag_n;
     j["dtheta_wn_pitch_rad_s"] = _dtheta_wn_pitch_rad_s;
     j["dtheta_wn_roll_rad_s"]  = _dtheta_wn_roll_rad_s;
     j["dtheta_wn_yaw_rad_s"]   = _dtheta_wn_yaw_rad_s;
@@ -675,6 +742,16 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
         _v_filt_ned.setZero();
     }
     _v_filt_init       = j.value("v_filt_init", false);
+    _settle_gain_nd        = j.value("settle_gain_nd",        _settle_gain_nd);
+    _settle_clip_nd        = j.value("settle_clip_nd",        _settle_clip_nd);
+    _settle_tau_s          = j.value("settle_tau_s",          _settle_tau_s);
+    _settle_wheel_rr_nd    = j.value("settle_wheel_rr_nd",    _settle_wheel_rr_nd);
+    _settle_vland_ratio    = j.value("settle_vland_ratio",    _settle_vland_ratio);
+    _settle_vtakeoff_ratio = j.value("settle_vtakeoff_ratio", _settle_vtakeoff_ratio);
+    _settle_vwidth_ratio   = j.value("settle_vwidth_ratio",   _settle_vwidth_ratio);
+    _stall_speed_mps       = j.value("stall_speed_mps",       _stall_speed_mps);
+    _settle_axbar          = j.value("settle_axbar",          0.0f);
+    _prev_aero_drag_n      = j.value("prev_aero_drag_n",      0.0f);
     _nz_filter.deserializeJson(j.at("nz_filter"));
     _ny_filter.deserializeJson(j.at("ny_filter"));
     _roll_rate_filter.deserializeJson(j.at("roll_rate_filter"));
@@ -747,6 +824,16 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_v_filt_ned_e(_v_filt_ned.y());
     proto.set_v_filt_ned_d(_v_filt_ned.z());
     proto.set_v_filt_init(_v_filt_init);
+    proto.set_settle_gain_nd(_settle_gain_nd);
+    proto.set_settle_clip_nd(_settle_clip_nd);
+    proto.set_settle_tau_s(_settle_tau_s);
+    proto.set_settle_wheel_rr_nd(_settle_wheel_rr_nd);
+    proto.set_settle_vland_ratio(_settle_vland_ratio);
+    proto.set_settle_vtakeoff_ratio(_settle_vtakeoff_ratio);
+    proto.set_settle_vwidth_ratio(_settle_vwidth_ratio);
+    proto.set_stall_speed_mps(_stall_speed_mps);
+    proto.set_settle_axbar(_settle_axbar);
+    proto.set_prev_aero_drag_n(_prev_aero_drag_n);
 
     *proto.mutable_kinematic_state()  = parseSubMessage<las_proto::KinematicState>(_state.serializeProto());
     *proto.mutable_initial_state()    = parseSubMessage<las_proto::KinematicState>(_initial_state.serializeProto());
@@ -858,6 +945,16 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _v_filt_ned.y() = proto.v_filt_ned_e();
     _v_filt_ned.z() = proto.v_filt_ned_d();
     _v_filt_init    = proto.v_filt_init();
+    if (proto.settle_gain_nd()        != 0.0f) _settle_gain_nd        = proto.settle_gain_nd();
+    if (proto.settle_clip_nd()        != 0.0f) _settle_clip_nd        = proto.settle_clip_nd();
+    if (proto.settle_tau_s()          != 0.0f) _settle_tau_s          = proto.settle_tau_s();
+    _settle_wheel_rr_nd    = proto.settle_wheel_rr_nd();
+    if (proto.settle_vland_ratio()    != 0.0f) _settle_vland_ratio    = proto.settle_vland_ratio();
+    if (proto.settle_vtakeoff_ratio() != 0.0f) _settle_vtakeoff_ratio = proto.settle_vtakeoff_ratio();
+    if (proto.settle_vwidth_ratio()   != 0.0f) _settle_vwidth_ratio   = proto.settle_vwidth_ratio();
+    if (proto.stall_speed_mps()       != 0.0f) _stall_speed_mps       = proto.stall_speed_mps();
+    _settle_axbar     = proto.settle_axbar();
+    _prev_aero_drag_n = proto.prev_aero_drag_n();
 
     if (_propulsion) {
         switch (proto.propulsion_case()) {
