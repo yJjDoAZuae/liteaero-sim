@@ -176,13 +176,14 @@ as $F_z\sin\gamma$ onto wind-x. Whether this cross-axis coupling is a correct ph
 effect or a model fidelity limitation of the wind-frame integrator is an open question
 (OQ-LG-10).
 
-**2. Gear force & moment integration — rotation-deviation state plus lagged n_z relaxation.**
+**2. Gear force & moment integration — rotation-deviation state plus the n_z load handoff (apportionment relaxation + additive axial-acceleration settle term).**
 
-> **Status: designed (2026-06), not yet implemented.** This is the authoritative design for
-> how gear forces and moments couple into the load-factor model. It supersedes the
-> currently-coded two-speed hold-time n_z suppression and the unimplemented
-> moment-perturbation scheme (see "Current implementation" note at the end of this section).
-> The root-cause analysis that motivated it is recorded as OQ-LG-15 (resolved).
+> **Status: partially implemented (2026-06).** This is the authoritative design for how gear
+> forces and moments couple into the load-factor model; it replaced the earlier two-speed
+> hold-time n_z suppression. The rotation-deviation state §2a and the apportionment relaxation
+> §2b-i are implemented; the additive axial-acceleration settle/rotation term §2b-ii is pending
+> (OQ-LG-23) — see the "Implementation status" note at the end of this section. The root-cause
+> analysis that motivated the integration is recorded as OQ-LG-15 (resolved).
 
 The load-factor model represents body attitude kinematically (pitch = flight-path angle γ +
 α, with α set by the LFA), so it has no rotational-inertia state. A long-lever-arm gear
@@ -275,104 +276,101 @@ rate" framing.) `q_nw` carries only the velocity-derived attitude and the FBW-co
 CL-coupling sign: main-gear contact (aft, nose-down moment) → $\Delta\theta<0$ → lower CL →
 derotation/settle; nose-gear contact (forward, nose-up) → higher CL → nose-up/bounce tendency.
 
-**(b) Lagged n_z-command relaxation — the load handoff.** The gear normal force provides part
-of the commanded load factor, so the wing must not double-supply it. The FBW senses the
-gear-provided acceleration and **relaxes the commanded n_z through its filter** (a lagged
-response, $H_1$, DC gain 1); $\alpha_\text{cmd}$ falls accordingly and the aero α/CL correct as
-the filter settles:
+**(b) Load handoff — apportionment relaxation plus an axial-acceleration settle/rotation term.**
+The wing must not double-supply the load the gear carries, and on the ground it must shed lift to
+settle onto the gear (landing) and build lift to rotate off it (takeoff). Two cooperating parts:
 
-$$n_{z,\text{shaped}} = \max\!\bigl(0,\; n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}\bigr),
-\qquad n_{z,\text{gear}} = \frac{-F_z^B}{m\,g}.$$
+$$n_{z,\text{shaped}} = \max\!\Bigl(0,\; \underbrace{n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}}_{\text{(b-i) apportionment}}
+\; + \; \underbrace{\operatorname{clip}\!\bigl(k_s\,\tfrac{\bar a_x}{g}\,\Phi_g(V),\;\pm\Delta_{\max}\bigr)}_{\text{(b-ii) settle/rotation}}\Bigr),
+\qquad n_{z,\text{gear}} = \max\!\bigl(0,\,-F_z^B/(m g)\bigr),$$
 
-The input is the gear normal-force load factor (zero off-ground via the strut force floor), so
-the relaxation also vanishes when the gear unloads; gating is on the **input**, never the
-output (output-gating would inject a discontinuous lift jump at liftoff). No explicit
-dynamic-pressure washout is applied: lift authority fades emergently through
-$L_{\max}=q\,S\,C_{L,\max}$.
+$$\bar a_x = \mathrm{LP}\!\left[\frac{T - D_\text{aero} - D_\text{wheel}(V) - D_\text{brake}}{m}\right]
+\quad(\text{steady modeled longitudinal acceleration, not raw EOM}\ a_x).$$
 
-**Command authority is preserved — this is apportionment, not suppression.** The total
-delivered load factor is
+**(b-i) Apportionment relaxation (OQ-LG-22; retained).** $n_{z,\text{gear}}$ is the **actual**
+unilateral ground reaction normalized by weight, smoothed by the load-handoff filter $H_1$; the
+wing is asked only for the residual the gear is not already carrying. In steady state the total
+delivered load factor is $n_{z,\text{aero}}+n_{z,\text{gear}} = n_{z,\text{cmd}}$, so command
+authority is preserved and the gear has no command authority. This part **holds** a settled state
+once reached: as the gear loads up, $n_{z,\text{gear}}\to1$ and the wing command $\to0$.
 
-$$n_{z,\text{aero}} + n_{z,\text{gear}} = \bigl(n_{z,\text{cmd}} - n_{z,\text{gear}}\bigr) +
-n_{z,\text{gear}} = n_{z,\text{cmd}}.$$
+**(b-ii) Additive axial-acceleration term (OQ-LG-23; open).** On its own, part (b-i) is
+**degenerate**: the gear is a spring whose force depends on how much the wing is already
+supporting, so every split with $n_{z,\text{aero}}+n_{z,\text{gear}}=n_{z,\text{cmd}}$ is
+self-consistent, and the model can rest in the wrong one — the wing floating the aircraft at
+$\approx 0.8\,W$ with the gear barely loaded (measured: gear $0.18\,W$, agl held high). The
+additive term breaks that degeneracy with a **steady, non-degenerate longitudinal signal** that is
+deliberately **not** the raw EOM acceleration: it is the modeled longitudinal-force deficit
+$\bar a_x = \mathrm{LP}[(T - D_\text{aero} - D_\text{wheel}(V) - D_\text{brake})/m]$, where $T$ is
+thrust, $D_\text{aero}$ aerodynamic drag, and $D_\text{wheel}(V)$ a **steady rolling drag modeled
+as a smooth function of ground speed** against a steady normal-load reference (weight), not the
+instantaneous oscillatory gear contact force ($D_\text{brake}$ added with the brake model later).
+The single gain $k_s>0$ converts this to a load-factor increment; the increment is **low-pass
+filtered** and **clipped to $\pm\Delta_{\max}$**; $\Phi_g$ is a ground-engagement fade — a
+**stall-referenced speed smoothstep combined with the WoW signal** ($\Phi_g = S_\text{unload}(V)\cdot
+\mathrm{WoW}$), distinct from the §2a rotation-influence dynamic-pressure fade, with **separate
+landing/takeoff transition speeds** (shared width) — see OQ-LG-23.
 
-The wing supplies only the portion of the commanded load factor that the gear is **not physically
-carrying**; the relaxation never reduces the commanded total. The gear has no command authority.
-Two consequences follow that the integration **must** honor:
+This construction is what keeps the settle loop stable: feeding the **raw** axial acceleration —
+which carries the oscillatory bounce/chatter of the gear and tire contact drag — back into the
+wing lift would close a loop that can wind up into a limit cycle. Using the **steady modeled
+deficit** (smooth in $V$ and $T$, independent of the instantaneous gear force), then **filtering**
+and **clipping** the increment, removes that path: the increment cannot track contact oscillations
+and cannot exceed a bounded lift change. The low-pass also makes the applied vertical force
+**continuous across weight-on-wheels transitions** (no force step at touchdown or liftoff), so the
+WoW factor in $\Phi_g$ can be a raw binary.
 
-- **$n_{z,\text{gear}}$ equals the actual unilateral ground reaction** $\max(0,-F_z^B/(mg))$ (gear
-  strut force, plus any body-collider penalty reaction). It is non-negative (the ground only pushes)
-  and falls continuously to zero as the gear unloads. Feeding the relaxation a value larger than the
-  reaction actually applied — e.g. a constant "full weight" while the gear is unloaded — credits the
-  gear with support it is not providing and silently caps the FBW command. The terrain hard
-  constraint corrects position/velocity rather than applying a force, but it does not zero the strut
-  reaction either; per **OQ-LG-22 (resolved, Alternative 4)** the hard constraint is a pure
-  deep-penetration safety net and does **not** feed the relaxation — $n_{z,\text{gear}}$ tracks the
-  real reaction force only.
-- **A go-around must rotate the aircraft.** With $n_{z,\text{gear}}$ tracking the true reaction, a
-  command above 1 g produces wing lift exceeding the gear's diminishing share; the strut unloads,
-  $n_{z,\text{gear}}\to 0$, the full command is delivered to the wing, and the aircraft rotates and
-  climbs. If the FBW commands $n_z=2$ and the realized normal load factor never exceeds ~1 g while
-  the aircraft sits on the runway with the wing capable of the lift, the relaxation input is wrong
-  (over-credited), not the apportionment model.
+Behavior of the combined law:
 
-$H_1$ is parameterized by its **own** natural frequency and damping
-($\omega_{n,H_1},\zeta_{H_1}$) representing the FBW **load-handoff** timescale — *not* the FBW
-inner command-tracking filter (that filter slews to a commanded load factor; $H_1$ governs the
-weight-transfer onto the gear, a slower outer-loop adaptation). $H_1$ is **slower than the body
-rotational mode $H_2$** ($\omega_{n,H_1} < \omega_{n,H_2}$). $H_1$ is symmetric (a single
-$\omega_n$; no asymmetric engage/release). The **destancing low-pass** in the force channel
-(§2a) is **not an independent parameter** — it shares this timescale,
-$\tau_\text{stance} = 1/\omega_{n,H_1}$, because both isolate the *same* physical quantity (the
-steady gear load that the FBW hands off to the wing).
+- **Landing settle.** During roll-out $T=0$ and $D_\text{aero}+D_\text{wheel}(V)>0$, so $\bar a_x<0$
+  and the additive term sheds wing lift; the gear takes the weight and (b-i) reduces the wing
+  command further and **holds** the settled state (wing $\to0$, gear $\to W$). The shedding persists
+  for the whole roll-out because the speed-based drag persists; as speed bleeds off,
+  dynamic-pressure-limited lift ($L_{\max}=q S C_{L,\max}$) vanishes anyway, so there is no residual
+  float at the stop.
+- **Takeoff rotation.** During the takeoff roll $T>D$, so $\bar a_x>0$ and the additive term builds
+  wing lift as speed builds; the gear unloads, (b-i) hands authority back, and the aircraft rotates
+  and lifts off, after which $\Phi_g\to0$.
+
+**Command authority and smoothness.** In flight $\Phi_g\to0$ **and** $n_{z,\text{gear}}\to0$, so
+$n_{z,\text{shaped}}=n_{z,\text{cmd}}$ exactly — full FBW authority. On the ground the additive
+term is a **phase-appropriate transient** (sheds while decelerating, builds while accelerating)
+that vanishes in steady, zero-deficit roll, where (b-i) alone holds the settle. Being a smooth,
+filtered, clipped function of a steady force deficit rather than a binary contact switch in the
+lift path, the settle and rotation are smooth: no touchdown bounce, no lift snap at liftoff, and
+no oscillatory contact drag fed back into the aerodynamics.
 
 **DC-gain summary:**
 
 | Mechanism | Filter | DC gain | Off-ground behavior |
 | --- | --- | --- | --- |
 | Gear loads → rotation deviation $\Delta\theta$ (→ α/CL + gear geometry) | $H_2$, stable 2nd-order low-pass in the gear inputs | **finite, nonzero** (deflection); **0** in rate | input (gear loads) = 0; state decays to zero via the restoring term — no residual, no switching, never in `q_nw` |
-| Gear force → n_z-command relaxation (load handoff) | $H_1$, 2nd-order | **1** | input (gear load factor) = 0; relaxation decays to zero |
+| Gear reaction → n_z apportionment relaxation (b-i, load handoff) | $H_1$, 2nd-order | **1** | input (gear reaction) = 0 → relaxation decays to zero |
+| Axial acceleration → additive n_z settle/rotation term (b-ii) | gain $k_s$ on $a_x/g$, ground-faded by $\Phi_g(V)$ | **n/a** (proportional bias, not a filter) | $\Phi_g\to 0$ in flight → term vanishes |
 
 The contact model stays **quasi-static / algebraic** (no strut ODE, no implicit contact
 integrator); the only added integrated dynamics are these filters (Tustin / `FilterSS2Clip`),
 and the aircraft EOM stays RK4.
 
-*Parameterization (OQ-LG-17, resolved):* the two filters are parameterized independently from
-different sources. The **rotation-deviation filter $H_2$** is parameterized from **physical
-constants — the inertia tensor** (each axis through its own moment of inertia $I_{xx}/I_{yy}/I_{zz}$;
-the force and moment channels of an axis share that axis's inertia), with natural frequency and
-damping following from the aircraft's physical rotational characteristics. The
-**n_z-relaxation filter $H_1$** is parameterized independently from **FBW characteristics
-($\omega_n,\zeta$)**. They are never co-parameterized with each other. Numeric values are set at
-implementation.
+*Parameterization:* the **rotation-deviation filter $H_2$** (§2a) and the **apportionment filter
+$H_1$** (b-i) are parameterized per OQ-LG-17 — $H_2$ from physical rotational characteristics (the
+inertia tensor, each axis through its own $I_{xx}/I_{yy}/I_{zz}$), $H_1$ from FBW load-handoff
+characteristics. The additive settle/rotation gain $k_s$ and fade $\Phi_g$ (b-ii) are set per
+OQ-LG-23.
 
-*Current implementation status:* the §2 design — the rotation-deviation state $\Delta\theta$
-(force channel $G(s)$ and moment channels $H_2$) and the $H_1$ n_z relaxation — is implemented.
-
-*Known defect (correction pending; regression-guarded by the powered go-around test, §Test
-Strategy):* the relaxation's ground-reaction input is wrong during and after a terrain
-hard-constraint event. When the body-collider hard constraint engages, the code substitutes a
-synthetic full-weight load factor ($n_{z,\text{gear}}=1$) for the actual reaction, gated on a
-persistent `_body_in_hard_contact` flag. That flag's clear condition is **unreachable**:
-`BodyCollider::maxCornerPenetration_m()` returns penetration depth clamped to $[0,\infty)$, while
-the clear test requires a **negative** clearance, so once the flag is set at touchdown it never
-releases. The synthetic full-weight credit therefore persists in flight — capping
-$n_{z,\text{shaped}}$ at $n_{z,\text{cmd}}-1$ with **zero** actual contact force (measured: at
-3.5 m AGL the flag is still set, contact force 0, realized $n_z\approx 1$ under a commanded 2 g),
-which suppresses a go-around: the aircraft accelerates but will not rotate (FPA stays $\approx
-+0.3°$). This violates the command-authority requirement above. **Corrected design (OQ-LG-22,
-resolved — Alternative 4):** (i) $n_{z,\text{gear}}$ tracks the actual ground reaction
-$\max(0,-F_z^B/(mg))$ only — the synthetic full-weight substitution is **removed**; (ii) the
-body-collider terrain hard constraint is a pure deep-penetration safety net and does **not** feed
-the relaxation; (iii) the `_body_in_hard_contact` flag is still corrected to clear on genuine
-separation (signed corner clearance, not the clamped penetration) so `weight_on_wheels` reporting
-is accurate, but it is no longer a relaxation input. Because the hard constraint does not zero the
-strut reaction and `force_body_n` already carries it, this delivers the correct, continuously
-tracking value for a gear-equipped aircraft (see OQ-LG-22 for the gear-less caveat).
+*Implementation status.* Part **(b-i)** — the $H_1$ apportionment relaxation on the actual gear
+reaction (OQ-LG-22, Alternative 4) — is implemented in the code, **and is retained**. The
+`_body_in_hard_contact` flag-lifecycle fix (clear on genuine separation via the signed
+`BodyCollider::minCornerClearance_m()`) is also implemented (committed). What is **not yet
+implemented** is part **(b-ii)**, the additive axial-acceleration term: the relaxation alone is
+degenerate and leaves a floating equilibrium (measured: wing $\approx 0.8\,W$, gear $0.18\,W$, agl
+held high, pitch nose-down), which (b-ii) corrects by breaking the degeneracy. (b-ii) is gated on
+OQ-LG-23 and is guarded by the full-stop "sits on the gear" and powered go-around scenario tests
+(§Test Strategy), which must run against a freshly built binary.
 
 **3. Direct wind-frame moment — `Aircraft6DOF` only.** In the full `Aircraft6DOF` model the
 assembled `moment_body_nm` is applied directly to the rotational EOM with no perturbation
-mapping; the rotation-deviation and n_z-relaxation scheme above is specific to the load-factor
+mapping; the rotation-deviation and n_z load-handoff scheme above is specific to the load-factor
 `Aircraft`.
 
 ### Integration Contract — `Aircraft6DOF`
@@ -1053,13 +1051,14 @@ simulation rate.
 | OQ-LG-12 | ~~Wind-frame moment-axis mapping for OQ-LG-9 implementation~~ **Resolved: wind-y → n_z_moment (pitch), wind-z → Δay (yaw); OQ-LG-9 text corrected** | — |
 | OQ-LG-13 | ~~High-pass filter design for moment perturbation paths~~ **Resolved, then superseded by the OQ-LG-15 gear-F&M integration: the moment→rate high-pass (integrated into `q_nw`) is replaced by a moment→deflection stable low-pass kept as a self-decaying state, not integrated into `q_nw`** | — |
 | OQ-LG-14 | ~~Velocity regularization floor for moment perturbations~~ **Resolved: no floor needed; M^W and perturbations both go as V² near standstill** | — |
-| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2 (parameterization resolved, OQ-LG-17). Design complete and implemented; a relaxation ground-reaction-input defect found during go-around verification is resolved in OQ-LG-22 (Alternative 4) — fix pending implementation, see the §2b implementation note** | — |
+| OQ-LG-15 | ~~LandingGear_FullStop_SpeedNearZero gear–attitude feedback artifact~~ **Resolved: root cause (zero-inertia velocity-slaved attitude sweeping the long-lever-arm nose wheel) diagnosed; fix is the gear-F&M integration (gear-load-driven rotation-deviation state + lagged n_z relaxation), specified in Integration Contract — `Aircraft` §2. Rotation-deviation $\Delta\theta$ (§2a) and the apportionment relaxation (§2b-i, OQ-LG-22) implemented; the implemented relaxation alone leaves a floating equilibrium, fixed by adding the axial-acceleration settle/rotation term (§2b-ii, OQ-LG-23, pending)** | — |
 | OQ-LG-16 | ~~Gear pitch moment has no path into the `Aircraft` load-factor model~~ **Resolved: subsumed by the OQ-LG-15 gear-F&M integration — gear pitch moment is one input to the body rotation-deviation Δθ (self-decaying deflection: stable 2nd-order low-pass, finite DC, not a rate into `q_nw`) → α → CL → realized Nz; implemented as part of OQ-LG-15** | — |
-| OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: H₂ (rotation deviation) from physical rotational characteristics; H₁ (n_z relaxation) from its OWN FBW load-handoff ωₙ/ζ — distinct from the FBW command filter and slower than H₂; the force-channel destancing low-pass is not independent — it shares H₁'s timescale (τ = 1/ωₙ_H₁)** | — |
+| OQ-LG-17 | ~~Filter parameterization for the gear-F&M integration~~ **Resolved: H₂ (rotation deviation) from physical rotational characteristics; H₁ (n_z apportionment relaxation, §2b-i) from its OWN FBW load-handoff ωₙ/ζ — distinct from the FBW command filter and slower than H₂. (The additive axial-accel settle term §2b-ii, OQ-LG-23, also revisits the force-channel destancing timescale that was tied to H₁.)** | — |
 | OQ-LG-18 | ~~Realization of the Δθ force-channel transfer (accumulator free integrator vs. direct filter)~~ **Resolved: Alternative 1 — realize the agreed transfer as a single proper second-order filter on the rate (no free integrator); preserves P1–P4 exactly** | — |
 | OQ-LG-19 | ~~Force-channel input definition: spurious, V→0-unbounded steady Δθ in steady ground roll~~ **Resolved: destanced gear vertical load (Alt A) with a dynamic-pressure authority fade $\Phi(V)$ that emulates aero/FBW authority decay on rollout/takeoff; realized as the C² smootherstep $\Phi(V)=\mathrm{smootherstep}(\mathrm{clamp}(V^2/V_{\text{ref}}^2,0,1))$ shared with OQ-LG-21** | — |
 | OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
 | OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
+| OQ-LG-23 | Parameterization and integration of the additive axial-acceleration settle/rotation term (§2b-ii): single gain $k_s$; the eligible signal (steady modeled thrust−drag−wheel-drag deficit, not raw forces); filtering and clipping of the cross-axis increment; ground fade $\Phi_g$; reconciliation with the §2a force channel | Blocking for the §2b-ii implementation |
 
 ---
 
@@ -2650,6 +2649,11 @@ body-rate correction is removed once (c) is in place.
 
 ### OQ-LG-22 — Ground-Support Representation in the n_z Relaxation During an Active Terrain Hard Constraint *(Resolved)*
 
+> **Scope note.** This resolves how the **apportionment relaxation** (part b-i of the §2b load
+> handoff) reads the ground reaction. That relaxation is **retained**; the separate floating-
+> equilibrium defect is fixed by the *additive* axial-acceleration term (part b-ii, OQ-LG-23),
+> which is layered on top of this relaxation, not a replacement for it.
+
 **Resolution (Alternative 4 — gear strut reaction only; the hard constraint does not feed the n_z
 relaxation).** The n_z relaxation derives $n_{z,\text{gear}}$ from the **actual ground reaction force**
 $\max(0, -F_z^B/(mg))$ in all cases. The body-collider terrain hard constraint reverts to a pure
@@ -2680,13 +2684,162 @@ This is accepted for the load-factor `Aircraft` model, whose intended use is gea
 gear-less load-handoff fidelity is later required, revisit with a measured-equivalent constraint force
 (the former Alternative 3) so every support path is a real force.
 
-**Related correction (still required, now decoupled).** The `_body_in_hard_contact` flag's clear
-condition is unreachable (`maxCornerPenetration_m()` is clamped to $[0,\infty)$ while the clear test
-needs a negative clearance), so the flag latches true after first contact and forces
-`weight_on_wheels = true` in flight. Under this resolution that latch no longer suppresses the FBW
-command (the relaxation reads the actual force, which is zero when airborne), but the flag must still
-be corrected — clear it on genuine separation via a signed corner clearance — so `weight_on_wheels`
-reporting is accurate.
+**Related correction (implemented).** The `_body_in_hard_contact` flag previously latched true
+after first contact — its old clear condition was unreachable (`maxCornerPenetration_m()` is
+clamped to $[0,\infty)$ while the clear test needed a negative clearance) — which forced
+`weight_on_wheels = true` in flight. This is **fixed in the code** (committed): `BodyCollider`
+gained a signed `minCornerClearance_m()`, and step 11 clears the flag once the lowest body corner
+separates from the terrain (clearance above a small margin). Verified: at the resting state the
+flag reads cleared (`hardContact=0`, clearance $\approx +0.086$ m). This correction stands
+independent of the §2b load-handoff replacement.
+
+### OQ-LG-23 — Parameterization and Integration of the Axial-Acceleration Settle/Rotation Term
+
+**Problem.** The §2b load handoff is the **apportionment relaxation** (part b-i, OQ-LG-22,
+$-H_1 n_{z,\text{gear}}$, retained) **plus an additive axial-acceleration settle/rotation term**
+(part b-ii, this question):
+$n_{z,\text{shaped}} = \max(0,\; n_{z,\text{cmd}} - H_1 n_{z,\text{gear}} + \operatorname{clip}(k_s\,(\bar a_x/g)\,\Phi_g(V),\,\pm\Delta_{\max}))$.
+The relaxation alone is degenerate (it can rest in a floating equilibrium); the additive term
+breaks that degeneracy and drives smooth settle and rotation. This question settles how the
+additive term is constructed and parameterized. Terms: $g=9.80665~\text{m/s}^2$; $V$ is ground
+speed; "settle feedback loop" refers to the path lift $\to$ gear normal load $\to$ rolling/brake
+drag $\to$ longitudinal acceleration $\to$ lift.
+
+**Selected so far (user decisions within this still-open question).** The items below are
+**selected**; the question stays open for the facets still marked *Open* (facet 4, and the numeric
+sub-parameters of facets 1–3). Each facet below is tagged **[SELECTED]** or **[OPEN]**.
+- **[SELECTED] Single gain** $k_s$ on the longitudinal-acceleration → vertical-load-factor increment
+  path (symmetric across decelerate/accelerate). *(facet 1, Alt 1)*
+- **[SELECTED] Only steady values are eligible** to feed the cross-axis path. The concern is that
+  oscillatory, bouncing gear/tire contact-drag forces fed back into the aero lift would close a loop
+  that amplifies into a limit cycle. So the signal is **not** the raw EOM acceleration; it is a
+  modeled **thrust−drag deficit**, and the wheel contribution is a **steady rolling drag as a
+  function of forward ground speed** (with braking added later) **substituted for the raw wheel
+  forces**: $\bar a_x = \mathrm{LP}[(T - D_\text{aero} - D_\text{wheel}(V) - D_\text{brake})/m]$,
+  with $D_\text{wheel}(V)$ against a steady normal-load reference (weight), not the instantaneous
+  gear force. The cross-axis path is **low-pass filtered** and the increment **clipped** to
+  $\pm\Delta_{\max}$. *(facet 3, Alt iii)*
+- **[SELECTED] Ground fade** $\Phi_g$ is a **combination of a speed smoothstep and the WoW signal**
+  ($\Phi_g = S_\text{unload}(V)\cdot \mathrm{WoW}$). The speed smoothstep is **distinct from** the
+  OQ-LG-19/21 dynamic-pressure fade used for rotation-influence/attitude modeling: this one emulates
+  the **FBW landing-unload / takeoff-rotation** behavior, so it is a **more tightly acting function
+  near (and slightly above) the stall speed** rather than the broad authority fade. The smoothstep
+  uses **separate transition speeds for landing and takeoff** ($V_\text{land}\neq V_\text{takeoff}$,
+  a phase-dependent/hysteretic center) with a **shared transition width**. *(facet 2, Alt C.)*
+  **[OPEN sub-items]** the numeric transition-speed values and the shared width.
+- **[SELECTED] Keep both the §2a force channel and (b-ii)**, their lift contributions **simply
+  summing — no state switching, mode logic, or hand-off added**. The force channel keeps its full
+  role (attitude/geometry *and* its $\alpha/C_L$ touchdown response); each term's own continuous fade
+  resolves the touchdown overlap. *(facet 4, Alt 1.)* **[OPEN sub-item]** verify the summed touchdown
+  lift in the full-stop test; if unsatisfactory, address by tuning (never by switching).
+
+What remains **open**: the **numeric sub-parameters** and verifications — gain magnitude; the
+landing and takeoff transition speeds and the shared transition width of $S_\text{unload}$; the
+$D_\text{wheel}(V)$ model; the low-pass $\tau$; $\Delta_{\max}$; and the facet-4 touchdown
+double-count check. The facet writeups and alternatives are retained below; the selected option in
+each is tagged.
+
+**(1) Gain $k_s$ and landing/takeoff symmetry. [SELECTED: Alt 1]** A single gain must give both a
+firm settle on a *low-deceleration* roll-out (no brakes: rolling resistance alone) and a
+*non-violent* rotation on a powered takeoff.
+  - **✓ SELECTED — Alt 1 — single symmetric gain.** *Benefit:* one parameter; symmetric. *Open:* the
+    magnitude, tuned against the scenario tests.
+  - *Alt 2 — separate decel and accel gains* (selected on sign). *Benefit:* tunes settle and rotation
+    independently. *Drawback:* a $C^0$ kink at zero unless blended; two parameters.
+  - *Alt 3 — saturating/nonlinear gain.* *Benefit:* bounds the rotation bias while keeping high
+    small-signal gain for settle. *Drawback:* extra shape parameter. *(Largely subsumed by the
+    explicit clip in the direction above.)*
+
+**(2) Ground fade $\Phi_g$. [SELECTED: Alt C structure; sub-params OPEN]** The term must be active
+on the ground in the landing-unload / takeoff-rotation speed regime and zero in flight.
+  - *Alt A — reuse the OQ-LG-19/21 C² dynamic-pressure smootherstep $\Phi(V)$.* **✗ Rejected:** that
+    fade models aero/attitude authority decay (a broad curve, $V_\text{ref}$ at stall); the FBW
+    unload/rotation behavior is a different function — more tightly acting near and slightly above
+    stall — so it must not reuse the rotation-influence fade.
+  - *Alt B — WoW / contact gate alone.* **✗ Insufficient alone:** keyed to contact but not to the
+    speed regime where unload/rotation occurs.
+  - **✓ SELECTED — Alt C — combination $S_\text{unload}(V)\cdot\mathrm{WoW}$, with phase-dependent
+    transition speeds.** A purpose-built speed smoothstep $S_\text{unload}$, tightly acting near and
+    slightly above stall, multiplied by the WoW signal so the term is off both in flight (by either
+    factor) and outside the unload/rotation speed band. **[SELECTED]** the smoothstep has **separate
+    transition-speed parameters for landing and takeoff** ($V_\text{land}\neq V_\text{takeoff}$ — a
+    phase-dependent, hysteretic center) with a **shared transition width**. The **WoW factor may be
+    the raw (binary) signal**: the low-pass on the cross-axis increment (facet 3) ensures the applied
+    vertical force is **continuous across WoW state changes**, so the WoW gate needs no separate
+    smoothing. *Open:* the numeric values of the two transition speeds and the shared width.
+
+**(3) Eligible signal, filtering, and clipping. [SELECTED: Alt iii]** The cross-axis signal must
+exclude oscillatory contact-drag so the lift loop cannot limit-cycle.
+  - *Alt i — raw EOM body-axial acceleration.* **✗ Rejected:** carries gear/tire contact-drag
+    oscillations straight into the lift loop.
+  - *Alt ii — low-pass on raw $a_x$.* **✗ Insufficient alone:** attenuates but does not remove the
+    contact-oscillation content, and adds lag.
+  - **✓ SELECTED — Alt iii — steady modeled deficit $T - D_\text{aero} - D_\text{wheel}(V) -
+    D_\text{brake}$, low-passed and clipped.** *Benefit:* smooth in $V$ and $T$, independent of the
+    instantaneous gear force, so no contact-oscillation feedback; the clip bounds the lift change.
+    The low-pass serves a **second purpose** — it makes the applied vertical force **continuous
+    across WoW state changes** (no force step at touchdown or liftoff), which is why the WoW gate
+    (facet 2) can be a raw binary. *Open:* the steady $D_\text{wheel}(V)$ model, the low-pass $\tau$,
+    and $\Delta_{\max}$.
+
+**(4) Reconciliation with the §2a force channel. [SELECTED: keep both]**
+
+*Background (so this stands alone).* §2a defines a gear-driven body rotation-deviation
+$\Delta\theta$. One of its two drivers is the **force channel**, whose input is the **gear vertical
+load arresting the descent**: at touchdown the gear normal force begins changing the flight-path
+angle at rate $\dot\gamma_\text{arrest}$, and the force-channel transfer $G(s)$ turns that into a
+pitch deviation $\Delta\theta$. That $\Delta\theta$ is then added in **two** places:
+  - $\theta_\text{geom} = \mathrm{FPA} + \alpha_\text{cmd} + \Delta\theta$ — the **attitude /
+    gear-geometry** effect: the body does not instantly follow the gear-induced flight-path swing, so
+    the wheel contact point is not swept through space. This is the OQ-LG-15 fix and is unique to the
+    force channel.
+  - $\alpha_\text{aero} = \alpha_\text{cmd} + \Delta\theta$ — the **aerodynamic** effect:
+    $\Delta\theta$ opens up the angle of attack, which **changes $C_L$ and therefore the wing lift**.
+
+So the §2a force channel **already modulates vertical lift** at touchdown (gear vertical load
+$\to\Delta\theta\to\alpha\to C_L$). The new part (b-ii) **also** modulates vertical lift on the
+ground (axial-deficit settle/rotation term). **Two mechanisms now act on the same physical quantity
+— the wing's lift during touchdown/settle — from two different signals** (gear vertical load vs
+axial deceleration). The force-channel lift effect is *transient* ($G(s)$ is a high-pass complement
+and carries the OQ-LG-19 $\Phi(V)$ fade, so it $\to 0$ in steady roll); (b-ii) is *sustained* through
+the decelerating roll-out — so the overlap is concentrated at the touchdown moment.
+
+*The question.* How are the lift-vs-attitude roles partitioned between the two mechanisms so they do
+not double-count or fight during the touchdown transient?
+
+*Alternatives.*
+  1. **✓ SELECTED — Keep both; their lift contributions simply sum, with no state switching.** The
+     §2a force channel retains its full role (both $\theta_\text{geom}$ and the
+     $\alpha_\text{aero}/C_L$ coupling) and (b-ii) is layered on; the two lift contributions are
+     **added** with no mode logic, arbitration, or hand-off between them. No coordination machinery
+     is needed because each term already carries its **own continuous fade**: the force-channel lift
+     effect is a brief touchdown transient that fades to zero in steady roll (its $G(s)$ high-pass
+     complement and the OQ-LG-19 $\Phi(V)$ fade), while (b-ii) is the sustained settle gated by
+     $\Phi_g$ — so the overlap self-resolves at the touchdown instant without any switch. *Benefit:*
+     keeps the force channel's prompt touchdown $C_L$ response and its anti-sweep attitude role
+     unchanged; no added state or branching. *(The earlier "option 3 — rely on timescale separation"
+     was the same naive sum as this and is merged here.)*
+  2. **✗ Not selected — Narrow the force channel to its attitude role only** — keep $\Delta\theta$ in
+     $\theta_\text{geom}$ (gear geometry, anti-sweep) but **remove its $\alpha_\text{aero}/C_L$
+     coupling**, so (b-ii) is the single lift modulator. *Would give* one clear owner per effect and
+     no double-count, *but* loses the force channel's prompt touchdown $C_L$ response — the user
+     elected to keep that, so this is rejected.
+
+*Decision.* Keep both (Alt 1): the force channel and (b-ii) both modulate lift and their
+contributions **simply sum — no state-switching, mode logic, or hand-off is added to the model**.
+The summed touchdown behavior is confirmed by the full-stop scenario test; if the touchdown lift is
+unsatisfactory it is addressed by **tuning the gains and the existing continuous fades**, never by
+introducing switching.
+
+**Status.** The structural choices are selected (single gain; steady modeled deficit, low-passed and
+clipped; Alt C combination ground fade — a stall-referenced speed smoothstep $\times$ WoW with
+separate landing/takeoff transition speeds and a shared width; **keep both the §2a force channel and
+(b-ii), summing their lift contributions**). What **remains open**: the numeric values ($k_s$, the
+low-pass $\tau$, $\Delta_{\max}$, the landing/takeoff transition speeds and shared width of
+$S_\text{unload}$, the $D_\text{wheel}(V)$ model and coefficients) and the touchdown-lift
+double-count verification — all to be settled by tuning against the two scenario tests (full-stop
+"sits on the gear" and powered go-around "rotates to climb FPA"), which must run against a freshly
+built binary. The question stays open until those are confirmed.
 
 ## Test Strategy
 
@@ -2866,6 +3019,34 @@ Pass criteria:
 - The realized normal load factor follows the command during rotation (it is **not** clamped to
   $\approx 1$ g while the wing is capable of more) — the direct assertion that the gear/relaxation
   is not suppressing the FBW command.
+- Throughout the touchdown and go-around the attitude stays bounded (no tumble): $|\theta|$ never
+  exceeds a steep-but-plausible limit. This is the trajectory-sanity check that endpoint-only
+  assertions missed (a looping trajectory passed the old test).
+
+---
+
+#### Full-Stop Settle — Sits on the Gear
+
+Regression guard for the §2b load handoff: a normal landing must **settle onto the gear**, not
+float on the wing. This is the scenario the gear-force relaxation failed (wing held $\approx
+0.8\,W$, gear $\approx 0.18\,W$, the aircraft floating with the fuselage near the ground). Uses a
+gear- and body-collider-equipped config (e.g. `small_uas_ksba.json`) so the body collider is
+exercised. **Must be measured against a freshly built binary** (a stale extension masked this).
+
+**Test:** `Scenario_FullStopLanding_SettlesOnGear`
+
+Setup: `FlatTerrain`, zero wind, no thrust; approach, touch down, roll to a stop ($n_z=1$).
+
+Pass criteria:
+
+- Once stopped (and through the low-speed roll-out), the **gear carries essentially the full
+  weight**: $\sum -F_z^{B}\!/(m g) \approx 1$ (within tolerance), not a small fraction.
+- The aircraft sits at its **gear-determined ground attitude** (pitch within a small band of the
+  static stance), not a nose-down zero-lift attitude.
+- **No sustained float**: post-touchdown CG AGL settles to the gear's static height and does not
+  hold high on aerodynamic lift; vertical velocity settles to zero without a divergent bounce.
+- The body collider does **not** become the primary support during the roll-out (its corners stay
+  clear of the terrain once the gear is carrying the weight).
 
 ---
 
