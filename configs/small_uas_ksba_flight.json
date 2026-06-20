@@ -2,7 +2,7 @@
     "schema_version": 1,
     "aircraft": {
         "S_ref_m2": 1.021,
-        "cl_y_beta": -0.40,
+        "cl_y_beta": -0.4,
         "ar": 8.07,
         "e": 0.85,
         "cd0": 0.022,
@@ -12,13 +12,28 @@
         "ny_wn_rad_s": 15.0,
         "ny_zeta_nd": 0.7,
         "roll_rate_wn_rad_s": 30.0,
-        "roll_rate_zeta_nd": 0.7
+        "roll_rate_zeta_nd": 0.7,
+        "dtheta_zeta_nd": 0.7,
+        "dtheta_wn_pitch_ratio": 7.34,
+        "dtheta_wn_roll_ratio": 9.79,
+        "dtheta_wn_yaw_ratio": 4.89,
+        "dtheta_vref_ratio": 1.0,
+        "att_filt_tau_ratio": 1.22,
+        "nz_relax_wn_ratio": 2.45,
+        "nz_relax_zeta_nd": 0.8,
+        "settle_gain_nd": 25.0,
+        "settle_clip_nd": 1.0,
+        "settle_tau_ratio": 0.52,
+        "settle_wheel_rr_nd": 0.05,
+        "settle_vland_ratio": 1.0,
+        "settle_vtakeoff_ratio": 1.15,
+        "settle_vwidth_ratio": 0.5
     },
     "airframe": {
         "g_max_nd": 4.0,
         "g_min_nd": -2.0,
         "tas_max_mps": 35.0,
-        "mach_max_nd": 0.10
+        "mach_max_nd": 0.1
     },
     "inertia": {
         "mass_kg": 5.0,
@@ -31,17 +46,17 @@
         "diameter_m": 0.254,
         "pitch_m": 0.178,
         "blade_count": 2,
-        "blade_solidity": 0.10,
+        "blade_solidity": 0.1,
         "dt_s": 0.02,
-        "rotor_tau_s": 0.10,
+        "rotor_tau_s": 0.1,
         "motor": {
             "type": "electric",
             "kv_rps_per_v": 121.5,
             "r_terminal_ohm": 0.05,
-            "inertia_motor_kg_m2": 5e-5,
+            "inertia_motor_kg_m2": 5e-05,
             "supply_voltage_v": 22.2,
             "i_max_a": 40.0,
-            "esc_efficiency_nd": 0.90
+            "esc_efficiency_nd": 0.9
         }
     },
     "load_factor_allocator": {
@@ -49,12 +64,12 @@
     },
     "lift_curve": {
         "cl_alpha": 6.0,
-        "cl_max": 1.60,
-        "cl_min": -0.80,
+        "cl_max": 1.6,
+        "cl_min": -0.8,
         "delta_alpha_stall": 0.175,
         "delta_alpha_stall_neg": 0.175,
-        "cl_sep": 0.90,
-        "cl_sep_neg": -0.50,
+        "cl_sep": 0.9,
+        "cl_sep_neg": -0.5,
         "alpha_max_rad": 0.35,
         "alpha_min_rad": -0.17
     },
@@ -62,9 +77,17 @@
         "substeps": 4,
         "wheel_units": [
             {
-                "_comment": "Nose gear — steerable, no brake",
-                "attach_point_body_m": [0.25, 0.0, 0.15],
-                "travel_axis_body": [0.0, 0.0, 1.0],
+                "_comment": "Nose gear \u2014 steerable, no brake",
+                "attach_point_body_m": [
+                    0.25,
+                    0.0,
+                    0.15
+                ],
+                "travel_axis_body": [
+                    0.0,
+                    0.0,
+                    1.0
+                ],
                 "spring_stiffness_npm": 600.0,
                 "damping_compression_nspm": 17.0,
                 "damping_extension_nspm": 3.0,
@@ -82,8 +105,16 @@
             },
             {
                 "_comment": "Left main gear",
-                "attach_point_body_m": [-0.05, -0.30, 0.15],
-                "travel_axis_body": [0.0, 0.0, 1.0],
+                "attach_point_body_m": [
+                    -0.05,
+                    -0.3,
+                    0.15
+                ],
+                "travel_axis_body": [
+                    0.0,
+                    0.0,
+                    1.0
+                ],
                 "spring_stiffness_npm": 800.0,
                 "damping_compression_nspm": 42.0,
                 "damping_extension_nspm": 8.0,
@@ -91,7 +122,7 @@
                 "orifice_damping_extension_ns2pm2": 5.0,
                 "spring_nonlinearity_nd": 1.5,
                 "preload_n": 0.0,
-                "travel_max_m": 0.10,
+                "travel_max_m": 0.1,
                 "tyre_radius_m": 0.08,
                 "tyre_cornering_stiffness_npm": 3000.0,
                 "tyre_longitudinal_stiffness_npm": 4000.0,
@@ -101,8 +132,16 @@
             },
             {
                 "_comment": "Right main gear",
-                "attach_point_body_m": [-0.05, 0.30, 0.15],
-                "travel_axis_body": [0.0, 0.0, 1.0],
+                "attach_point_body_m": [
+                    -0.05,
+                    0.3,
+                    0.15
+                ],
+                "travel_axis_body": [
+                    0.0,
+                    0.0,
+                    1.0
+                ],
                 "spring_stiffness_npm": 800.0,
                 "damping_compression_nspm": 42.0,
                 "damping_extension_nspm": 8.0,
@@ -110,7 +149,7 @@
                 "orifice_damping_extension_ns2pm2": 5.0,
                 "spring_nonlinearity_nd": 1.5,
                 "preload_n": 0.0,
-                "travel_max_m": 0.10,
+                "travel_max_m": 0.1,
                 "tyre_radius_m": 0.08,
                 "tyre_cornering_stiffness_npm": 3000.0,
                 "tyre_longitudinal_stiffness_npm": 4000.0,
@@ -124,29 +163,53 @@
         "volumes": [
             {
                 "name": "fuselage",
-                "half_extents_body_m":  [0.45, 0.08, 0.07],
-                "center_offset_body_m": [0.0, 0.0, 0.04],
+                "half_extents_body_m": [
+                    0.45,
+                    0.08,
+                    0.07
+                ],
+                "center_offset_body_m": [
+                    0.0,
+                    0.0,
+                    0.04
+                ],
                 "stiffness_npm": 8000.0,
-                "damping_nspm":  400.0
+                "damping_nspm": 400.0
             },
             {
                 "name": "wing",
-                "half_extents_body_m":  [0.08, 1.38, 0.015],
-                "center_offset_body_m": [0.05, 0.0, 0.02],
+                "half_extents_body_m": [
+                    0.08,
+                    1.38,
+                    0.015
+                ],
+                "center_offset_body_m": [
+                    0.05,
+                    0.0,
+                    0.02
+                ],
                 "stiffness_npm": 6000.0,
-                "damping_nspm":  346.0
+                "damping_nspm": 346.0
             },
             {
                 "name": "horizontal_tail",
-                "half_extents_body_m":  [0.05, 0.35, 0.01],
-                "center_offset_body_m": [-0.50, 0.0, 0.01],
+                "half_extents_body_m": [
+                    0.05,
+                    0.35,
+                    0.01
+                ],
+                "center_offset_body_m": [
+                    -0.5,
+                    0.0,
+                    0.01
+                ],
                 "stiffness_npm": 4000.0,
-                "damping_nspm":  283.0
+                "damping_nspm": 283.0
             }
         ]
     },
     "terrain": {
-        "_comment": "Coverage half-side for terrain build — independent of initial_state",
+        "_comment": "Coverage half-side for terrain build \u2014 independent of initial_state",
         "radius_km": 12.0
     },
     "visualization": {
@@ -156,7 +219,7 @@
         "_comment": "KSBA runway 07 threshold, 100 m AGL, 0 deg heading, no gear. altitude_m is WGS84 ellipsoidal (OQ-LS-12 Option A); MSL display only at HUD.",
         "latitude_rad": 0.60073,
         "longitude_rad": -2.09139,
-        "altitude_m": 67.10,
+        "altitude_m": 67.1,
         "heading_rad": 0.0,
         "velocity_north_mps": 14.0,
         "velocity_east_mps": 0.0,

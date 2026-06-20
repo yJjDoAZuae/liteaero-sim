@@ -72,6 +72,44 @@ See [docs/design/aircraft.md §Command Processing Architecture](../design/aircra
 for the filter design, substep mechanics, analytical derivative sourcing, and Nyquist
 constraints.
 
+### Gear-model coupling parameters
+
+These parameters tune how landing-gear forces and moments couple into the load-factor model
+(see [docs/design/landing_gear.md §Integration Contract](../design/landing_gear.md)). They are
+**required** — `Aircraft::initialize()` has no hardcoded default and throws
+`std::invalid_argument` (via `nlohmann::json::at`) if any is missing — and they are all
+**non-dimensional**. Each is a ratio against the aircraft's own physical scale, computed at
+initialization, so the same ratio values are physically correct across airframes that differ in
+size by orders of magnitude (a 5 kg UAS and a heavy transport carry the same ratios but realize
+very different dimensional values). The three scales are:
+
+- **flight speed** `V_stall = √(2 m g / (ρ₀ S_ref CL_max))` (ρ₀ = 1.225 kg/m³)
+- **flight-path frequency** `g / V_stall`
+- **gear contact period** `2π / √(Σ k_spring / m)`, summed over the wheel-unit main springs
+  (the natural scale of the gear bounce/contact dynamics the contact filters reject; configs with
+  no landing gear fall back to the flight time scale `V_stall/g`, where the value is immaterial)
+
+| Field | Type | Realized value | Constraint | Description |
+| ------- | ------ | ------ | ------------ | ------------- |
+| `dtheta_zeta_nd` | float | (pure nd) | > 0 | Damping ratio of the H₂ gear-moment rotation-deviation filters. |
+| `dtheta_wn_pitch_ratio` | float | × `g/V_stall` | > 0 | Pitch rotation-deviation natural frequency. |
+| `dtheta_wn_roll_ratio` | float | × `g/V_stall` | > 0 | Roll rotation-deviation natural frequency. |
+| `dtheta_wn_yaw_ratio` | float | × `g/V_stall` | > 0 | Yaw rotation-deviation natural frequency. |
+| `dtheta_vref_ratio` | float | × `V_stall` | > 0 | Reference speed for the V² authority fade Φ(V). |
+| `att_filt_tau_ratio` | float | × gear period | > 0 | Attitude-reference velocity low-pass τ (OQ-LG-21). |
+| `nz_relax_wn_ratio` | float | × `g/V_stall` | > 0 | H₁ FBW load-handoff natural frequency. |
+| `nz_relax_zeta_nd` | float | (pure nd) | > 0 | H₁ FBW load-handoff damping ratio. |
+| `settle_gain_nd` | float | (pure nd) | > 0 | Gain on the steady axial-deficit (g) → load-factor settle increment (OQ-LG-23). |
+| `settle_clip_nd` | float | (pure nd) | > 0 | Clip (± g) on the settle increment. |
+| `settle_tau_ratio` | float | × gear period | > 0 | Low-pass τ on the steady longitudinal-force deficit ā_x. |
+| `settle_wheel_rr_nd` | float | (pure nd) | > 0 | Steady rolling-drag coefficient for the D_wheel(V) model. |
+| `settle_vland_ratio` | float | × `V_stall` | > 0 | Landing settle-fade transition speed. |
+| `settle_vtakeoff_ratio` | float | × `V_stall` | > 0 | Takeoff rotation-fade transition speed. |
+| `settle_vwidth_ratio` | float | × `V_stall` | > 0 | Shared smoothstep width of the settle fade. |
+
+The H₂ destancing low-pass `dtheta_stance_tau_s` is **not** a configured field: it is derived as
+`1 / (nz_relax_wn_ratio · g/V_stall)` because it shares the H₁ load-handoff timescale.
+
 ---
 
 ## `airframe` Section

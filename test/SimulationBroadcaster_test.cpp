@@ -111,7 +111,14 @@ static const std::string kGaJson = R"({
         "cd0": 0.027, "cmd_filter_substeps": 1,
         "nz_wn_rad_s": 10.0, "nz_zeta_nd": 0.7,
         "ny_wn_rad_s": 10.0, "ny_zeta_nd": 0.7,
-        "roll_rate_wn_rad_s": 20.0, "roll_rate_zeta_nd": 0.7
+        "roll_rate_wn_rad_s": 20.0, "roll_rate_zeta_nd": 0.7,
+        "dtheta_zeta_nd": 0.7, "dtheta_wn_pitch_ratio": 7.34,
+        "dtheta_wn_roll_ratio": 9.79, "dtheta_wn_yaw_ratio": 4.89,
+        "dtheta_vref_ratio": 1.0, "att_filt_tau_ratio": 1.22,
+        "nz_relax_wn_ratio": 2.45, "nz_relax_zeta_nd": 0.8,
+        "settle_gain_nd": 25.0, "settle_clip_nd": 1.0, "settle_tau_ratio": 0.52,
+        "settle_wheel_rr_nd": 0.05, "settle_vland_ratio": 1.0,
+        "settle_vtakeoff_ratio": 1.15, "settle_vwidth_ratio": 0.5
     },
     "airframe": { "g_max_nd": 3.8, "g_min_nd": -1.52,
                   "tas_max_mps": 82.3, "mach_max_nd": 0.25 },

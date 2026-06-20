@@ -370,6 +370,24 @@ rotates and climbs. It is guarded by the full-stop "sits on the gear" and powere
 tests (§Test Strategy), which run against a freshly built binary (the test harness loads the
 build-output extension and refuses to run against a stale one).
 
+*Parameterization (non-dimensional, no hardcoded defaults).* Every knob in this integration
+(§2a/§2b) is a **required, non-dimensional** config field — `Aircraft::initialize()` has no
+dimensional default and throws if any is missing — expressed as a ratio against the aircraft's own
+physical scale, derived at initialization. This makes the same ratios physically correct across
+airframes spanning orders of magnitude in size (a 5 kg UAS and a heavy transport share the ratios
+but realize very different dimensional values): a global dimensional default — e.g. the former
+`dtheta_vref_mps = 24` (a general-aviation stall speed) silently applied to a UAS that flies at
+7–15 m/s, suppressing the authority fade across its whole envelope — is exactly the failure mode
+this removes. The three scales are: **flight speed** $V_{stall}=\sqrt{2mg/(\rho_0 S_{ref} C_{L_{max}})}$
+(for $V_{ref}$ and the settle transition speeds), **flight-path frequency** $g/V_{stall}$ (for the
+$H_2$ rotation-mode and $H_1$ load-handoff natural frequencies — the phugoid/flight-path frequency
+scaling), and the **gear contact period** $2\pi/\sqrt{\sum k_{spring}/m}$ (for the two contact
+filters — the attitude-reference and settle low-passes — whose job is to reject the gear
+bounce/contact limit cycle, a gear-dynamics timescale, *not* a flight timescale). Pure
+non-dimensionals (damping ratios, the settle gain/clip, the rolling-resistance coefficient) carry
+no scale. The full field table is in the
+[aircraft_config_v1 schema — Gear-model coupling parameters](../schemas/aircraft_config_v1.md#gear-model-coupling-parameters).
+
 **3. Direct wind-frame moment — `Aircraft6DOF` only.** In the full `Aircraft6DOF` model the
 assembled `moment_body_nm` is applied directly to the rotational EOM with no perturbation
 mapping; the rotation-deviation and n_z load-handoff scheme above is specific to the load-factor

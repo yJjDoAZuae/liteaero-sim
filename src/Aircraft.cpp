@@ -96,34 +96,60 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _ny_zeta_nd          = ac.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = ac.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = ac.at("roll_rate_zeta_nd").get<float>();
-    _dtheta_zeta_nd        = ac.value("dtheta_zeta_nd", 0.7f);
-    _dtheta_wn_pitch_rad_s = ac.value("dtheta_wn_pitch_rad_s", 3.0f);
-    _dtheta_wn_roll_rad_s  = ac.value("dtheta_wn_roll_rad_s",  4.0f);
-    _dtheta_wn_yaw_rad_s   = ac.value("dtheta_wn_yaw_rad_s",   2.0f);
-    _dtheta_vref_mps       = ac.value("dtheta_vref_mps",       24.0f);
-    // OQ-LG-21 attitude-reference velocity low-pass τ. Sets how heavily per-step gear-bounce
-    // wobble is rejected at low speed while retaining the runway-slope/approach trend.
-    _att_filt_tau_s        = ac.value("att_filt_tau_s",        0.7f);
-    // H₁ load-handoff: its own (slower) parameters, NOT the FBW command filter (nz_wn).
-    _nz_relax_wn_rad_s     = ac.value("nz_relax_wn_rad_s",     1.0f);
-    _nz_relax_zeta_nd      = ac.value("nz_relax_zeta_nd",      0.8f);
-    // Destancing LP shares the H₁ load-handoff timescale (same physical quantity: the steady
-    // gear load), so τ_stance is derived, not configured.
-    _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
-    // OQ-LG-23: additive axial-acceleration settle/rotation term (§2b-ii). Transition speeds are
-    // expressed as multiples of stall speed so they auto-scale per aircraft.
-    _settle_gain_nd        = ac.value("settle_gain_nd",        4.0f);
-    _settle_clip_nd        = ac.value("settle_clip_nd",        1.0f);
-    _settle_tau_s          = ac.value("settle_tau_s",          0.3f);
-    _settle_wheel_rr_nd    = ac.value("settle_wheel_rr_nd",    0.03f);
-    _settle_vland_ratio    = ac.value("settle_vland_ratio",    1.30f);
-    _settle_vtakeoff_ratio = ac.value("settle_vtakeoff_ratio", 1.15f);
-    _settle_vwidth_ratio   = ac.value("settle_vwidth_ratio",   0.40f);
+    // --- Aircraft physical scale: the non-dimensionalization basis for all gear-model knobs ---
+    // V_stall is fixed by the already-specified mass / wing area / CL_max. Every gear-model
+    // parameter below is given in the config as a non-dimensional ratio against this scale, so the
+    // same ratios are physically correct across airframes — a light UAS and a heavy transport share
+    // the ratios but realize very different values through their order-of-magnitude-different
+    // V_stall. No dimensional gear-model default is hardcoded; every ratio is required.
     {
         const float clmax   = std::max(lcp.cl_max, 0.1f);
         const float vstall2 = 2.0f * _inertia.mass_kg * 9.80665f / (1.225f * S_ref_m2 * clmax);
         _stall_speed_mps    = std::sqrt(std::max(vstall2, 1.0f));
     }
+    const float v_scale_mps   = _stall_speed_mps;             // × ratio → flight speed (m/s)
+    const float f_scale_rad_s = 9.80665f / _stall_speed_mps;  // × ratio → flight-path frequency (rad/s)
+    // The two gear-CONTACT filters (attitude-reference and settle low-passes) reject the gear
+    // bounce/contact limit cycle, so their natural scale is the gear contact period, not the flight
+    // scale. Compute the gear vertical natural frequency from the total main-spring stiffness over
+    // the sprung mass: ω_gear = √(Σ k_spring / m), T_gear = 2π/ω_gear. Configs without landing gear
+    // (no contact to filter) fall back to the flight time scale; the value is then immaterial.
+    float gear_k_total_npm = 0.0f;
+    if (config.contains("landing_gear")) {
+        for (const auto& wu : config.at("landing_gear").value("wheel_units", nlohmann::json::array()))
+            gear_k_total_npm += wu.value("spring_stiffness_npm", 0.0f);
+    }
+    const float gear_wn_rad_s = (gear_k_total_npm > 0.0f)
+                                    ? std::sqrt(gear_k_total_npm / _inertia.mass_kg)
+                                    : f_scale_rad_s;
+    const float gear_period_s = 2.0f * 3.14159265f / gear_wn_rad_s;  // × ratio → contact-filter τ (s)
+
+    // H₂ gear-moment rotation-deviation: damping (pure nd) + natural frequencies (× g/V_stall).
+    _dtheta_zeta_nd        = ac.at("dtheta_zeta_nd").get<float>();
+    _dtheta_wn_pitch_rad_s = ac.at("dtheta_wn_pitch_ratio").get<float>() * f_scale_rad_s;
+    _dtheta_wn_roll_rad_s  = ac.at("dtheta_wn_roll_ratio").get<float>()  * f_scale_rad_s;
+    _dtheta_wn_yaw_rad_s   = ac.at("dtheta_wn_yaw_ratio").get<float>()   * f_scale_rad_s;
+    // V_ref for the V² authority fade Φ(V) (× V_stall).
+    _dtheta_vref_mps       = ac.at("dtheta_vref_ratio").get<float>()     * v_scale_mps;
+    // OQ-LG-21 attitude-reference velocity low-pass τ (× gear period): how heavily per-step
+    // gear-bounce wobble is rejected at low speed while retaining the runway-slope/approach trend.
+    _att_filt_tau_s        = ac.at("att_filt_tau_ratio").get<float>()    * gear_period_s;
+    // H₁ FBW load-handoff: natural frequency (× g/V_stall) + damping (pure nd). NOT the FBW command
+    // filter (nz_wn).
+    _nz_relax_wn_rad_s     = ac.at("nz_relax_wn_ratio").get<float>()     * f_scale_rad_s;
+    _nz_relax_zeta_nd      = ac.at("nz_relax_zeta_nd").get<float>();
+    // Destancing LP shares the H₁ load-handoff timescale (same physical quantity: the steady gear
+    // load), so τ_stance is derived, not configured.
+    _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
+    // OQ-LG-23 settle/rotation term (§2b-ii): pure-nd gain / clip / rolling-resistance coeff, a
+    // contact-filter time constant (× gear period), and stall-relative transition speeds (× V_stall).
+    _settle_gain_nd        = ac.at("settle_gain_nd").get<float>();
+    _settle_clip_nd        = ac.at("settle_clip_nd").get<float>();
+    _settle_tau_s          = ac.at("settle_tau_ratio").get<float>()      * gear_period_s;
+    _settle_wheel_rr_nd    = ac.at("settle_wheel_rr_nd").get<float>();
+    _settle_vland_ratio    = ac.at("settle_vland_ratio").get<float>();
+    _settle_vtakeoff_ratio = ac.at("settle_vtakeoff_ratio").get<float>();
+    _settle_vwidth_ratio   = ac.at("settle_vwidth_ratio").get<float>();
     _cmd_filter_dt_s     = outer_dt_s / static_cast<float>(_cmd_filter_substeps);
     // Nyquist: wn * cmd_filter_dt_s must be < π for each axis.
     constexpr float kPi = 3.14159265f;

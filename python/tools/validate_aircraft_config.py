@@ -23,6 +23,28 @@ SCHEMA_VERSION = 1
 
 _AIRCRAFT_FIELDS: list[str] = ["S_ref_m2", "cl_y_beta", "ar", "e", "cd0"]
 
+# Gear-model coupling parameters (landing_gear design §2). All are non-dimensional ratios against
+# the aircraft's own physical scale (V_stall, V_stall/g, g/V_stall) or pure non-dimensionals, so the
+# same values are physically correct across airframes. The C++ Aircraft::initialize() requires every
+# one of these (no hardcoded default); the validator enforces the same. All must be > 0.
+_AIRCRAFT_GEAR_FIELDS: list[str] = [
+    "dtheta_zeta_nd",
+    "dtheta_wn_pitch_ratio",
+    "dtheta_wn_roll_ratio",
+    "dtheta_wn_yaw_ratio",
+    "dtheta_vref_ratio",
+    "att_filt_tau_ratio",
+    "nz_relax_wn_ratio",
+    "nz_relax_zeta_nd",
+    "settle_gain_nd",
+    "settle_clip_nd",
+    "settle_tau_ratio",
+    "settle_wheel_rr_nd",
+    "settle_vland_ratio",
+    "settle_vtakeoff_ratio",
+    "settle_vwidth_ratio",
+]
+
 _AIRFRAME_FIELDS: list[str] = ["g_max_nd", "g_min_nd", "tas_max_mps", "mach_max_nd"]
 
 _INERTIA_FIELDS: list[str] = ["mass_kg", "Ixx_kgm2", "Iyy_kgm2", "Izz_kgm2"]
@@ -124,6 +146,7 @@ def validate(config: dict) -> None:
 
     # -- required fields and types ----------------------------------------
     _check_fields(aircraft, _AIRCRAFT_FIELDS, "aircraft")
+    _check_fields(aircraft, _AIRCRAFT_GEAR_FIELDS, "aircraft")
     _check_fields(airframe, _AIRFRAME_FIELDS, "airframe")
     _check_fields(inertia, _INERTIA_FIELDS, "inertia")
     _check_fields(lift_curve, _LIFT_CURVE_FIELDS, "lift_curve")
@@ -150,6 +173,9 @@ def validate(config: dict) -> None:
         raise ValueError(
             f"'cd0' must be > 0, got {aircraft['cd0']}."
         )
+    for field in _AIRCRAFT_GEAR_FIELDS:
+        if aircraft[field] <= 0:
+            raise ValueError(f"'{field}' must be > 0, got {aircraft[field]}.")
 
     # -- range checks: airframe -------------------------------------------
     if airframe["g_max_nd"] <= 0:

@@ -2,23 +2,38 @@
     "schema_version": 1,
     "aircraft": {
         "S_ref_m2": 15.8,
-        "cl_y_beta": -0.90,
+        "cl_y_beta": -0.9,
         "ar": 3.75,
         "e": 0.82,
-        "cd0": 0.020,
+        "cd0": 0.02,
         "cmd_filter_substeps": 1,
         "nz_wn_rad_s": 20.0,
         "nz_zeta_nd": 0.7,
         "ny_wn_rad_s": 20.0,
         "ny_zeta_nd": 0.7,
         "roll_rate_wn_rad_s": 40.0,
-        "roll_rate_zeta_nd": 0.7
+        "roll_rate_zeta_nd": 0.7,
+        "dtheta_zeta_nd": 0.7,
+        "dtheta_wn_pitch_ratio": 7.34,
+        "dtheta_wn_roll_ratio": 9.79,
+        "dtheta_wn_yaw_ratio": 4.89,
+        "dtheta_vref_ratio": 1.0,
+        "att_filt_tau_ratio": 1.22,
+        "nz_relax_wn_ratio": 2.45,
+        "nz_relax_zeta_nd": 0.8,
+        "settle_gain_nd": 25.0,
+        "settle_clip_nd": 1.0,
+        "settle_tau_ratio": 0.52,
+        "settle_wheel_rr_nd": 0.05,
+        "settle_vland_ratio": 1.0,
+        "settle_vtakeoff_ratio": 1.15,
+        "settle_vwidth_ratio": 0.5
     },
     "airframe": {
         "g_max_nd": 7.33,
         "g_min_nd": -3.0,
         "tas_max_mps": 370.0,
-        "mach_max_nd": 1.30
+        "mach_max_nd": 1.3
     },
     "inertia": {
         "mass_kg": 5500.0,
@@ -28,12 +43,12 @@
     },
     "lift_curve": {
         "cl_alpha": 4.5,
-        "cl_max": 1.40,
-        "cl_min": -0.80,
+        "cl_max": 1.4,
+        "cl_min": -0.8,
         "delta_alpha_stall": 0.209,
         "delta_alpha_stall_neg": 0.209,
-        "cl_sep": 0.90,
-        "cl_sep_neg": -0.50
+        "cl_sep": 0.9,
+        "cl_sep_neg": -0.5
     },
     "propulsion": {
         "type": "jet",

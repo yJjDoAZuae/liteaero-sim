@@ -893,6 +893,34 @@ single base model eliminate this drift class entirely.
 
 ---
 
+## Config-2. Complete `validate_aircraft_config.py` Field Coverage
+
+**Blocking dependencies:** none.
+
+**Design authority:** [`docs/schemas/aircraft_config_v1.md`](../schemas/aircraft_config_v1.md).
+
+The Python config validator (`python/tools/validate_aircraft_config.py`) checks only a subset of
+the `aircraft` section. The gear-model coupling parameters are now validated (added with the
+non-dimensional parameterization), but the **command-response filter fields**
+(`cmd_filter_substeps`, `nz_wn_rad_s`, `nz_zeta_nd`, `ny_wn_rad_s`, `ny_zeta_nd`,
+`roll_rate_wn_rad_s`, `roll_rate_zeta_nd`) are required by `Aircraft::initialize()` but are **not**
+checked by the validator. A config missing one passes validation yet throws at C++ initialization.
+The validator should enforce every field the schema documents (and the C++ requires), with the
+appropriate range/Nyquist checks, so validation is a faithful pre-flight of construction.
+
+### Deliverables — validator field coverage
+
+- Add the command-filter fields to the validator's required-field list with range checks
+  (`cmd_filter_substeps` ≥ 1 int; frequencies and damping ratios > 0).
+- Audit the validator against the full `aircraft_config_v1` schema for any other gaps.
+
+### Tests — validator field coverage
+
+- Per-field "missing raises" parametrized tests for each command-filter field.
+- A test asserting every field required by the schema is enforced by the validator.
+
+---
+
 ## PP-3. LiveTimeHistoryFigure
 
 **Blocking dependencies:** SB-2 (ring buffer — live data source), Log-1 (logging
