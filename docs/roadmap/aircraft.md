@@ -840,6 +840,59 @@ None — design-only item. Implementation is a separate follow-on item.
 
 ---
 
+## Config-1. Scenario Configuration Layering — Base Aircraft Models + Scenario Overlays
+
+**Blocking dependencies:** None — may begin once the design document (the first deliverable)
+is produced.
+
+**Design authority:** `docs/design/scenario_configuration.md` (to be produced — defines the
+reference and merge semantics; this design document is the first deliverable of this item).
+References the field schema in [`docs/schemas/aircraft_config_v1.md`](../schemas/aircraft_config_v1.md).
+
+A configuration system in which a scenario-specific config (a particular aircraft at a
+particular runway or location) **references a base aircraft model** and carries **only the
+values it adds or overrides** — never a copy of the aircraft's aerodynamic, inertia, or
+lift-curve coefficients. Changing the location, or attaching scenario elements (terrain,
+landing gear, body collider, visualization, initial state), must not duplicate the base
+model's physics parameters; each aircraft's physics has a single source of truth.
+
+Motivation: the current `configs/*_ksba.json` scenario files are full hand-copies of the base
+models in `python/assets/aircraft_configs/`, so the two drift independently. That drift has
+already caused defects — the `_ksba` configs silently lost their propulsion sections while the
+base models retained engines (the go-around / FBW-command failure; see
+[`landing_gear.md` OQ-LG-22](../design/landing_gear.md)). Scenarios as thin overlays over a
+single base model eliminate this drift class entirely.
+
+### Deliverables — Scenario Configuration Layering
+
+- Design document defining: the reference/merge mechanism (a scenario config names a base
+  model and supplies a deep-merge/override of added and changed keys), conflict and validation
+  rules, how `schema_version` is reconciled across layers, and the resolved-config form passed
+  to `Aircraft::initialize` and `make_propulsion`.
+- A loader that resolves a scenario config against its referenced base model into a single
+  validated config, used uniformly by the Python binding, `live_sim`, and `build_terrain`.
+- Migration of the existing scenarios (`general_aviation_ksba`, `jet_trainer_ksba`,
+  `small_uas_ksba`, `small_uas_ksba_flight`) to overlays carrying only scenario additions
+  (`terrain`, `landing_gear`, `body_collider`, `visualization`, scenario `initial_state`) and
+  overrides — with aerodynamic/inertia/lift-curve/propulsion coefficients sourced from the base
+  models in `python/assets/aircraft_configs/`.
+- Reconciliation of the base-model location (`python/assets/aircraft_configs/`) and the
+  scenario location (`configs/`), with a short README in each documenting the base-vs-scenario
+  convention.
+
+### Tests — Scenario Configuration Layering
+
+- Merge/resolution unit tests: a base + overlay resolves to the expected combined config;
+  overrides replace base values; scenario-only sections are added; no base coefficients appear
+  in the overlay source.
+- Migration equivalence tests: each migrated scenario resolves to a config that constructs an
+  `Aircraft` equivalent (within tolerance) to the pre-migration hand-copied config.
+- Validation tests: a scenario referencing a missing base model, or resolving to an invalid
+  config, fails with a clear error.
+- Resolved-config JSON round-trip.
+
+---
+
 ## PP-3. LiveTimeHistoryFigure
 
 **Blocking dependencies:** SB-2 (ring buffer — live data source), Log-1 (logging
