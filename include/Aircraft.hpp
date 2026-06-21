@@ -89,6 +89,13 @@ public:
     const LandingGear& landingGear() const { return _landing_gear; }
     bool hasLandingGear() const { return _has_landing_gear; }
 
+    // Most-recent aerodynamic-solver outputs (instrumentation / scenario notebooks).
+    // cl_eff is the effective lift coefficient actually applied: the nominal lift-curve value in
+    // attached flow, or the rate-limited value during stall recovery (see LoadFactorAllocator).
+    float clEff()         const { return _cl_eff; }
+    bool  isStalled()     const { return _aero_stalled; }       // positive- or negative-side stall
+    bool  isClRecovering() const { return _cl_recovering_active; }
+
     // Serialize / deserialize warm-start state.
     // Note: deserializeJson() restores _propulsion state via _propulsion->deserializeJson()
     // but does not reconstruct the propulsion model itself — the correct Propulsion
@@ -178,6 +185,11 @@ private:
     float  _stall_speed_mps       = 1.0f;   // computed at init from W, S_ref, CL_max
     float  _settle_axbar          = 0.f;    // low-pass state of ā_x (serialized)
     float  _prev_aero_drag_n      = 0.f;    // previous-step aerodynamic drag magnitude (serialized)
+    // Most-recent allocator outputs, cached for instrumentation accessors (not serialized —
+    // recomputed every step from the LFA solve).
+    float  _cl_eff                = 0.f;
+    bool   _aero_stalled          = false;
+    bool   _cl_recovering_active  = false;
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

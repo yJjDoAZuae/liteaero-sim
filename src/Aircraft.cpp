@@ -287,6 +287,9 @@ void Aircraft::reset() {
     _v_filt_init = false;
     _settle_axbar = 0.f;
     _prev_aero_drag_n = 0.f;
+    _cl_eff = 0.f;
+    _aero_stalled = false;
+    _cl_recovering_active = false;
     _body_in_hard_contact = false;
 }
 
@@ -496,6 +499,10 @@ void Aircraft::step(double time_sec,
     lfa_in.n_y_dot  = n_y_dot;
     lfa_in.dt_s     = _outer_dt_s;
     const LoadFactorOutputs lfa_out = _allocator->solve(lfa_in);
+    // Cache aerodynamic-solver outputs for instrumentation accessors.
+    _cl_eff               = lfa_out.cl_eff;
+    _aero_stalled         = lfa_out.stalled || lfa_out.stalled_neg;
+    _cl_recovering_active = lfa_out.cl_recovering;
 
     // 6. Lift coefficient (effective CL accounts for stall and recovery)
     const float cl = lfa_out.cl_eff;

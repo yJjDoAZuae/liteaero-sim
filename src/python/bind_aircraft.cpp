@@ -324,6 +324,16 @@ void bind_aircraft(py::module_& m)
              },
              "Height above ground level (m) at the current CG position.\n\n"
              "Returns -1 if no terrain has been set via set_terrain().")
+        .def_property_readonly("cl_eff",
+             [](const PyAircraft& self) { return self.aircraft->clEff(); },
+             "Effective lift coefficient applied on the most recent step(): the nominal lift-curve\n"
+             "value in attached flow, or the rate-limited value during stall recovery.")
+        .def_property_readonly("is_stalled",
+             [](const PyAircraft& self) { return self.aircraft->isStalled(); },
+             "True if the wing was stalled (positive- or negative-side) on the most recent step().")
+        .def_property_readonly("is_cl_recovering",
+             [](const PyAircraft& self) { return self.aircraft->isClRecovering(); },
+             "True while the post-stall CL recovery rate-limit is active.")
         .def("gear_strut_states",
              [](const PyAircraft& self) -> std::vector<StrutState> {
                  if (!self.aircraft->hasLandingGear()) return {};

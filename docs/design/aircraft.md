@@ -670,52 +670,68 @@ its full configuration and internal state.
        n_z_dot = derived analytically from _nz_filter.x(), .phi(), .gamma(), .h(), .j()
        n_y_dot = derived analytically from _ny_filter.x(), .phi(), .gamma(), .h(), .j()
 
-6. LoadFactorInputs lf_in {
-       .n_z      = n_z_shaped,
-       .n_y      = n_y_shaped,
-       .q_inf    = q_inf,
-       .thrust_n = T_prev,
-       .mass_kg  = _inertia.mass_kg,
-       .n_z_dot  = n_z_dot,
-       .n_y_dot  = n_y_dot
-   }
+   R_nb, R_nw = _state.q_nb(), q_nw() rotation matrices (reused in 5c and 10)
+
+5a. Contact forces on the CURRENT (pre-integration) pose — one-step lag:
+       contact = _landingGear->step(...) ⊕ _bodyCollider->step(...)    // body frame
+    Computed before the LFA so steps 5b/5c can use this step's gear reaction.
+
+5b. Gear → n_z command handoff (landing_gear.md §2b). On weight-on-wheels, the shaped n_z is
+    relaxed by the gear's share of the load and biased by the steady axial-force deficit so the
+    aircraft settles onto the gear / rotates on takeoff:
+       n_z_shaped = max(0,  n_z_shaped − H₁·n_z_gear + clip(k_s·(ā_x/g)·Φ_g, ±Δ_max))
+    (H₁ = apportionment relaxation; the clip term = OQ-LG-23 axial-acceleration settle term.)
+
+5c. Gear → rotation-deviation Δθ (landing_gear.md §2a). The gear vertical load (destanced, force
+    channel G(s)) and gear moments (M/I, moment channel H₂), faded by the V² authority Φ(V),
+    produce a body rotation deviation:
+       Δθ_pitch → feeds α (step 10) and the gear geometry next step
+       Δθ_roll, Δθ_yaw → body-rate increments delta_rr, delta_ay (steps 13 / 10)
+
+6. LoadFactorInputs lf_in { n_z_shaped, n_y_shaped, q_inf, T_prev, _inertia.mass_kg,
+                            n_z_dot, n_y_dot, dt }
    // alpha_min_rad / alpha_max_rad enforced as box constraint inside solve():
-   LoadFactorOutputs lf = _allocator->solve(lf_in)
+   LoadFactorOutputs lf = _allocator->solve(lf_in)   // → alpha_rad, beta_rad, cl_eff, αDot, βDot
 
 7. float CL = lf.cl_eff   // effective CL from the allocator: nominal in attached flow,
    //                        rate-limited during stall recovery (see §Stall Recovery)
 
 8. AeroForces F = _aeroPerf->compute(lf.alpha_rad, lf.beta_rad, q_inf, CL)
    // F.x_n < 0 (drag),  F.y_n (side force),  F.z_n < 0 (lift upward)
+   _prev_aero_drag_n = max(0, -F.x_n)   // stored for next step's §5b settle deficit
 
-8b. ContactForces G = _landingGear->step(...)  // body frame; also _bodyCollider->step()
+9. float T = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3)   // outer rate
 
-9. float T  = _propulsion->step(cmd.throttle_nd, V_air, rho_kgm3)   // outer rate
-
-10. float cα = cosf(lf.alpha_rad),  sα = sinf(lf.alpha_rad)
-    float cβ = cosf(lf.beta_rad),   sβ = sinf(lf.beta_rad)
-    // Contact forces rotated from body frame to Wind frame via R_nw^T * R_nb
-    Eigen::Vector3f a_Wind {
-        (T * cα * cβ  + F.x_n + G_wind.x()) / _inertia.mass_kg,
-        (-T * cα * sβ + F.y_n + G_wind.y()) / _inertia.mass_kg,
-        (-T * sα      + F.z_n + G_wind.z()) / _inertia.mass_kg
+10. alpha_body = lf.alpha_rad + Δθ_pitch      // body attitude carries the gear rotation deviation
+    cα,sα = cos/sin(alpha_body);  cβ,sβ = cos/sin(lf.beta_rad)
+    // Lift clamp: the wing may not produce more upward lift than the LFA commanded; the gear
+    // carries the rest. With n_z_shaped → 0 on the ground this is zero aero lift, not downforce.
+    F_z_aero = max(F.z_n, -(n_z_shaped * m * g))
+    // Contact forces G_wind = R_nw^T·R_nb·contact.force_body; g_wind = R_nw^T·g_NED
+    a_Wind {
+        ( T*cα*cβ + F.x_n   + G_wind.x()) / m + g_wind.x(),
+        (-T*cα*sβ + F.y_n   + G_wind.y()) / m + g_wind.y() + delta_ay,
+        (-T*sα    + F_z_aero + G_wind.z()) / m + g_wind.z()
     }
 
-11. _state.stepPV(time_sec, a_Wind,
-                  lf.alpha_rad, lf.beta_rad,
-                  lf.alphaDot_rps, lf.betaDot_rps,
+11. _state.stepPV(time_sec, a_Wind, alpha_body, lf.beta_rad, lf.alphaDot_rps, lf.betaDot_rps,
                   wind_NED_mps)
-    // Integrates position and velocity via RK4; captures v_prev internally.
-    // Does NOT update q_nw or body rates yet.
+    // RK4 position/velocity; stores the recorded alpha as alpha_body. Does NOT update q_nw yet.
 
-12. if (_bodyCollider->maxCornerPenetration_m() > 0)
-        _state.applyTerrainHardConstraint(_bodyCollider->maxCornerPenetration_m())
-    // Terrain constraint applied here — after position/velocity integration but
-    // before attitude update — so q_nw always sees the truly final velocity.
+12. Post-integration terrain hard constraint: re-run the body collider on the integrated pose; if
+    penetrating, _state.applyTerrainHardConstraint(pen) and set weight-on-wheels; clear the
+    hard-contact latch on genuine separation (BodyCollider::minCornerClearance_m).
 
-13. _state.commitAttitude(roll_rate_shaped, dt_s)
-    // Updates q_nw and derives body rates from the final (constrained) velocity.
+13. _state.commitAttitude(roll_rate_shaped + delta_rr, dt_s, v_att_ref)
+    // OQ-LG-21: v_att_ref = Φ(V)·v_final + (1−Φ(V))·LP(v_final) — a dynamic-pressure blend of the
+    // instantaneous and low-pass-filtered final velocity. At speed Φ→1 (raw velocity); toward stop
+    // Φ→0 (filtered), rejecting per-step gear-bounce wobble. Updates q_nw and the body rate.
 ```
+
+Steps 5a–5c and the Δθ / n_z-handoff terms are specific to the load-factor `Aircraft`; their
+models, symbols, and parameterization are the authoritative subject of
+[landing_gear.md §Integration Contract](landing_gear.md). `Aircraft6DOF` applies the assembled
+gear force/moment directly to the 6-DOF EOM instead.
 
 > **Why the split?** Calling `stepQnw` (the q_nw update) on the pre-constraint velocity
 > and then modifying velocity via `applyTerrainHardConstraint` breaks the invariant
@@ -751,13 +767,6 @@ realized rate is `alpha_dot_max_ratio · g/V_stall`, so the reattachment rate sc
 [schema](../schemas/aircraft_config_v1.md#load_factor_allocator-section)). The recovery flags
 (`recovering`, `recovering_neg`) and effective-CL state (`cl_recovering`, `cl_recovering_neg`) are
 warm-start state (serialized JSON + proto).
-
-> **Note — step-order coverage.** The step list above predates the landing-gear force-&-moment
-> integration (rotation-deviation Δθ, the n_z apportionment-relaxation and axial settle terms) and
-> the OQ-LG-21 velocity-referenced attitude commit. Those are the authoritative subject of
-> [landing_gear.md §Integration Contract](landing_gear.md) and are not yet reflected in this
-> abbreviated order; steps 6–13 here show the no-gear flight path. Reconciling this step list with
-> the gear-coupled `step()` is tracked design-documentation debt.
 
 ### Wind-Frame Force Decomposition
 
@@ -936,7 +945,7 @@ self-contained — a caller must not need to call `initialize()` before or after
 | Component | Internal state | What is serialized |
 | --- | --- | --- |
 | `KinematicState` | Yes | Full state — position, velocity, attitude |
-| `LoadFactorAllocator` | Yes — `_alpha_prev`, `_beta_prev` | Config + warm-start α, β |
+| `LoadFactorAllocator` | Yes — `_alpha_prev`, `_beta_prev`, stall + CL-recovery state (`stalled[_neg]`, `recovering[_neg]`, `cl_recovering[_neg]`) | Config + warm-start α, β, stall/recovery |
 | `Propulsion` | Yes — filter state, `_thrust_n` | Config + engine-specific state |
 | `LiftCurveModel` | No | Config params only |
 | `AeroPerformance` | No | Config params only |
