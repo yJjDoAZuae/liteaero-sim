@@ -387,7 +387,7 @@ void Aircraft::step(double time_sec,
     //     carries. (The earlier synthetic full-weight input under _body_in_hard_contact
     //     was removed — it over-credited the ground and, via a latched flag, capped a
     //     go-around at n_z_cmd-1 with zero contact force.)
-    float nz_relax_dbg = 0.f;
+    float nz_relax = 0.f;   // H₁ apportionment-relaxation term (gear's filtered load-factor share)
     {
         // (b-i) apportionment relaxation on the ACTUAL gear reaction (OQ-LG-22; retained).
         float nz_gear_input = 0.f;
@@ -395,7 +395,7 @@ void Aircraft::step(double time_sec,
             nz_gear_input = std::max(0.f,
                 -contact_forces.force_body_n.z() / (_inertia.mass_kg * kGravity_mps2));
         }
-        nz_relax_dbg = _nz_relax_filter.step(nz_gear_input);
+        nz_relax = _nz_relax_filter.step(nz_gear_input);
 
         // (b-ii) additive axial-acceleration settle/rotation term (OQ-LG-23). The eligible signal
         // is the STEADY modeled longitudinal-force deficit
@@ -424,7 +424,7 @@ void Aircraft::step(double time_sec,
         settle_incr          = std::clamp(settle_incr, -_settle_clip_nd, _settle_clip_nd);
 
         // Combine both load-handoff parts before the single non-negativity clamp.
-        n_z_shaped = std::max(0.0f, n_z_shaped - nz_relax_dbg + settle_incr);
+        n_z_shaped = std::max(0.0f, n_z_shaped - nz_relax + settle_incr);
     }
 
     // 5c. Δθ rotation-deviation state (OQ-LG-15/16/17/18/19/20).
@@ -557,28 +557,6 @@ void Aircraft::step(double time_sec,
     const float ax = (T * ca * cb + F.x_n + F_gear_wind.x()) / m + g_wind.x();
     const float ay = (-T * ca * sb + F.y_n + F_gear_wind.y()) / m + g_wind.y() + delta_ay_filt_mps2;
     const float az = (-T * sa      + F_z_aero + F_gear_wind.z()) / m + g_wind.z();
-
-    // DBG-FULLSTOP: print forces for the first 5 s, and at late time (>87 s) every 0.1s.
-    if (_has_landing_gear && (time_sec < 5.0 || time_sec > 87.0)) {
-        const float alt_now = _state.positionDatum().height_WGS84_m();
-        const float vD_now  = _state.velocity_NED_mps().z();
-        const float vN_now  = _state.velocity_NED_mps().x();
-        const bool  wow     = contact_forces.weight_on_wheels;
-        static double s_next_print = 0.0;
-        if (time_sec >= s_next_print) {
-            const Eigen::Quaternionf q_nb_dbg(_state.q_nb());
-            const Eigen::Matrix3f R_nb_dbg = q_nb_dbg.toRotationMatrix();
-            const float pitch_deg = std::asin(-R_nb_dbg(0, 2)) * 57.2958f;
-            printf("  [t=%.2f] alt=%.4f vN=%.4f vD=%.4f nzrelax=%.3f nzshp=%.3f"
-                   " dthp=%.4f Fwz=%.0f Fwx=%.0f az=%.3f ax=%.4f pitch=%.2f wow=%d\n",
-                   (float)time_sec, alt_now, vN_now, vD_now,
-                   nz_relax_dbg,
-                   n_z_shaped, dtheta_pitch,
-                   F_gear_wind.z(), F_gear_wind.x(),
-                   az, ax, pitch_deg, (int)wow);
-            s_next_print = time_sec + 0.1;
-        }
-    }
 
     // 10. Advance position and velocity. Attitude is committed after the terrain
     //     constraint so that stepQnw always sees the truly final velocity.

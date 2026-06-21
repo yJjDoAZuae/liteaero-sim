@@ -1069,6 +1069,83 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 
 ---
 
+## Open Questions
+
+| ID | Summary | Status |
+| --- | --- | --- |
+| OQ-AC-1 | Whether/how the load-factor `Aircraft` should depart into a post-stall regime from flight commands (the allocator currently caps at CL_max) | Blocking — blocks the stall-recovery scenario notebook and any flown-stall behavior |
+
+### OQ-AC-1 — Stall departure for the load-factor model
+
+**Problem.** `LoadFactorAllocator` is a *steady* allocator: it solves for the α that delivers the
+commanded `n_z` and, at the CL_max fold (`f'(α) ≈ 0`), caps α just below the stall peak and reports
+the maximum achievable `n_z` (the "fold guard",
+[LoadFactorAllocator.cpp:86-93](../../src/aerodynamics/LoadFactorAllocator.cpp#L86)). Verified
+empirically (small_uas, dt = 0.01): a power-off deceleration with a pull, and a power-on sustained
+2 g pull (α reaching the peak, the aircraft looping, speed swinging 1.1–4.8× stall) **never** trip
+the stall hysteresis — α pins at ≈ the peak (≈ 20°) with `cl_eff = cl_max`. Raising the FBW α-limiter
+`alpha_max` to 34° does not help: the box-to-`alpha_max` snap
+([line 98](../../src/aerodynamics/LoadFactorAllocator.cpp#L98)) only fires when
+`alpha_max < alphaSep`, and above that the fold guard stops α at the peak regardless. Consequently
+the stall/recovery machinery (the CL rate-limit, `cl_recovering`, the `recovering` gating — see
+§Stall Recovery) is **unreachable from flight commands**; it triggers only via direct state
+injection (the `injectStalledState` unit-test path). This blocks a flown stall-recovery scenario.
+
+The question: should the load-factor `Aircraft` be able to depart into the post-stall (separated)
+regime from flight commands, and if so, by what mechanism?
+
+**Alternatives.**
+
+1. **`n_z` over-demand drives α past the peak (separated-branch departure).** When `n_z` demand
+   exceeds the achievable maximum (over-demand at the fold), α advances past the peak — rate-limited
+   by the existing `alpha_dot_max` bridge — toward the deep-stall α (the `alpha_max` box); `cl`
+   follows the lift curve's separated branch **down** toward `cl_sep`, the wing loses lift, and the
+   aircraft departs. The α-limiter (`alpha_max`) is the stall protection: departure requires
+   `alpha_max` set above the stall peak. Recovery reuses the existing hysteresis + `cl_recovering`
+   rate-limit.
+   - *Benefits:* reuses the existing stall hysteresis, plateau, and (just-fixed) recovery machinery;
+     the trigger is intrinsic to the load-factor command; envelope protection is the existing
+     α-limiter (no new concept); minimal new state.
+   - *Drawbacks:* the departure α target and rate need definition (proposed: ramp to `alpha_max` at
+     `alpha_dot_max`), which conflates the α-limiter with the deep-stall depth; the over-demand → α
+     mapping is a modeling abstraction, not a first-principles elevator/pitch command.
+   - *Prerequisite:* solver change + a config with `alpha_max` above the peak.
+
+2. **Explicit α / pitch-rate command channel.** Add a command path that drives α directly,
+   independent of `n_z`, so a pull past the critical angle is a first-class input.
+   - *Benefits:* physically faithful — stall entry is an α/elevator phenomenon, not an `n_z` one;
+     decouples stall entry from the load-factor abstraction.
+   - *Drawbacks:* a new command modality (today: `n_z`, `n_y`, roll-rate only); larger interface and
+     scenario change; overlaps conceptually with the role of `Aircraft6DOF`.
+   - *Prerequisite:* command-interface design for an α/pitch channel.
+
+3. **Notebook injects the stall state (no model change).** Expose a binding to set the allocator's
+   stalled state (like `injectStalledState`) and demonstrate recovery from an injected stall.
+   - *Benefits:* smallest change; exercises the recovery dynamics; no flight-dynamics risk.
+   - *Drawbacks:* not a *flown* stall — does not demonstrate departure; the unreachability-from-flight
+     remains.
+   - *Prerequisite:* a state-injection binding.
+
+4. **Accept the CL_max cap as intended envelope protection (no flown stall).** Treat the load-factor
+   model as inherently stall-protected; flown departures are out of scope and deferred to
+   `Aircraft6DOF`.
+   - *Benefits:* no change; the load-factor model stays a clean maneuver/envelope model.
+   - *Drawbacks:* the stall/recovery machinery remains reachable only by tests; no stall-recovery
+     scenario is possible.
+   - *Prerequisite:* none.
+
+**Recommendation.** Alternative 1. It reuses the recovery machinery just put in place, the trigger
+(`n_z` over-demand) is intrinsic to the load-factor command model, and envelope protection is the
+existing α-limiter rather than a new concept. Two sub-decisions to settle at implementation: (a) the
+departure α target and rate — recommend ramping toward `alpha_max` at `alpha_dot_max`, so `alpha_max`
+defines the deep-stall depth; and (b) whether to gate departure on a config flag or purely on
+`alpha_max` being set above the peak. Alternative 2 is the most physically faithful but is a larger
+command-interface change better suited to `Aircraft6DOF`.
+
+**Status:** Open — awaiting decision.
+
+---
+
 ## File Map
 
 | File | Contents |

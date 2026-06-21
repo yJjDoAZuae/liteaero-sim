@@ -1,0 +1,187 @@
+"""Generator for python/notebooks/stall_recovery.ipynb.
+
+Builds the notebook JSON from verified cell sources so the notebook content is
+reproducible and reviewable in source control. Run from the repo root:
+    python/.venv/Scripts/python.exe python/tools/gen_stall_notebook.py
+"""
+import json
+from pathlib import Path
+
+
+def md(text: str) -> dict:
+    lines = text.strip("\n").split("\n")
+    return {"cell_type": "markdown", "metadata": {},
+            "source": [l + "\n" for l in lines[:-1]] + [lines[-1]]}
+
+
+def code(text: str) -> dict:
+    lines = text.strip("\n").split("\n")
+    return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+            "source": [l + "\n" for l in lines[:-1]] + [lines[-1]]}
+
+
+CELL_INTRO = md(
+    "# Stall Approach & Recovery — Load-Factor `Aircraft`\n"
+    "\n"
+    "Self-contained notebook exploring the small-UAS load-factor model at the edge of the lift\n"
+    "envelope, in two scenarios:\n"
+    "\n"
+    "1. **Power-off stall** — level flight at idle (power deficit); the aircraft decelerates, angle of\n"
+    "   attack rises until `CL_eff` reaches `CL_max`, the commanded load factor can no longer be held,\n"
+    "   and the aircraft *mushes* (sinks) — then recovers as speed rebuilds.\n"
+    "2. **Power-on stall** — full throttle with a sustained pull-up; the steepening climb bleeds\n"
+    "   airspeed into the same `CL_max` limit, the aircraft departs/sinks, then recovers.\n"
+    "\n"
+    "**Model note.** The load-factor `Aircraft` is *CL_max-limited* (the FBW α-limiter / allocator\n"
+    "caps α at the stall peak): it reaches `CL_max`, cannot sustain the load factor, and mushes — but\n"
+    "it does **not** enter the separated post-stall branch. So `is_stalled` / `is_cl_recovering` stay\n"
+    "`False` throughout: this notebook shows *approach-to-CL_max and recovery*, not a flown\n"
+    "aerodynamic departure. A flown departure into the separated regime (which would trigger the CL\n"
+    "rate-limited recovery) is the deferred open question **OQ-AC-1** in `docs/design/aircraft.md`."
+)
+
+CELL_IMPORTS = code(
+    "# Imports and path setup\n"
+    "import os, sys, json, math, copy\n"
+    "from pathlib import Path\n"
+    "import numpy as np\n"
+    "import matplotlib\n"
+    "matplotlib.use('module://matplotlib_inline.backend_inline')\n"
+    "import matplotlib.pyplot as plt\n"
+    "\n"
+    "_PYTHON_DIR = Path('..').resolve()          # python/ is the parent of notebooks/\n"
+    "if str(_PYTHON_DIR) not in sys.path:\n"
+    "    sys.path.insert(0, str(_PYTHON_DIR))\n"
+    "if sys.platform == 'win32':\n"
+    "    os.add_dll_directory(r'C:\\msys64\\ucrt64\\bin')\n"
+    "\n"
+    "import liteaero_sim_py as sim\n"
+    "print('liteaero_sim_py:', getattr(sim, '__file__', _PYTHON_DIR))"
+)
+
+CELL_SETUP = code(
+    "# Configuration and the scenario runner\n"
+    "_REPO_ROOT = _PYTHON_DIR.parent\n"
+    "base_cfg = json.load(open(_REPO_ROOT / 'configs' / 'small_uas_ksba.json'))\n"
+    "\n"
+    "S_REF    = base_cfg['aircraft']['S_ref_m2']\n"
+    "CL_ALPHA = base_cfg['lift_curve']['cl_alpha']\n"
+    "CL_MAX   = base_cfg['lift_curve']['cl_max']\n"
+    "MASS_KG  = base_cfg['inertia']['mass_kg']\n"
+    "W_N      = MASS_KG * 9.80665\n"
+    "RHO      = 1.225\n"
+    "V_STALL  = math.sqrt(2 * W_N / (RHO * S_REF * CL_MAX))\n"
+    "print(f'V_stall = {V_STALL:.2f} m/s   CL_max = {CL_MAX:.2f}   W = {W_N:.1f} N')\n"
+    "\n"
+    "def run_scenario(throttle_fn, nz_fn, V0_mps, duration_s=16.0, dt=0.01, alt0_m=300.0):\n"
+    "    # Run an airborne (no-terrain) scenario; return per-step arrays.\n"
+    "    # throttle_fn(t), nz_fn(t) are command schedules; the aircraft starts trimmed in\n"
+    "    # level flight at V0_mps. No terrain is set, so this is pure aerodynamics.\n"
+    "    cfg = copy.deepcopy(base_cfg)\n"
+    "    q0 = 0.5 * RHO * V0_mps * V0_mps\n"
+    "    a_trim = (W_N / (q0 * S_REF)) / CL_ALPHA          # level-flight trim alpha\n"
+    "    cfg['initial_state'].update({\n"
+    "        'altitude_m': alt0_m, 'pitch_rad': a_trim,\n"
+    "        'velocity_north_mps': V0_mps, 'velocity_east_mps': 0.0, 'velocity_down_mps': 0.0,\n"
+    "    })\n"
+    "    ac  = sim.Aircraft(json.dumps(cfg), dt_s=dt)       # no set_terrain -> free air\n"
+    "    cmd = sim.AircraftCommand()\n"
+    "    N = int(duration_s / dt)\n"
+    "    keys = ['t', 'V', 'alpha_deg', 'cl_eff', 'nz_cmd', 'sink', 'alt', 'pitch_deg',\n"
+    "            'stalled', 'recovering']\n"
+    "    r = {k: np.zeros(N) for k in keys}\n"
+    "    for i in range(N):\n"
+    "        t = ac.state().time_s\n"
+    "        cmd.throttle_nd = throttle_fn(t)\n"
+    "        cmd.n_z         = nz_fn(t)\n"
+    "        ac.step(cmd, dt_s=dt, rho_kgm3=RHO)\n"
+    "        s = ac.state()\n"
+    "        r['t'][i] = t; r['V'][i] = s.airspeed_m_s; r['alpha_deg'][i] = math.degrees(s.alpha_rad)\n"
+    "        r['cl_eff'][i] = ac.cl_eff; r['nz_cmd'][i] = cmd.n_z; r['sink'][i] = s.velocity_down_mps\n"
+    "        r['alt'][i] = s.altitude_m; r['pitch_deg'][i] = math.degrees(s.pitch_rad)\n"
+    "        r['stalled'][i] = ac.is_stalled; r['recovering'][i] = ac.is_cl_recovering\n"
+    "    return r\n"
+    "\n"
+    "def plot_scenario(r, title):\n"
+    "    fig, ax = plt.subplots(5, 1, figsize=(9, 11), sharex=True)\n"
+    "    cap = r['cl_eff'] >= 0.99 * CL_MAX                 # CL_max-limited region\n"
+    "    def shade(a):\n"
+    "        a.fill_between(r['t'], 0, 1, where=cap, transform=a.get_xaxis_transform(),\n"
+    "                       color='orange', alpha=0.12, label='CL_max-limited')\n"
+    "    ax[0].plot(r['t'], r['V'] / V_STALL); ax[0].axhline(1.0, color='r', ls='--', lw=1, label='V_stall')\n"
+    "    ax[0].set_ylabel('V / V_stall'); ax[0].legend(loc='upper right')\n"
+    "    ax[1].plot(r['t'], r['alpha_deg']); ax[1].set_ylabel('alpha (deg)')\n"
+    "    ax[2].plot(r['t'], r['cl_eff']); ax[2].axhline(CL_MAX, color='r', ls='--', lw=1, label='CL_max')\n"
+    "    ax[2].set_ylabel('CL_eff'); ax[2].legend(loc='upper right')\n"
+    "    ax[3].plot(r['t'], r['sink']); ax[3].axhline(0, color='k', lw=0.6)\n"
+    "    ax[3].set_ylabel('sink rate\\n(m/s, + down)')\n"
+    "    ax[4].plot(r['t'], r['alt']); ax[4].set_ylabel('altitude (m)'); ax[4].set_xlabel('time (s)')\n"
+    "    for a in ax:\n"
+    "        shade(a); a.grid(alpha=0.3)\n"
+    "    fig.suptitle(title); fig.tight_layout()\n"
+    "    print('is_stalled ever:', bool(r['stalled'].any()),\n"
+    "          '  is_cl_recovering ever:', bool(r['recovering'].any()),\n"
+    "          f'  min V/V_stall: {r[\"V\"].min() / V_STALL:.2f}',\n"
+    "          f'  max alpha: {r[\"alpha_deg\"].max():.1f} deg')\n"
+    "    return fig"
+)
+
+CELL_POWEROFF_MD = md(
+    "## 1. Power-off stall\n"
+    "\n"
+    "Idle throttle, command level flight (`n_z = 1`). With no thrust the aircraft decelerates; α rises\n"
+    "to hold lift = weight until `CL_eff` reaches `CL_max` near `V_stall`. Below that it can no longer\n"
+    "hold altitude and mushes (positive sink), then recovers as the nose drops and speed rebuilds."
+)
+
+CELL_POWEROFF = code(
+    "po = run_scenario(throttle_fn=lambda t: 0.0,\n"
+    "                  nz_fn=lambda t: 1.0,\n"
+    "                  V0_mps=1.4 * V_STALL,\n"
+    "                  duration_s=16.0)\n"
+    "fig = plot_scenario(po, 'Power-off stall - idle, hold level (n_z = 1)')\n"
+    "plt.show()"
+)
+
+CELL_POWERON_MD = md(
+    "## 2. Power-on stall\n"
+    "\n"
+    "Full throttle with a sustained pull-up (`n_z = 1.6` after 2 s). The steepening climb bleeds\n"
+    "airspeed into the `CL_max` limit at high pitch; the aircraft departs/sinks, then recovers."
+)
+
+CELL_POWERON = code(
+    "pn = run_scenario(throttle_fn=lambda t: 1.0,\n"
+    "                  nz_fn=lambda t: 1.6 if t > 2.0 else 1.0,\n"
+    "                  V0_mps=1.5 * V_STALL,\n"
+    "                  duration_s=16.0)\n"
+    "fig = plot_scenario(pn, 'Power-on stall - full throttle, sustained pull-up (n_z = 1.6)')\n"
+    "plt.show()"
+)
+
+CELL_DISCUSSION = md(
+    "## Discussion\n"
+    "\n"
+    "In both scenarios `CL_eff` rises to `CL_max` (shaded region) and the aircraft can no longer\n"
+    "sustain the commanded load factor — it mushes/sinks — then recovers as airspeed rebuilds and α\n"
+    "falls back below the peak. Throughout, `is_stalled` and `is_cl_recovering` remain `False`: the\n"
+    "load-factor model is **CL_max-limited / envelope-protected** and does not enter the separated\n"
+    "post-stall branch, so the CL rate-limited recovery machinery is not exercised here.\n"
+    "\n"
+    "Modeling a *flown departure* into the separated regime (which would trip `is_stalled` and the\n"
+    "`cl_recovering` rate limit) is the deferred open question **OQ-AC-1** in\n"
+    "[`docs/design/aircraft.md`](../../docs/design/aircraft.md). Once resolved, this notebook can be\n"
+    "extended with `alpha_max` raised above the stall peak to show a true departure and the\n"
+    "rate-limited lift recovery."
+)
+
+cells = [CELL_INTRO, CELL_IMPORTS, CELL_SETUP, CELL_POWEROFF_MD, CELL_POWEROFF,
+         CELL_POWERON_MD, CELL_POWERON, CELL_DISCUSSION]
+
+nb = {"cells": cells,
+      "metadata": {"language_info": {"name": "python"}},
+      "nbformat": 4, "nbformat_minor": 5}
+
+out = Path(__file__).resolve().parents[1] / "notebooks" / "stall_recovery.ipynb"
+out.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+print(f"wrote {out} with {len(cells)} cells")

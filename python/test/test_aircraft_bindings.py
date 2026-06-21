@@ -372,12 +372,12 @@ def test_touch_and_go_rotates_to_climb_fpa():
 
 
 def test_full_stop_landing_settles_on_gear():
-    # Scenario_FullStopLanding_SettlesOnGear (landing_gear.md §Test Strategy): a normal landing
-    # must SETTLE ONTO THE GEAR, not float on the wing. The apportionment relaxation alone is
-    # degenerate and rests in a floating equilibrium (wing ~0.8 W, gear ~0.18 W) at roll-out speed;
-    # the additive axial-acceleration settle term (§2b-ii, OQ-LG-23) must put ~full weight on the
-    # gear throughout the roll-out. Driven through the real config (small_uas_ksba.json, which has
-    # both gear and a body collider).
+    # Scenario_FullStopLanding_SettlesOnGear (landing_gear.md §Test Strategy): a normal *flown*
+    # landing must SETTLE ONTO THE GEAR, not float on the wing. Flies a realistic stabilized
+    # approach — Vref ≈ 1.2× stall on a 6° glideslope, flared near the ground — to a ~1.3×-stall
+    # touchdown (NOT the earlier 2.7×-stall fixed-n_z=1 controlled-flight-into-terrain, which never
+    # actually flew the descent). The OQ-LG-23 settle term must then put ~full weight on the gear
+    # through the roll-out (the float defect leaves it ~0.18 W). Real config (small_uas_ksba.json).
     import math
 
     cfg_path = _repo_config("small_uas_ksba.json")
@@ -386,45 +386,64 @@ def test_full_stop_landing_settles_on_gear():
     with open(cfg_path) as f:
         cfg = json.load(f)
     weight = cfg["inertia"]["mass_kg"] * 9.80665
+    s_ref = cfg["aircraft"]["S_ref_m2"]
+    cl_alpha = cfg["lift_curve"]["cl_alpha"]
+    cl_max = cfg["lift_curve"]["cl_max"]
+    v_stall = math.sqrt(2.0 * weight / (1.225 * s_ref * cl_max))
 
     dt = 0.01
+    v_ref = 1.20 * v_stall
+    gamma = math.radians(6.0)                      # approach glideslope (descent-positive)
+    q0 = 0.5 * 1.225 * v_ref * v_ref
+    a_trim = (math.cos(gamma) * weight / (q0 * s_ref)) / cl_alpha
     cfg["initial_state"].update(
-        {"altitude_m": 20.0, "velocity_north_mps": 15.0 * math.cos(math.radians(6.0)),
-         "velocity_east_mps": 0.0, "velocity_down_mps": 15.0 * math.sin(math.radians(6.0))}
+        {"altitude_m": 8.0, "pitch_rad": -gamma + a_trim,
+         "velocity_north_mps": v_ref * math.cos(gamma),
+         "velocity_east_mps": 0.0, "velocity_down_mps": v_ref * math.sin(gamma)}
     )
     ac = liteaero_sim_py.Aircraft(json.dumps(cfg), dt_s=dt)
     ac.set_terrain(liteaero_sim_py.FlatTerrain(0.0))
 
     cmd = liteaero_sim_py.AircraftCommand()
-    cmd.n_z = 1.0
-    cmd.throttle_nd = 0.0
+    cmd.throttle_nd = 0.0                           # idle approach
 
     first_wow_t = None
-    min_gear_frac_at_speed = 1.0e9  # min gear load (as fraction of weight) during powered roll-out
+    touchdown_speed = None
+    min_gear_frac = 1.0e9  # min gear load (fraction of weight) during the roll-out
 
-    for _ in range(int(40.0 / dt)):
+    for _ in range(int(30.0 / dt)):
         s = ac.state()
+        v_h = math.hypot(s.velocity_north_mps, s.velocity_east_mps)
+        v_d = s.velocity_down_mps
+        speed = math.hypot(v_h, v_d)
+        agl = ac.agl_m()
+        gamma_cur = math.atan2(v_d, max(v_h, 0.1))
+        # Flight-path-angle-hold approach guidance: hold the glideslope (pull up when too steep),
+        # flaring to shallow out below 1.2 m AGL. n_z = cos γ is the steady-descent feed-forward.
+        gamma_t = gamma if agl > 1.2 else math.radians(0.5)
+        cmd.n_z = max(0.2, min(1.8, math.cos(gamma_t) + 2.0 * (gamma_cur - gamma_t)))
+
         cf = ac.contact_forces()
         wow = cf.weight_on_wheels
         t = s.time_s
-        speed = math.hypot(s.velocity_north_mps, s.velocity_down_mps)
-
         if wow and first_wow_t is None:
             first_wow_t = t
-        # Sample the STEADY roll-out: after the touchdown impact/bounce transient has settled
-        # (≥3 s after first contact) and still rolling fast enough that the wing could float the
-        # aircraft (well above this UAS's ~6.6 m/s stall). The float defect leaves the gear near
-        # zero here; a correct settle keeps it carrying ~full weight. (The brief touchdown bounce
-        # is a separate touchdown-dynamics matter, excluded here.)
-        if first_wow_t is not None and (t - first_wow_t) >= 3.0 and wow and speed > 7.0:
-            min_gear_frac_at_speed = min(min_gear_frac_at_speed, -cf.force_body_n[2] / weight)
+            touchdown_speed = speed
+        # Sample the roll-out after the touchdown impact transient (≥1 s), while still rolling.
+        # The float defect unloads the gear here; a correct settle keeps it carrying ~full weight.
+        if first_wow_t is not None and (t - first_wow_t) >= 1.0 and wow and speed > 3.0:
+            min_gear_frac = min(min_gear_frac, -cf.force_body_n[2] / weight)
         ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
 
     assert first_wow_t is not None, "aircraft never touched down"
-    assert min_gear_frac_at_speed < 1.0e8, "no roll-out samples above 7 m/s after settling"
-    # The gear must carry essentially the weight throughout the roll-out — not be unloaded while
-    # the wing floats the aircraft. (Floating defect: ~0.18 W.)
-    assert min_gear_frac_at_speed > 0.7, (
+    # A flown approach touches down at a realistic speed, not a 2.7×-stall CFIT.
+    assert touchdown_speed < 1.5 * v_stall, (
+        f"touchdown too fast: {touchdown_speed / v_stall:.2f}× stall (expected ~1.2–1.4×)"
+    )
+    assert min_gear_frac < 1.0e8, "no roll-out samples"
+    # The gear must carry essentially the weight through the roll-out — not be unloaded while the
+    # wing floats the aircraft. (Floating defect: ~0.18 W.)
+    assert min_gear_frac > 0.7, (
         f"aircraft floats on the wing during roll-out: min gear load "
-        f"{min_gear_frac_at_speed:.2f} W (expected ~1 W on the gear)"
+        f"{min_gear_frac:.2f} W (expected ~1 W on the gear)"
     )
