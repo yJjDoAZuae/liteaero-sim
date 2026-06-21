@@ -62,7 +62,7 @@ _GA_CONFIG = {
         "mach_max_nd": 0.25,
     },
     "load_factor_allocator": {
-        "alpha_dot_max_rad_s": 0.0,
+        "alpha_dot_max_ratio": 0.0,
     },
     "inertia": {
         "mass_kg": 1045.0,

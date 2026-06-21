@@ -167,6 +167,21 @@ Maps directly to `LiftCurveParams` used by `LiftCurveModel`.
 
 ---
 
+## `load_factor_allocator` Section
+
+Maps to `LoadFactorAllocator`. Governs the stall-recovery CL rate limit (see
+[docs/design/aircraft.md §Stall Recovery](../design/aircraft.md#stall-recovery-cl-rate-limiting)).
+Required.
+
+| Field | Type | Realized value | Constraint | Description |
+| ------- | ------ | ------ | ------------ | ------------- |
+| `alpha_dot_max_ratio` | float | × `g/V_stall` | ≥ 0 | Non-dimensional stall-recovery α-rate limit. The realized limit is `alpha_dot_max_ratio · g/V_stall` (rad/s), so reattachment scales per airframe. `0` disables the limit (recovery is instantaneous). Applies **only** during genuine post-stall recovery, never in attached flight. |
+
+`V_stall = √(2 m g / (ρ₀ S_ref CL_max))` (ρ₀ = 1.225 kg/m³), the same scale used by the gear-model
+coupling parameters in the `aircraft` section.
+
+---
+
 ## `visualization` Section (optional)
 
 Controls which Godot 3D mesh is loaded for this aircraft configuration during live simulation.

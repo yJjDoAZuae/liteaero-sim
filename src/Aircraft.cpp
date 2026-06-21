@@ -200,7 +200,11 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
 
     // 5. Load factor allocator (references _liftCurve — must be emplaced after step 3)
     const auto& lfa_sec = config.at("load_factor_allocator");
-    const float alpha_dot_max_rad_s = lfa_sec.value("alpha_dot_max_rad_s", 0.0f);
+    // Stall-recovery alpha-rate limit, non-dimensionalized against the flight-path frequency scale
+    // (× g/V_stall) so the same ratio is physically correct across airframes (a light UAS reattaches
+    // faster than a heavy jet). Required; no hardcoded default. Affects only genuine post-stall
+    // recovery (see LoadFactorAllocator CL-recovery gating).
+    const float alpha_dot_max_rad_s = lfa_sec.at("alpha_dot_max_ratio").get<float>() * f_scale_rad_s;
     _allocator.emplace(*_liftCurve, S_ref_m2, cl_y_beta,
                        alpha_min_rad, alpha_max_rad,
                        alpha_dot_max_rad_s);

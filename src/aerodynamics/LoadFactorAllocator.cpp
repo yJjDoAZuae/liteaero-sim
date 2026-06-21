@@ -15,6 +15,7 @@ LoadFactorAllocator::LoadFactorAllocator(const LiftCurveModel& liftCurve,
       _alpha_prev(0.0f), _beta_prev(0.0f),
       _n_z_prev(0.0f), _n_y_prev(0.0f),
       _stalled(false), _stalled_neg(false),
+      _recovering(false), _recovering_neg(false),
       _cl_recovering(0.0f), _cl_recovering_neg(0.0f) {}
 
 void LoadFactorAllocator::reset(float alpha0_rad, float beta0_rad) {
@@ -24,6 +25,8 @@ void LoadFactorAllocator::reset(float alpha0_rad, float beta0_rad) {
     _n_y_prev         = 0.0f;
     _stalled          = false;
     _stalled_neg      = false;
+    _recovering       = false;
+    _recovering_neg   = false;
     _cl_recovering    = 0.0f;
     _cl_recovering_neg = 0.0f;
 }
@@ -176,6 +179,12 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
         alpha_out = alpha_eq;
     }
 
+    // Stall state at step entry (previous-step value), captured before the in-step hysteresis
+    // clear below. Recovery is armed off this so that the step on which a stall clears still
+    // begins the rate-limited CL recovery (the exit fires before the recovery update).
+    const bool entry_stalled     = _stalled;
+    const bool entry_stalled_neg = _stalled_neg;
+
     // ── Hysteresis flag update ─────────────────────────────────────────────────
     // Uses _alpha_prev (pre-update) as the previous-step alpha.
     // Entry: alpha has passed the peak/trough vertex and is now reversing.
@@ -202,30 +211,41 @@ LoadFactorOutputs LoadFactorAllocator::solve(const LoadFactorInputs& in) {
     }
 
     // ── CL recovery update ─────────────────────────────────────────────────────
-    // Positive side: rate-limit upward return toward nominal after stall clears;
-    //   instant downward snap (CL cannot be sustained above the nominal model).
-    // Negative side: mirrors with inverted direction.
+    // The CL rate limit models separated-flow reattachment and therefore applies ONLY while
+    // recovering from a genuine stall — NOT in normal attached flight. In non-stalled,
+    // non-recovering operation CL tracks the nominal model directly (the longitudinal response is
+    // damped by the FBW n_z command filter, not by this limiter). A stall arms recovery; once CL
+    // has caught up to nominal the recovery clears. (A previous version rate-limited the upward CL
+    // return in ALL non-stalled flight, which both manufactured a zero-lift cold-start transient
+    // and asymmetrically lagged CL under normal maneuvering.)
     const float cl_dot_max = _lift.clAlpha() * _alpha_dot_max_rad_s;
     const float cl_nom     = _lift.evaluate(alpha_out);
 
     if (_stalled) {
-        // Hold plateau, snap instantly to nominal if nominal descends below clSep
+        // Hold plateau, snap instantly to nominal if nominal descends below clSep; arm recovery.
         _cl_recovering = std::min(_lift.clSep(), cl_nom);
+        _recovering    = true;
+    } else if ((entry_stalled || _recovering) && cl_dot_max > 0.0f && _cl_recovering < cl_nom) {
+        // Post-stall recovery (the clearing step, via entry_stalled, or a continuing recovery):
+        // rate-limit the upward return toward nominal.
+        _cl_recovering = std::min(cl_nom, _cl_recovering + cl_dot_max * in.dt_s);
+        _recovering    = (_cl_recovering < cl_nom);
     } else {
-        // Non-stalled: track nominal directly when no stall dynamics are configured,
-        // or rate-limit the upward return after stall clears.
-        _cl_recovering = (cl_dot_max > 0.0f)
-            ? std::min(cl_nom, _cl_recovering + cl_dot_max * in.dt_s)
-            : cl_nom;
+        // Normal attached flow: track nominal directly (no rate limit).
+        _cl_recovering = cl_nom;
+        _recovering    = false;
     }
 
     if (_stalled_neg) {
-        // Hold plateau, snap instantly to nominal if nominal rises above clSepNeg
+        // Hold plateau, snap instantly to nominal if nominal rises above clSepNeg; arm recovery.
         _cl_recovering_neg = std::max(_lift.clSepNeg(), cl_nom);
+        _recovering_neg    = true;
+    } else if ((entry_stalled_neg || _recovering_neg) && cl_dot_max > 0.0f && _cl_recovering_neg > cl_nom) {
+        _cl_recovering_neg = std::max(cl_nom, _cl_recovering_neg - cl_dot_max * in.dt_s);
+        _recovering_neg    = (_cl_recovering_neg > cl_nom);
     } else {
-        _cl_recovering_neg = (cl_dot_max > 0.0f)
-            ? std::max(cl_nom, _cl_recovering_neg - cl_dot_max * in.dt_s)
-            : cl_nom;
+        _cl_recovering_neg = cl_nom;
+        _recovering_neg    = false;
     }
 
     const float cl_eff       = _cl_recovering;
@@ -288,6 +308,8 @@ nlohmann::json LoadFactorAllocator::serializeJson() const {
         {"n_y_prev_nd",          _n_y_prev},
         {"stalled",              _stalled},
         {"stalled_neg",          _stalled_neg},
+        {"recovering",           _recovering},
+        {"recovering_neg",       _recovering_neg},
         {"cl_recovering",        _cl_recovering},
         {"cl_recovering_neg",    _cl_recovering_neg},
     };
@@ -308,6 +330,8 @@ void LoadFactorAllocator::deserializeJson(const nlohmann::json& j) {
     _n_y_prev            = j.at("n_y_prev_nd").get<float>();
     _stalled             = j.at("stalled").get<bool>();
     _stalled_neg         = j.at("stalled_neg").get<bool>();
+    _recovering          = j.value("recovering",     false);
+    _recovering_neg      = j.value("recovering_neg", false);
     _cl_recovering       = j.at("cl_recovering").get<float>();
     _cl_recovering_neg   = j.at("cl_recovering_neg").get<float>();
 }
@@ -326,6 +350,8 @@ std::vector<uint8_t> LoadFactorAllocator::serializeProto() const {
     proto.set_n_y_prev_nd(_n_y_prev);
     proto.set_stalled(_stalled);
     proto.set_stalled_neg(_stalled_neg);
+    proto.set_recovering(_recovering);
+    proto.set_recovering_neg(_recovering_neg);
     proto.set_cl_recovering(_cl_recovering);
     proto.set_cl_recovering_neg(_cl_recovering_neg);
     const std::string s = proto.SerializeAsString();
@@ -351,6 +377,8 @@ void LoadFactorAllocator::deserializeProto(const std::vector<uint8_t>& bytes) {
     _n_y_prev            = proto.n_y_prev_nd();
     _stalled             = proto.stalled();
     _stalled_neg         = proto.stalled_neg();
+    _recovering          = proto.recovering();
+    _recovering_neg      = proto.recovering_neg();
     _cl_recovering       = proto.cl_recovering();
     _cl_recovering_neg   = proto.cl_recovering_neg();
 }

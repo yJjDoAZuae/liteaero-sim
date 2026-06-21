@@ -682,7 +682,8 @@ its full configuration and internal state.
    // alpha_min_rad / alpha_max_rad enforced as box constraint inside solve():
    LoadFactorOutputs lf = _allocator->solve(lf_in)
 
-7. float CL = _liftCurve->evaluate(lf.alpha_rad)
+7. float CL = lf.cl_eff   // effective CL from the allocator: nominal in attached flow,
+   //                        rate-limited during stall recovery (see §Stall Recovery)
 
 8. AeroForces F = _aeroPerf->compute(lf.alpha_rad, lf.beta_rad, q_inf, CL)
    // F.x_n < 0 (drag),  F.y_n (side force),  F.z_n < 0 (lift upward)
@@ -723,6 +724,40 @@ its full configuration and internal state.
 > See [defect_kinematic_attitude_model.md](defect_kinematic_attitude_model.md) (D-1) for
 > the full defect analysis and [equations_of_motion.md](../algorithms/equations_of_motion.md)
 > §Integration Scheme Summary — Trim Aero for the corrected algorithm.
+
+### Stall Recovery (CL Rate Limiting)
+
+`LoadFactorAllocator` distinguishes the *nominal* lift coefficient (the steady lift-curve value
+at the solved α) from the *effective* CL it actually reports (`cl_eff`), to model separated-flow
+hysteresis around stall:
+
+- **Attached flow (normal flight).** `cl_eff = cl_nominal(α)` directly — **no rate limit**. The
+  longitudinal response is shaped by the FBW `n_z` command filter (§Command Processing
+  Architecture), not by the allocator. A trimmed vehicle initialized in attached flight therefore
+  produces full lift on the very first step (no startup transient).
+- **Stall.** While the stall hysteresis flag is set, `cl_eff` is held at the separated-flow
+  plateau (`cl_sep` / `cl_sep_neg`).
+- **Recovery.** When a stall clears, reattachment is not instantaneous: `cl_eff` is rate-limited
+  upward toward nominal at `cl_α · alpha_dot_max` per second until it catches the nominal curve,
+  then the recovery flag clears and attached-flow tracking resumes. Recovery is **armed by an
+  actual stall** (captured at step entry, so the clearing step itself begins recovery) and applies
+  **only** during recovery — never in attached flight. (An earlier implementation rate-limited the
+  upward CL return in all non-stalled flight, which both manufactured a zero-lift cold-start
+  transient and asymmetrically lagged CL under normal maneuvering — a defect, now corrected.)
+
+`alpha_dot_max` is **non-dimensionalized**: the config supplies `alpha_dot_max_ratio` and the
+realized rate is `alpha_dot_max_ratio · g/V_stall`, so the reattachment rate scales per airframe
+(a light UAS reattaches faster than a heavy jet — see the
+[schema](../schemas/aircraft_config_v1.md#load_factor_allocator-section)). The recovery flags
+(`recovering`, `recovering_neg`) and effective-CL state (`cl_recovering`, `cl_recovering_neg`) are
+warm-start state (serialized JSON + proto).
+
+> **Note — step-order coverage.** The step list above predates the landing-gear force-&-moment
+> integration (rotation-deviation Δθ, the n_z apportionment-relaxation and axial settle terms) and
+> the OQ-LG-21 velocity-referenced attitude commit. Those are the authoritative subject of
+> [landing_gear.md §Integration Contract](landing_gear.md) and are not yet reflected in this
+> abbreviated order; steps 6–13 here show the no-gear flight path. Reconciling this step list with
+> the gear-coupled `step()` is tracked design-documentation debt.
 
 ### Wind-Frame Force Decomposition
 

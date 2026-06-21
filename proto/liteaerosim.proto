@@ -79,6 +79,8 @@ message LoadFactorAllocatorState {
     bool  stalled_neg          = 12;
     float cl_recovering        = 13;
     float cl_recovering_neg    = 14;
+    bool  recovering           = 15;
+    bool  recovering_neg       = 16;
 }
 
 // ---------------------------------------------------------------------------

@@ -60,7 +60,7 @@
         }
     },
     "load_factor_allocator": {
-        "alpha_dot_max_rad_s": 0.17
+        "alpha_dot_max_ratio": 0.41
     },
     "lift_curve": {
         "cl_alpha": 6.0,

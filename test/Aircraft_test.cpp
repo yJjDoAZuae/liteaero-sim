@@ -91,7 +91,7 @@ static nlohmann::json makeConfig() {
             "mach_max_nd":  0.25
         },
         "load_factor_allocator": {
-            "alpha_dot_max_rad_s": 0.0
+            "alpha_dot_max_ratio": 0.0
         },
         "inertia": {
             "mass_kg":   1045.0,
@@ -633,7 +633,7 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
             "g_max_nd": 3.8, "g_min_nd": -1.52,
             "tas_max_mps": 82.3, "mach_max_nd": 0.25
         },
-        "load_factor_allocator": { "alpha_dot_max_rad_s": 0.0 },
+        "load_factor_allocator": { "alpha_dot_max_ratio": 0.0 },
         "inertia": { "mass_kg": 1045.0, "Ixx_kgm2": 1285.0, "Iyy_kgm2": 1825.0, "Izz_kgm2": 2667.0 },
         "lift_curve": {
             "cl_alpha": 5.1, "cl_max": 1.80, "cl_min": -1.20,

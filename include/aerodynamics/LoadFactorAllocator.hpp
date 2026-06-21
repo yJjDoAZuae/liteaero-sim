@@ -81,6 +81,8 @@ private:
     float _n_y_prev;            // n_y from the previous solve() call — used by branch-continuation predictor
     bool  _stalled;             // positive-side stall hysteresis flag
     bool  _stalled_neg;         // negative-side stall hysteresis flag
+    bool  _recovering;          // positive-side post-stall CL recovery in progress
+    bool  _recovering_neg;      // negative-side post-stall CL recovery in progress
     float _cl_recovering;       // effective CL (positive side) — tracks nominal when not stalled
     float _cl_recovering_neg;   // effective CL (negative side) — tracks nominal when not stalled
 

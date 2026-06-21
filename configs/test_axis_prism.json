@@ -39,7 +39,7 @@
         "mach_max_nd": 0.15
     },
     "load_factor_allocator": {
-        "alpha_dot_max_rad_s": 0.17
+        "alpha_dot_max_ratio": 0.41
     },
     "inertia": {
         "mass_kg": 10.0,
