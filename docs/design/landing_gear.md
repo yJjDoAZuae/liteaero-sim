@@ -1078,6 +1078,7 @@ simulation rate.
 | OQ-LG-19 | ~~Force-channel input definition: spurious, V→0-unbounded steady Δθ in steady ground roll~~ **Resolved: destanced gear vertical load (Alt A) with a dynamic-pressure authority fade $\Phi(V)$ that emulates aero/FBW authority decay on rollout/takeoff; realized as the C² smootherstep $\Phi(V)=\mathrm{smootherstep}(\mathrm{clamp}(V^2/V_{\text{ref}}^2,0,1))$ shared with OQ-LG-21** | — |
 | OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
 | OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
+| OQ-LG-24 | The LFA angle-of-attack command (the n_z→α inversion's q→0 ill-conditioning acting on a small on-ground n_z residual) is added to the on-ground body attitude and grows without bound as speed decays, tilting the body nose-up faster than the gear pitch moment can restore — diverging the very-low-speed roll-out | Blocking — the realistic flown landing diverges below ~0.25× stall |
 
 ---
 
@@ -2867,6 +2868,96 @@ introducing switching.
 **Status.** Resolved. The structural design is fixed (above); the numeric values are set during
 implementation and confirmed by the two scenario tests (full-stop "sits on the gear" and powered
 go-around "rotates to climb FPA"), which must run against a freshly built binary.
+
+### OQ-LG-24 — Unbounded LFA Angle-of-Attack Command in the On-Ground Attitude at Low Speed
+
+**Problem.** During a realistic *flown* landing roll-out (small_uas_ksba, idle, decelerating to a
+stop), the on-ground body pitch diverges nose-up below ~0.25× stall (~1.7 m/s): the nose strut
+unloads, the nose lifts off, the pitch then diverges, and the strut-contact integration becomes
+unstable (gear force ~600 N, vertical velocity −26 m/s, pitch excursions ±80°). This is **not a gear
+tip-over** — the geometry is statically pitch-stable (CG 0.05 m forward of the mains; the nose carries
+17% of the weight at rest). The realistic roll-out-to-stop exposed it; the earlier 2.7×-stall
+constant-descent scenario did not dwell at such low speed.
+
+**Role of the LFA (the driver).** On the ground the body pitch attitude is built as
+$\theta = \gamma + \alpha_\text{body}$ with $\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{pitch}$,
+so the angle of attack the `LoadFactorAllocator` commands is added directly to the body attitude. The
+$n_z \to \alpha$ inversion is ill-conditioned as the dynamic pressure $q \to 0$: in the attached
+region $\alpha_\text{cmd} \approx n_z^\text{shaped}\,m g / (q\,S\,C_{L_\alpha})$, i.e.
+$\alpha_\text{cmd} \propto n_z^\text{shaped}/q$
+([load_factor_allocation.md §Numerical Properties](../algorithms/load_factor_allocation.md)). On the
+ground the commanded $n_z^\text{shaped}$ does not reach exactly zero: the §2b-i apportionment
+relaxation leaves a small residual (≈ 0.03), because the small wing lift the nonzero
+$\alpha_\text{cmd}$ produces unloads the gear, so the gear carries slightly less than the full weight
+and the relaxation settles just below 1. Dividing that residual by the vanishing $q$ drives
+$\alpha_\text{cmd}$ upward without bound — measured **0 → +6° as V falls 8 → 1.8 m/s** — which tilts
+the body nose-up.
+
+**Role of the Δθ moment channel (restoring, not the cause).** The moment channel (§2a, OQ-LG-19/20)
+produces a pitch deviation from the gear pitch moment $M_y$. As the body pitches nose-up the nose
+unloads, $M_y$ grows nose-down, and $\Delta\theta_\text{moment}$ grows nose-down — measured
+**−1.8° → −6.0°**, i.e. it *opposes* the nose-up — exactly the restoring response expected from the
+statically pitch-stable geometry. Its restoring authority is **bounded** (by the gear geometry and
+the finite nose-strut travel), whereas $\alpha_\text{cmd}$ is **unbounded** as $q \to 0$. So
+$\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{moment}$ is only partially offset and
+drifts nose-up; once the nose strut reaches full extension (nose off the ground) the restoring
+authority is exhausted, the net pitch diverges, and the stiff strut contact then integrates unstably
+at the timestep. The Δθ **force** channel, which *does* carry the $\Phi(V)$ authority fade
+(§2a / OQ-LG-19/21), is correctly ≈ 0 throughout — so the existing low-$q$ conditioning works where it
+is applied; the gap is that the **LFA α command has no equivalent conditioning** before it enters the
+on-ground attitude.
+
+**Question.** How should the LFA's commanded angle of attack (and hence the on-ground body attitude)
+be conditioned at vanishing ground speed so that a settled aircraft makes no spurious commanded lift
+and holds the gear-determined resting attitude, while leaving the (correct) gear pitch restoring and
+the takeoff-rotation behavior intact?
+
+**Alternatives.**
+
+1. **Zero the commanded lift when settled on the gear.** When weight-on-wheels and below a low ground
+   speed, drive the commanded $n_z^\text{shaped}$ (hence $\alpha_\text{cmd}$) to zero, so the
+   allocator commands no lift and contributes no angle of attack to the body attitude; the
+   (restoring) moment channel then sets the gear-determined resting attitude on its own.
+   - *Benefits:* removes the driver at its source; physically the wing should make no commanded lift
+     once the gear carries the weight; small change; leaves the moment channel (correct) and the
+     in-air solve untouched.
+   - *Drawbacks:* needs a smooth weight-on-wheels + low-speed gate (a hard switch is discontinuous);
+     must not suppress the *takeoff* rotation, where commanded lift is wanted (gate on low speed so it
+     only acts near rest).
+   - *Prerequisite:* define the gate (WoW + speed) and its smoothing.
+2. **Condition the LFA inversion itself at low q** (cap $\alpha_\text{cmd}$, or fade its contribution
+   to the body attitude as $q \to 0$), independent of the residual.
+   - *Benefits:* bounds the α command regardless of the residual's source; mirrors the $\Phi(V)$ fade
+     already proven on the force channel.
+   - *Drawbacks:* capping/fading α also alters the realized $n_z$ at genuinely low airspeed in flight;
+     must confirm it does not degrade low-speed flight near the stall.
+   - *Prerequisite:* choose the cap/fade form and verify the in-flight envelope is unaffected.
+3. **Set the on-ground body attitude from the gear-determined resting stance** (decouple it from
+   $\alpha_\text{cmd}$): when settled on the gear, build the attitude from the gear geometry rather
+   than from $\alpha_\text{cmd} + \Delta\theta$.
+   - *Benefits:* removes the α→attitude path entirely on the ground (the most direct cause); the
+     resting attitude becomes physically gear-determined.
+   - *Drawbacks:* introduces an explicit in-air vs on-ground attitude-source distinction that must
+     transition smoothly through touchdown and liftoff.
+   - *Prerequisite:* define the gear-resting attitude and the transition.
+4. **Freeze the attitude below a low ground-speed threshold** (hold the gear-resting attitude; stop
+   driving $\alpha_\text{cmd}$ into the attitude when V < threshold).
+   - *Benefits:* simple; near zero speed the aero coupling is meaningless, so holding a fixed taxi
+     attitude is defensible.
+   - *Drawbacks:* a hard threshold is discontinuous (needs smoothing); requires choosing the threshold
+     and the correct held resting attitude.
+   - *Prerequisite:* define the threshold and the held attitude.
+
+**Recommendation.** Alternative 1 — drive the commanded lift (and thus $\alpha_\text{cmd}$) to zero
+when settled on the gear, on a smooth weight-on-wheels + low-speed gate — addresses the driver at its
+source with the smallest change, and explicitly **leaves the Δθ moment channel alone** because it is
+the correct (restoring) gear pitch response, not a contributor to the divergence. If the gating proves
+awkward, Alternative 3 (build the on-ground attitude from the gear-determined resting stance) is the
+structural alternative. Note the earlier framing of this question as "two competing 1/q feedback
+loops" was incorrect: the moment channel is stabilizing; only the LFA α command lacks low-$q$
+conditioning.
+
+**Status:** Open — awaiting decision.
 
 ## Test Strategy
 

@@ -104,6 +104,11 @@ $\alpha_{C_{L,\text{max}}}$. For zero or negative thrust the zero-crossing coinc
 $\alpha_{C_{L,\text{max}}}$; for positive thrust it occurs at a higher `α`. No exception is
 thrown.
 
+The full inversion — the Newton solve and branch-continuation warm start for both axes, the
+achievable-load-factor fold, the stall hysteresis and rate-limited lift recovery, the analytical
+$\dot\alpha,\dot\beta$ derivatives, and the $\alpha \propto n_z/q$ low-speed conditioning — is
+documented in [load_factor_allocation.md](../algorithms/load_factor_allocation.md).
+
 ---
 
 ### UC-3 — Initialize from JSON Config

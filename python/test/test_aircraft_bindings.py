@@ -374,10 +374,11 @@ def test_touch_and_go_rotates_to_climb_fpa():
 def test_full_stop_landing_settles_on_gear():
     # Scenario_FullStopLanding_SettlesOnGear (landing_gear.md §Test Strategy): a normal *flown*
     # landing must SETTLE ONTO THE GEAR, not float on the wing. Flies a realistic stabilized
-    # approach — Vref ≈ 1.2× stall on a 6° glideslope, flared near the ground — to a ~1.3×-stall
-    # touchdown (NOT the earlier 2.7×-stall fixed-n_z=1 controlled-flight-into-terrain, which never
-    # actually flew the descent). The OQ-LG-23 settle term must then put ~full weight on the gear
-    # through the roll-out (the float defect leaves it ~0.18 W). Real config (small_uas_ksba.json).
+    # approach — Vref ≈ 1.2× stall holding a 6° glideslope to the ground (NO flare, so it arrives at
+    # the approach sink rate: a firm, real touchdown that exercises the gear) — instead of the
+    # earlier 2.7×-stall fixed-n_z=1 controlled-flight-into-terrain that never flew the descent. The
+    # OQ-LG-23 settle term must then put ~full weight on the gear through the roll-out (the float
+    # defect leaves it ~0.18 W). Real config (small_uas_ksba.json).
     import math
 
     cfg_path = _repo_config("small_uas_ksba.json")
@@ -397,7 +398,7 @@ def test_full_stop_landing_settles_on_gear():
     q0 = 0.5 * 1.225 * v_ref * v_ref
     a_trim = (math.cos(gamma) * weight / (q0 * s_ref)) / cl_alpha
     cfg["initial_state"].update(
-        {"altitude_m": 8.0, "pitch_rad": -gamma + a_trim,
+        {"altitude_m": 4.0, "pitch_rad": -gamma + a_trim,    # short final; low so it lands near Vref
          "velocity_north_mps": v_ref * math.cos(gamma),
          "velocity_east_mps": 0.0, "velocity_down_mps": v_ref * math.sin(gamma)}
     )
@@ -416,16 +417,20 @@ def test_full_stop_landing_settles_on_gear():
         v_h = math.hypot(s.velocity_north_mps, s.velocity_east_mps)
         v_d = s.velocity_down_mps
         speed = math.hypot(v_h, v_d)
-        agl = ac.agl_m()
-        gamma_cur = math.atan2(v_d, max(v_h, 0.1))
-        # Flight-path-angle-hold approach guidance: hold the glideslope (pull up when too steep),
-        # flaring to shallow out below 1.2 m AGL. n_z = cos γ is the steady-descent feed-forward.
-        gamma_t = gamma if agl > 1.2 else math.radians(0.5)
-        cmd.n_z = max(0.2, min(1.8, math.cos(gamma_t) + 2.0 * (gamma_cur - gamma_t)))
-
         cf = ac.contact_forces()
         wow = cf.weight_on_wheels
         t = s.time_s
+
+        # Flight-path-angle-hold approach guidance: hold the glideslope ALL THE WAY to touchdown
+        # (NO flare) so the aircraft arrives at the approach sink rate — a firm, realistic touchdown
+        # that exercises the gear. n_z = cos γ is the steady-descent feed-forward (pull up when too
+        # steep). On the ground, hold (n_z = 1; the settle term unloads the wing).
+        if wow:
+            cmd.n_z = 1.0
+        else:
+            gamma_cur = math.atan2(v_d, max(v_h, 0.1))
+            cmd.n_z = max(0.2, min(1.8, math.cos(gamma) + 2.0 * (gamma_cur - gamma)))
+
         if wow and first_wow_t is None:
             first_wow_t = t
             touchdown_speed = speed
