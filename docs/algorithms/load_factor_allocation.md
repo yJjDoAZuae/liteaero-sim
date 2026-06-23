@@ -120,8 +120,14 @@ so the inversion is **ill-conditioned as $q \to 0$**: at vanishing dynamic press
 demands an unbounded angle of attack. This is benign in flight (a small $n_z$ at low $q$ is simply not
 achievable and the fold clamps it), but it matters on the ground during roll-out, where the solved
 $\alpha$ feeds the body attitude: a small *residual* $n_z$ that has not been driven exactly to zero is
-divided by a vanishing $q$ and produces a large commanded $\alpha$. Conditioning the commanded $n_z$
-(and/or the resulting $\alpha$) at low ground speed is the subject of the using design document
+divided by a vanishing $q$, exceeds the (equally vanishing) achievable envelope $N_z(\alpha^\star)$,
+and is therefore clamped at the fold $\alpha^\star$ — a large, $q$-independent angle, even though the
+realized lift is negligible. Note that a static cap on the commanded $n_z$ at the achievable envelope
+does not remedy this, because the envelope maximum is itself reached at $\alpha^\star$. Attenuating the
+commanded $n_z$ by a dynamic-pressure effectiveness weight (proportional to the marginal effectiveness
+$\partial N_z/\partial\alpha = q\,S\,C_{L_\alpha}/(m g) \propto q$) at the command-processing stage of
+the using model — so the commanded $n_z$, and therefore the commanded $\alpha$, decays to zero as the
+effector loses authority — is the subject of the using design document
 ([landing_gear.md](../design/landing_gear.md), the low-speed roll-out behavior).
 
 ---
@@ -131,7 +137,7 @@ divided by a vanishing $q$ and produces a large commanded $\alpha$. Conditioning
 The sideslip that delivers the commanded lateral load factor, solved **after** $\alpha$ (it uses the
 converged $\alpha$).
 
-### Continuous Formulation
+### Lateral Continuous Formulation
 
 $$
 g(\beta) \;=\; q\,S\,C_{Y_\beta}\,\beta \;-\; T\cos\alpha\,\sin\beta \;-\; n_y\,m\,g \;=\; 0,
@@ -142,7 +148,7 @@ $$
 The side force is modeled linearly in $\beta$ (slope $C_{Y_\beta}$); the thrust term removes the
 component of thrust that already acts laterally once the body yaws by $\beta$.
 
-### Solution Method
+### Lateral Solution Method
 
 Newton iteration $\beta_{k+1} = \beta_k - g(\beta_k)/g'(\beta_k)$, warm-started from the previous
 step, $\beta_0 = \beta_\text{prev} + (n_y - n_{y,\text{prev}})\,m g / g'(\beta_\text{prev})$, and

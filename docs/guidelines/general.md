@@ -128,6 +128,85 @@ units::kts_to_mps(knots)
 
 ---
 
+## Smooth Dynamics — No Slope Discontinuities
+
+**Every *flight-physics* model — one governing the airframe's motion as a function of its flight state
+(aerodynamics, load-factor allocation and command shaping, airspeed / dynamic-pressure authority and
+effectiveness fades, propulsion, guidance, control) — must be at least $C^1$ (continuous first
+derivative) in its states and inputs throughout the operating domain. There must be no
+slope-discontinuity ("corner") at any operating point the model visits — in particular at any
+in-envelope airspeed $> 0$. This applies across all such models, not to any one subsystem.**
+
+### Scope and exemption — frictional and contact physics
+
+This standard governs flight-physics dynamics keyed on the aircraft's flight state (especially
+airspeed / dynamic pressure). It does **not** govern **frictional and contact physics**, which are
+discontinuous by nature and are therefore exempt:
+
+- **Tire forces** — Coulomb rolling resistance (sign reversal at zero contact-patch sliding velocity),
+  the friction circle, slip-ratio / slip-angle behavior.
+- **Brakes** — Coulomb brake torque.
+- **Suspension / strut mechanics** — asymmetric compression/extension damping, the non-negative strut
+  reaction, travel-limit (bottoming) stops.
+- **Gear–ground contact** — contact onset, weight-on-wheels engagement.
+
+These models reverse or engage on relative sliding velocity and contact state, not on the flight
+envelope, so a set-valued or discontinuous reaction at zero relative velocity (or at contact onset) is
+physically faithful, not a modeling artifact. Regularizing them (e.g. a `tanh` rolling-resistance or a
+penalty contact) is an optional numerical convenience, **not** a requirement of this standard. The
+boundary between the two regimes is the relevant test: a fade that keys on **airspeed** (e.g. an
+authority fade evaluated at a flight speed) is in scope; a force that keys on **contact-patch sliding
+velocity or contact penetration** is exempt.
+
+### Rationale
+
+A slope discontinuity injects a *step* into the time derivative of a signal. The models propagate and
+consume derivatives — for example the load-factor allocator returns $\dot n_z \to \dot\alpha$
+analytically ([load_factor_allocation.md](../algorithms/load_factor_allocation.md)) — so a corner makes
+those derivatives jump, producing spurious transients, chatter, limit cycles, and ill-conditioned
+integration. A corner is a modeling artifact, not physics; the fidelity of the simulation depends on
+smooth, physically faithful response.
+
+### Prohibited at any interior operating point (flight-physics models)
+
+- Hard saturation or clamp on a flight-physics signal in a dynamic path that the model reaches during
+  operation: $\operatorname{sat}(x)$, $\operatorname{clamp}(x, a, b)$, $\min/\max$ against a limit that
+  is hit.
+- Absolute value $\lvert x\rvert$ or $\sqrt{x}$ near $x \to 0$ without regularization.
+- Piecewise or switched logic keyed on a threshold crossed during operation — airspeed gates, mode
+  hand-offs — anywhere in a continuous flight-physics signal path.
+
+### Required smooth forms
+
+- **Smooth saturating blends.** The project's house fade is the $C^2$ **smootherstep**
+  $s(x) = x^3\,(6x^2 - 15x + 10)$ applied to $\operatorname{clamp}(\cdot, 0, 1)$: it equals 0 and 1
+  *exactly* at its ends with **zero slope and curvature at both knots**, so it can saturate at an
+  in-envelope speed with no corner. Reuse this one factor for all authority/effectiveness fades (e.g.
+  the gear §2a $\Phi(V)$ and the OQ-LG-24 effectiveness weight) so they share a single smooth form.
+  Logistic, $\tanh$, and rational rolloffs are also acceptable where an asymptotic (never-exactly-1)
+  approach is wanted.
+- **Smooth magnitude / positive part.** $\sqrt{x^2 + \varepsilon^2}$ for magnitude, a softplus for a
+  one-sided floor, in place of $\lvert x\rvert$ or $\max(0, x)$ on an interior signal.
+
+### Boundary note
+
+A corner located *exactly* at a true terminal boundary the dynamics only approach (e.g. $V = 0$ at
+rest) is outside this prohibition, which covers interior operating points (airspeed $> 0$); even there,
+prefer a form that is smooth through the boundary where feasible. (Frictional and contact physics are
+exempt entirely — see the scope note above.)
+
+### Smoothness Enforcement
+
+- New **flight-physics** models introduce no hard $\operatorname{sat}$/$\operatorname{clamp}$/$\min$/$\max$/$\lvert\cdot
+  \rvert$ on a dynamic-path signal without either a smoothness justification or $\varepsilon$
+  regularization. (Frictional/contact models are exempt.)
+- This is a standing review-checklist item (see [Code Review Standards](#code-review-standards)).
+- Existing flight-physics hard saturations that violate this rule are reconciled to smooth forms;
+  reconciling them is a separate task requiring explicit instruction (per the cleanup-as-work-items
+  rule).
+
+---
+
 ## Serialization and Deserialization
 
 Every dynamic element (any object with internal state that evolves over time) must implement serialization and deserialization of its full internal state as a standard interface.
@@ -245,6 +324,7 @@ All dependencies must be documented with their version, license, and integration
   - [ ] No unnecessary coupling
   - [ ] Serialization implemented for new stateful components
   - [ ] No hardcoded magic numbers (use named constants)
+  - [ ] No slope-discontinuity corner in any **flight-physics** dynamic-path signal at an interior operating point (smooth saturations/blends, not hard `sat`/`clamp`/`min`/`max`/`abs`); frictional/contact physics exempt — see [Smooth Dynamics](#smooth-dynamics--no-slope-discontinuities)
   - [ ] New dependency license is permissive and recorded in the dependency registry
   - [ ] No backward-compatibility shims, deprecated aliases, or forwarding wrappers (all call sites updated directly)
 

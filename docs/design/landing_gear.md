@@ -1078,7 +1078,7 @@ simulation rate.
 | OQ-LG-19 | ~~Force-channel input definition: spurious, V→0-unbounded steady Δθ in steady ground roll~~ **Resolved: destanced gear vertical load (Alt A) with a dynamic-pressure authority fade $\Phi(V)$ that emulates aero/FBW authority decay on rollout/takeoff; realized as the C² smootherstep $\Phi(V)=\mathrm{smootherstep}(\mathrm{clamp}(V^2/V_{\text{ref}}^2,0,1))$ shared with OQ-LG-21** | — |
 | OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
 | OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
-| OQ-LG-24 | The LFA angle-of-attack command (the n_z→α inversion's q→0 ill-conditioning acting on a small on-ground n_z residual) is added to the on-ground body attitude and grows without bound as speed decays, tilting the body nose-up faster than the gear pitch moment can restore — diverging the very-low-speed roll-out | Blocking — the realistic flown landing diverges below ~0.25× stall |
+| OQ-LG-24 | ~~The aero load-factor command does not decay to zero as aero control effectiveness collapses ($\propto q$): a residual aero command survives the §2b apportionment fixed point, exceeds the vanishing achievable envelope, and the inversion pins commanded $\alpha$ at the fold (≈ stall AoA), tilting the on-ground attitude nose-up and diverging the very-low-speed roll-out~~ **Resolved (Alternative 1): a $C^2$ smootherstep dynamic-pressure effectiveness weight $w_a=\operatorname{smootherstep}(\operatorname{clamp}(q/q_\text{ref},0,1))$ multiplies the gear-relative (post-apportionment) aero demand at the $n_z$ command-processing stage; the sub-unity weight collapses the unity-gain fixed point so the aero command and commanded $\alpha$ decay to zero — slope-correct ($\cos\gamma$ carried by the gear cancels), no α-output intervention, no switch. Implementation pending (`/impl`).** | — |
 
 ---
 
@@ -2869,7 +2869,7 @@ introducing switching.
 implementation and confirmed by the two scenario tests (full-stop "sits on the gear" and powered
 go-around "rotates to climb FPA"), which must run against a freshly built binary.
 
-### OQ-LG-24 — Unbounded LFA Angle-of-Attack Command in the On-Ground Attitude at Low Speed
+### OQ-LG-24 — Aerodynamic Load-Factor Allocation Is Not Limited by Available Control Authority at Low $q$
 
 **Problem.** During a realistic *flown* landing roll-out (small_uas_ksba, idle, decelerating to a
 stop), the on-ground body pitch diverges nose-up below ~0.25× stall (~1.7 m/s): the nose strut
@@ -2879,85 +2879,229 @@ tip-over** — the geometry is statically pitch-stable (CG 0.05 m forward of the
 17% of the weight at rest). The realistic roll-out-to-stop exposed it; the earlier 2.7×-stall
 constant-descent scenario did not dwell at such low speed.
 
-**Role of the LFA (the driver).** On the ground the body pitch attitude is built as
-$\theta = \gamma + \alpha_\text{body}$ with $\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{pitch}$,
-so the angle of attack the `LoadFactorAllocator` commands is added directly to the body attitude. The
-$n_z \to \alpha$ inversion is ill-conditioned as the dynamic pressure $q \to 0$: in the attached
-region $\alpha_\text{cmd} \approx n_z^\text{shaped}\,m g / (q\,S\,C_{L_\alpha})$, i.e.
-$\alpha_\text{cmd} \propto n_z^\text{shaped}/q$
-([load_factor_allocation.md §Numerical Properties](../algorithms/load_factor_allocation.md)). On the
-ground the commanded $n_z^\text{shaped}$ does not reach exactly zero: the §2b-i apportionment
-relaxation leaves a small residual (≈ 0.03), because the small wing lift the nonzero
-$\alpha_\text{cmd}$ produces unloads the gear, so the gear carries slightly less than the full weight
-and the relaxation settles just below 1. Dividing that residual by the vanishing $q$ drives
-$\alpha_\text{cmd}$ upward without bound — measured **0 → +6° as V falls 8 → 1.8 m/s** — which tilts
-the body nose-up.
+**The physical principle this should obey.** A physically-faithful FBW allocates to the aerodynamic
+channel only the load factor that channel can actually produce, and **aerodynamic control authority
+collapses with dynamic pressure**: the achievable aero load factor at idle is the fold value
+$N_z(\alpha^\star) = q\,S\,C_{L_\text{max}}/(m g) \to 0$ as $q \to 0$
+([load_factor_allocation.md §Achievable Load-Factor Envelope](../algorithms/load_factor_allocation.md)).
+So as the aircraft decelerates, the load factor allocated to aero should wash out to zero on its own,
+the gear should carry the weight, the inversion should never be asked for a load factor it cannot
+deliver, and the commanded angle of attack should stay small — **no nose-up tilt, and with no switch
+of any kind**. The realized *lift* does behave this way (the achievable envelope, §2b "no residual
+float at the stop"). The puzzle this question records is why the commanded *angle of attack* does not
+wash out with it.
+
+**Why a vanishing lift still produces a large α (the gap).** On the ground the body pitch attitude is
+built as $\theta = \gamma + \alpha_\text{body}$ with
+$\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{pitch}$, so the commanded angle of attack
+enters the attitude directly. The chain that leaves a residual is:
+
+1. **A small aero load-factor command survives the apportionment.** The §2b-i apportionment asks the
+   wing for $n_{z,\text{cmd}} - H_1 n_{z,\text{gear}}$. The wing's tiny lift unloads the gear by that
+   amount, so the gear reads just below $W$, so the apportionment keeps asking the wing for that
+   deficit — a fixed point at a small nonzero aero command (≈ 0.03 g). This apportionment is keyed to
+   the **gear load**, not to the **available aero authority**, so it does not vanish as $q \to 0$.
+2. **The inversion is ill-conditioned, so a small command implies a large α.** In the attached region
+   $\alpha_\text{cmd} \approx n_z\,m g/(q\,S\,C_{L_\alpha}) \propto n_z/q$
+   ([load_factor_allocation.md §Numerical Properties](../algorithms/load_factor_allocation.md)).
+3. **The fold pins α at the stall AoA.** Once the residual command exceeds the (collapsing) achievable
+   envelope $N_z(\alpha^\star)$, **no real root exists**, and the inversion clamps $\alpha$ at the fold
+   $\alpha^\star$ — the lift-curve peak (≈ stall AoA) for idle thrust, a large, **$q$-independent**
+   angle. So the realized lift is the vanishing maximum-achievable value (correctly washed out), but
+   the reported $\alpha$ is pinned near stall AoA. Measured: $\alpha_\text{cmd}$ climbs **0 → +6° as V
+   falls 8 → 1.8 m/s**, tilting the body nose-up.
+
+So the lift *is* limited by control authority, exactly as the principle requires; the gap is that the
+**allocation does not limit the aero load-factor command by that same authority** — it leaves a small
+residual command that, exceeding the collapsing envelope, pins $\alpha$ at the fold and corrupts the
+attitude.
 
 **Role of the Δθ moment channel (restoring, not the cause).** The moment channel (§2a, OQ-LG-19/20)
 produces a pitch deviation from the gear pitch moment $M_y$. As the body pitches nose-up the nose
 unloads, $M_y$ grows nose-down, and $\Delta\theta_\text{moment}$ grows nose-down — measured
 **−1.8° → −6.0°**, i.e. it *opposes* the nose-up — exactly the restoring response expected from the
 statically pitch-stable geometry. Its restoring authority is **bounded** (by the gear geometry and
-the finite nose-strut travel), whereas $\alpha_\text{cmd}$ is **unbounded** as $q \to 0$. So
-$\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{moment}$ is only partially offset and
-drifts nose-up; once the nose strut reaches full extension (nose off the ground) the restoring
-authority is exhausted, the net pitch diverges, and the stiff strut contact then integrates unstably
-at the timestep. The Δθ **force** channel, which *does* carry the $\Phi(V)$ authority fade
-(§2a / OQ-LG-19/21), is correctly ≈ 0 throughout — so the existing low-$q$ conditioning works where it
-is applied; the gap is that the **LFA α command has no equivalent conditioning** before it enters the
-on-ground attitude.
+the finite nose-strut travel), whereas the fold-pinned $\alpha_\text{cmd}$ keeps climbing as $q$
+falls. So $\alpha_\text{body} = \alpha_\text{cmd} + \Delta\theta_\text{moment}$ is only partially
+offset and drifts nose-up; once the nose strut reaches full extension the restoring authority is
+exhausted, the net pitch diverges, and the stiff strut contact then integrates unstably at the
+timestep. The earlier framing of this question as "two competing $1/q$ feedback loops" was incorrect:
+the moment channel is stabilizing and must be left alone.
 
-**Question.** How should the LFA's commanded angle of attack (and hence the on-ground body attitude)
-be conditioned at vanishing ground speed so that a settled aircraft makes no spurious commanded lift
-and holds the gear-determined resting attitude, while leaving the (correct) gear pitch restoring and
-the takeoff-rotation behavior intact?
+**Why a static cap is not enough, and where the fix belongs.** A first instinct is to cap the demanded
+aero load factor at the achievable envelope $N_z(\alpha^\star)$. A static saturation cap does **not**
+work: the achievable maximum is, by definition, reached *at the fold* $\alpha^\star$ (≈ stall AoA), so
+whenever aero authority is the binding constraint the inversion still solves $\alpha = \alpha^\star$ — a
+cap bounds the *lift* but not the *angle*. The remedy is **not** to touch the angle-of-attack output,
+and **not** to clamp the demand, but to apply a dynamic-pressure-derived **effectiveness weight to the
+aerodynamic load-factor command at the command-processing stage** (the §2b apportionment), which (as
+shown next) collapses the residual aero command — and therefore the commanded $\alpha$ — to zero,
+independently of runway slope.
 
-**Alternatives.**
+**Why a multiplicative effectiveness weight on the apportionment residual collapses the residual to
+zero.** At the on-ground steady state the §2b-i apportionment residual is a **unity-gain
+self-sustaining loop**: the apportionment asks the wing for $n_{z,\text{cmd}} - H_1 n_{z,\text{gear}}$,
+the gear reaction is the weight the wing is *not* carrying, $n_{z,\text{gear}} = c - n_{z,\text{aero}}$
+where $c$ is the runway-normal weight fraction the airframe must support, and $n_{z,\text{cmd}} = c$.
+The slope term cancels:
+$$n_{z,\text{shaped}} = n_{z,\text{cmd}} - H_1 n_{z,\text{gear}} = c - (c - n_{z,\text{aero}}) = n_{z,\text{aero}} \approx n_{z,\text{shaped}},$$
+so **any** small aero command is self-consistent (the degenerate fixed point, §2b-ii). Inserting a
+dynamic-pressure effectiveness weight $w_a \in [0,1)$ at this stage,
+$n_{z,\text{shaped}} = w_a\,(n_{z,\text{cmd}} - H_1 n_{z,\text{gear}})$, makes the loop a contraction:
+$n_{z,\text{shaped}} = w_a\,n_{z,\text{shaped}} \Rightarrow n_{z,\text{shaped}}(1-w_a)=0
+\Rightarrow n_{z,\text{shaped}} \to 0$ whenever $w_a<1$. The aero command decays to zero, the inversion
+is no longer driven to the fold, $\alpha \to 0$, and the gear carries the full runway-normal load.
 
-1. **Zero the commanded lift when settled on the gear.** When weight-on-wheels and below a low ground
-   speed, drive the commanded $n_z^\text{shaped}$ (hence $\alpha_\text{cmd}$) to zero, so the
-   allocator commands no lift and contributes no angle of attack to the body attitude; the
-   (restoring) moment channel then sets the gear-determined resting attitude on its own.
-   - *Benefits:* removes the driver at its source; physically the wing should make no commanded lift
-     once the gear carries the weight; small change; leaves the moment channel (correct) and the
-     in-air solve untouched.
-   - *Drawbacks:* needs a smooth weight-on-wheels + low-speed gate (a hard switch is discontinuous);
-     must not suppress the *takeoff* rotation, where commanded lift is wanted (gate on low speed so it
-     only acts near rest).
-   - *Prerequisite:* define the gate (WoW + speed) and its smoothing.
-2. **Condition the LFA inversion itself at low q** (cap $\alpha_\text{cmd}$, or fade its contribution
-   to the body attitude as $q \to 0$), independent of the residual.
-   - *Benefits:* bounds the α command regardless of the residual's source; mirrors the $\Phi(V)$ fade
-     already proven on the force channel.
-   - *Drawbacks:* capping/fading α also alters the realized $n_z$ at genuinely low airspeed in flight;
-     must confirm it does not degrade low-speed flight near the stall.
-   - *Prerequisite:* choose the cap/fade form and verify the in-flight envelope is unaffected.
-3. **Set the on-ground body attitude from the gear-determined resting stance** (decouple it from
-   $\alpha_\text{cmd}$): when settled on the gear, build the attitude from the gear geometry rather
-   than from $\alpha_\text{cmd} + \Delta\theta$.
-   - *Benefits:* removes the α→attitude path entirely on the ground (the most direct cause); the
-     resting attitude becomes physically gear-determined.
-   - *Drawbacks:* introduces an explicit in-air vs on-ground attitude-source distinction that must
-     transition smoothly through touchdown and liftoff.
-   - *Prerequisite:* define the gear-resting attitude and the transition.
-4. **Freeze the attitude below a low ground-speed threshold** (hold the gear-resting attitude; stop
-   driving $\alpha_\text{cmd}$ into the attitude when V < threshold).
-   - *Benefits:* simple; near zero speed the aero coupling is meaningless, so holding a fixed taxi
-     attitude is defensible.
-   - *Drawbacks:* a hard threshold is discontinuous (needs smoothing); requires choosing the threshold
-     and the correct held resting attitude.
-   - *Prerequisite:* define the threshold and the held attitude.
+**Why this is correct on a sloped runway.** Because the apportionment residual is formed against the
+**actual gear reaction**, the runway-normal weight fraction $c=\cos\gamma$ is carried by the gear and
+**cancels** out of the aero command — the residual is purely the wing's own self-lift, with no
+$\cos\gamma$ dependence. So the effectiveness weight collapses it to zero on any slope, and a sloped
+runway with $\cos\gamma \neq 1$ does **not** cause the wing to be commanded angle of attack at
+negligible speed. This is the reason the weight must act on the **post-apportionment aero demand** (the
+gear-relative residual), never on the raw $n_{z,\text{cmd}}$ (which still contains $\cos\gamma$).
 
-**Recommendation.** Alternative 1 — drive the commanded lift (and thus $\alpha_\text{cmd}$) to zero
-when settled on the gear, on a smooth weight-on-wheels + low-speed gate — addresses the driver at its
-source with the smallest change, and explicitly **leaves the Δθ moment channel alone** because it is
-the correct (restoring) gear pitch response, not a contributor to the divergence. If the gating proves
-awkward, Alternative 3 (build the on-ground attitude from the gear-determined resting stance) is the
-structural alternative. Note the earlier framing of this question as "two competing 1/q feedback
-loops" was incorrect: the moment channel is stabilizing; only the LFA α command lacks low-$q$
-conditioning.
+**Smoothness requirement — no corner inside the flight envelope (reuse the §2a smootherstep).** A hard
+saturating ramp $\operatorname{sat}(q/q_\text{ref})$ is only $C^0$: it has a **slope discontinuity at
+$q=q_\text{ref}$** (i.e. at $V=V_\text{ref}$). If $V_\text{ref}$ is placed anywhere in the flight
+envelope (e.g. at the stall speed), the aircraft crosses that corner during normal flight and the kink
+injects a derivative discontinuity into the commanded load factor — and hence a step into the
+analytically-propagated $\dot n_z \to \dot\alpha$ the inversion returns
+([load_factor_allocation.md §Analytical Rate Derivatives](../algorithms/load_factor_allocation.md)) —
+a spurious transient that violates the project-wide
+[no-slope-discontinuity modeling standard](../guidelines/general.md#smooth-dynamics--no-slope-discontinuities)
+(no corner in any dynamic-path signal at a speed $>0$). This is exactly the defect the §2a authority
+fade already avoids: OQ-LG-19/21 resolved $\Phi(V)$ to the **$C^2$ smootherstep**
+$\Phi(V) = \operatorname{smootherstep}(\hat q) = \hat q^{3}(6\hat q^{2}-15\hat q+10)$,
+$\hat q = \operatorname{clamp}(V^2/V_\text{ref}^2, 0, 1)$, which has $\Phi\equiv1$ **exactly** for
+$V \ge V_\text{ref}$ and **zero slope and curvature at the knot** — so even with $V_\text{ref}$ placed
+at the stall speed there is no corner anywhere in the flight envelope, and full authority ($w_a=1$,
+not $1-\varepsilon$) is preserved across it. The OQ-LG-24 effectiveness weight should therefore reuse
+this same smootherstep form, $w_a = \operatorname{smootherstep}(\operatorname{clamp}(q/q_\text{ref},
+0, 1))$ with $q_\text{ref}$ on the stall-referenced $V_\text{stall}$ scale, rather than a hard
+$\operatorname{sat}$. (With $V_\text{ref}=V_\text{stall}$ this gives $w_a\equiv1$ through the whole
+flight envelope and $w_a\approx0$ by $\sim0.25\,V_\text{stall}$, where the collapse is wanted.)
+*Cleanup note:* a few §2a passages still write the fade as $\operatorname{sat}(V^2/V_\text{ref}^2)$
+(e.g. the §2a force-channel description and DC-gain table) — stale relative to the OQ-LG-19/21
+smootherstep resolution; those should be reconciled to the smootherstep form.
 
-**Status:** Open — awaiting decision.
+**Resolution — Alternative 1 adopted (effectiveness-weighted gear-relative aero demand).** At the §2b
+command-processing stage the aerodynamic load-factor demand is scaled by a dynamic-pressure
+effectiveness weight applied to the **gear-relative** (post-apportionment) residual:
+
+$$w_a = \operatorname{smootherstep}\!\big(\operatorname{clamp}(q/q_\text{ref},\,0,\,1)\big),
+\qquad
+n_{z,\text{shaped}} = \operatorname{floor}_{+}\!\big(\,w_a\,(n_{z,\text{cmd}} - H_1 n_{z,\text{gear}}) + \text{(b-ii settle)}\,\big),$$
+
+where $w_a$ reuses the existing $C^2$ smootherstep (`phiAuthority`), $\operatorname{floor}_{+}$ is the
+§2b non-negativity floor, and $q_\text{ref}$ is a required non-dimensional config reference on the
+$V_\text{stall}$ scale (per the §2 parameterization policy), chosen so $w_a \equiv 1$ across the flight
+envelope (including near stall and at rotation) and $w_a < 1$ only through the sub-stall roll-out. The
+weight derives from the marginal aero effectiveness $\partial N_z/\partial\alpha = q\,S\,C_{L_\alpha}/(m g) \propto q$.
+
+This satisfies every constraint established above:
+
+- **The commanded $\alpha$ decays to zero, not merely the lift.** The sub-unity weight turns the
+  unity-gain apportionment fixed point into a contraction ($n_{z,\text{shaped}}(1-w_a)=0$), so the
+  aero command — and therefore the commanded $\alpha$ — collapses to zero and the inversion is never
+  driven to the fold; the gear carries the full runway-normal load.
+- **Slope-correct.** The weight acts on the gear-relative residual, in which the runway-normal weight
+  fraction $\cos\gamma$ is carried by the gear and cancels, so $\cos\gamma \neq 1$ never commands
+  $\alpha$ at negligible speed.
+- **Smooth.** The $C^2$ smootherstep has no in-envelope corner, so the analytically-propagated
+  $\dot n_z \to \dot\alpha$ stays continuous (consistent with the
+  [smooth-dynamics standard](../guidelines/general.md#smooth-dynamics--no-slope-discontinuities)).
+- **No α-output intervention and no switch.** The angle-of-attack output is untouched; there is no
+  weight-on-wheels or ground-speed switch. The Δθ moment channel is unchanged (correct restoring gear
+  response).
+
+*Rejected alternatives.* Scaling the **raw** $n_{z,\text{cmd}}$ before the apportionment (not
+slope-correct — it re-introduces a $\cos\gamma$ dependence and forgoes the fixed-point cancellation);
+and rerouting the inversion **fold** toward small $\alpha$ (intervenes on the α output and changes the
+documented fold behavior in [load_factor_allocation.md](../algorithms/load_factor_allocation.md)).
+
+*Implementation.* Deferred to an `/impl` plan; **not yet built**. The reconciliation must use smooth
+forms for the surrounding **flight-physics** §2b operators in this path, per the smooth-dynamics
+standard and roadmap SD-1 — specifically the non-negativity floor (SD-LG-12) and the settle clip
+(SD-LG-11). (The relaxation-input floor SD-LG-13 reads the one-sided gear contact reaction and is
+exempt as contact physics.) $q_\text{ref}$ is verified so $w_a \to 1$ before rotation and $w_a < 1$
+across the roll-out.
+
+**Status:** Resolved — Alternative 1 (effectiveness-weighted gear-relative aero demand).
+Implementation pending (`/impl`); not yet built.
+
+## Smoothness Audit — Slope-Discontinuity Findings
+
+This section records the landing-gear slice of the project-wide smooth-dynamics audit (roadmap
+**SD-1**), which checks **flight-physics** models against the
+[no-slope-discontinuity standard](../guidelines/general.md#smooth-dynamics--no-slope-discontinuities):
+no slope-discontinuity ("corner") in any flight-physics dynamic-path signal at an interior operating
+point (in-envelope airspeed $> 0$). Per that standard's scope, **frictional and contact physics — tire
+forces, brakes, suspension/strut mechanics, and gear–ground contact — are exempt** (discontinuous by
+nature). The in-scope findings here are therefore in the **gear→aircraft coupling path** in
+`src/Aircraft.cpp` (§2a/§2b), which shapes aerodynamic lift and the load-factor command as functions
+of aircraft flight state. The tire/suspension/contact constructs in `WheelUnit.cpp`,
+`LandingGear.cpp`, and `SurfaceFrictionUniform.cpp` are listed separately as **exempt**, for the
+record. **These findings are a catalog only; reconciling each in-scope site is separate, explicitly-
+instructed code work** (the SD-1 reconciliation phase), and must not be done without instruction.
+
+### Compliant flight-physics patterns (the target forms)
+
+- **`phiAuthority`** (`Aircraft.cpp`) — the $C^2$ smootherstep on $\operatorname{clamp}((V/V_\text{ref})^2,0,1)$ used for the §2a authority fade $\Phi(V)$ and the attitude blend. The house standard.
+- **`sigma = V / sqrt(V*V + 0.25)`** (`Aircraft.cpp`, §2b-ii modeled wheel-drag sign) — a smooth regularized $\operatorname{sign}(V)$ on a flight-state signal; the model for any flight-physics sign regularization.
+
+### Flight-physics-coupling findings (in scope)
+
+| ID | Site (file · construct) | Corner is hit when | Severity | Recommended smooth form |
+| --- | --- | --- | --- | --- |
+| SD-LG-9 | `Aircraft.cpp` · velocity floor `std::max(V_inertial, 1.0)` (force channel `V_safe`) | $V=1$ m/s — squarely in the roll-out; feeds $\dot\gamma_\text{arrest}$ and the yaw→accel term | **High** | `sqrt(V*V + V_floor*V_floor)` |
+| SD-LG-10 | `Aircraft.cpp` · settle transition-speed switch `(axbar>=0 ? v_takeoff : v_land)` | $\bar a_x$ crosses 0 (decel↔accel) — `v_trans`, hence `s_unload`, jumps | **Med** | blend the two transition speeds with a smooth weight in $\bar a_x$ |
+| SD-LG-11 | `Aircraft.cpp` · settle clip `std::clamp(settle_incr, ±clip)` | the settle increment saturates | **Med** | `clip*tanh(x/clip)` |
+| SD-LG-12 | `Aircraft.cpp` · apportionment floor `std::max(0, n_z_shaped - nz_relax + settle)` | the aero share would go negative (also the OQ-LG-24 floor $\operatorname{floor}_{+}$) | **Med** | softplus floor |
+| SD-LG-14 | `Aircraft.cpp` · aero-lift clamp `std::max(F.z_n, -(n_z_shaped*m*g))` | aero lift is reduced to the LFA target on the ground | **Med** | smooth min/blend |
+| SD-LG-15 | `Aircraft.cpp` · drag floor `std::max(0, -F.x_n)` (feeds next-step settle $\bar a_x$) | net longitudinal force crosses 0 | **Low-Med** | softplus, or accept (steady, low gain) |
+| SD-LG-17 | `Aircraft.cpp` · command clamp `std::clamp(cmd.n_z, g_min, g_max)` (and `n_y`) | the load-factor command reaches the structural envelope | **Med** | smooth saturation knee (tanh / smootherstep) |
+
+### Consistency item (compliant, but not $C^2$)
+
+- **`smoothstepEdges`** (`Aircraft.cpp`, the $S_\text{unload}$ ground fade) is the $C^1$ cubic
+  smoothstep $t^2(3-2t)$. It **satisfies** the standard (no slope discontinuity) but its second
+  derivative (acceleration) is discontinuous at the knots. Recommend upgrading it to the same
+  fifth-order smootherstep as `phiAuthority` so all flight-physics fades share one $C^2$ factor.
+
+### Exempt — frictional, contact, and suspension physics
+
+Per the [smooth-dynamics standard's scope exemption](../guidelines/general.md#smooth-dynamics--no-slope-discontinuities),
+the following are discontinuous by nature and are **not** treated as violations. They are recorded for
+completeness; regularizing any of them is an optional numerical choice, not a requirement. (IDs are
+retained for stable cross-reference.)
+
+- **SD-LG-1** — `WheelUnit.cpp` rolling resistance: Coulomb sign reversal as the **contact-patch**
+  longitudinal velocity $V_{cx}$ (body velocity at the contact point, incl. $\omega\times r$ — *not*
+  the CG speed) crosses zero. Friction physics.
+- **SD-LG-2** — friction-circle clamp `if (F_total>F_limit) scale=F_limit/F_total`. Friction limit.
+- **SD-LG-3** — asymmetric strut damping switch `compress = (delta_dot>=0)`. Suspension mechanics.
+- **SD-LG-4** — strut-force floor `std::max(0, F_spring+F_damp)` (strut cannot pull). Contact mechanics.
+- **SD-LG-5** — strut travel clamp `std::clamp(penetration,0,travel_max)` (bottoming stop). Mechanical limit.
+- **SD-LG-6** — brake-engagement mode switch on `brake_demand`. Brake/friction.
+- **SD-LG-7** — slip reference `std::max(\|V_cx\|, omega*r)+kVeps`. Tire-slip kinematics.
+- **SD-LG-8** — wheel-speed floor `std::max(0, ...)` ($\omega$ cannot reverse). Tire kinematics.
+- **SD-LG-13** — relaxation input floor `std::max(0, -F_z/(m g))`: reads the one-sided **gear contact
+  reaction** (a contact force, $\ge 0$ by contact physics) before the H₁ apportionment. The
+  discontinuity is inherent to the contact reaction; exempt. (The downstream H₁ relaxation is itself a
+  smooth filter.)
+- **SD-LG-16** — settle gate `(weight_on_wheels?1:0)*s_unload`: the weight-on-wheels term is a
+  **contact-engagement** state. OQ-LG-23 keeps the *applied* force continuous across the WoW change via
+  the downstream low-pass; the binary itself is a contact event and is exempt.
+- **Strut preload engagement** — $F_z$ steps from 0 to `preload_n` at $\delta = 0^+$ (contact onset);
+  the penetration switch, the `pen = max(0,-clearance)` floor, and the AGL fast-paths in
+  `LandingGear.cpp` are likewise contact-onset / reach guards. All contact physics.
+
+### Out of scope for this slice (other subsystem)
+
+The `LoadFactorAllocator` fold clamp at $\alpha^\star$ and the box clamp
+$[\alpha_\text{min},\alpha_\text{max}]$ are aerodynamic flight physics, not gear; they are central to
+[OQ-LG-24](#oq-lg-24--aerodynamic-load-factor-allocation-is-not-limited-by-available-control-authority-at-low-q)
+and will be covered by the aerodynamics / load-factor-allocator slice of SD-1.
 
 ## Test Strategy
 
