@@ -1079,6 +1079,7 @@ simulation rate.
 | OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
 | OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
 | OQ-LG-24 | ~~The aero load-factor command does not decay to zero as aero control effectiveness collapses ($\propto q$): a residual aero command survives the §2b apportionment fixed point, exceeds the vanishing achievable envelope, and the inversion pins commanded $\alpha$ at the fold (≈ stall AoA), tilting the on-ground attitude nose-up and diverging the very-low-speed roll-out~~ **Resolved (Alternative 1): a $C^2$ smootherstep dynamic-pressure effectiveness weight $w_a=\operatorname{smootherstep}(\operatorname{clamp}(q/q_\text{ref},0,1))$ multiplies the gear-relative (post-apportionment) aero demand at the $n_z$ command-processing stage; the sub-unity weight collapses the unity-gain fixed point so the aero command and commanded $\alpha$ decay to zero — slope-correct ($\cos\gamma$ carried by the gear cancels), no α-output intervention, no switch. Implementation pending (`/impl`).** | — |
+| OQ-LG-25 | Whether and how to reconcile the flight-physics smoothness-audit findings (SD-LG-9/10/11/12/14/15/17 + `smoothstepEdges`) catalogued in §Smoothness Audit — whether to reconcile and which, the smooth form per site, and whether new regularization scales are per-aircraft config fields or fixed non-dimensional constants. Not yet agreed; gates any SD-1 landing-gear reconciliation | Not blocking current work |
 
 ---
 
@@ -2990,13 +2991,13 @@ effectiveness weight applied to the **gear-relative** (post-apportionment) resid
 
 $$w_a = \operatorname{smootherstep}\!\big(\operatorname{clamp}(q/q_\text{ref},\,0,\,1)\big),
 \qquad
-n_{z,\text{shaped}} = \operatorname{floor}_{+}\!\big(\,w_a\,(n_{z,\text{cmd}} - H_1 n_{z,\text{gear}}) + \text{(b-ii settle)}\,\big),$$
+n_{z,\text{shaped}} = \max\!\big(0,\; w_a\,(n_{z,\text{cmd}} - H_1 n_{z,\text{gear}}) + \text{(b-ii settle)}\big),$$
 
-where $w_a$ reuses the existing $C^2$ smootherstep (`phiAuthority`), $\operatorname{floor}_{+}$ is the
-§2b non-negativity floor, and $q_\text{ref}$ is a required non-dimensional config reference on the
-$V_\text{stall}$ scale (per the §2 parameterization policy), chosen so $w_a \equiv 1$ across the flight
-envelope (including near stall and at rotation) and $w_a < 1$ only through the sub-stall roll-out. The
-weight derives from the marginal aero effectiveness $\partial N_z/\partial\alpha = q\,S\,C_{L_\alpha}/(m g) \propto q$.
+where $w_a$ reuses the existing $C^2$ smootherstep (`phiAuthority`), the existing $\max(0,\cdot)$
+apportionment floor is unchanged, and $q_\text{ref}$ is a required non-dimensional config reference on
+the $V_\text{stall}$ scale (per the §2 parameterization policy), chosen so $w_a \equiv 1$ across the
+flight envelope (including near stall and at rotation) and $w_a < 1$ only through the sub-stall
+roll-out. The weight derives from the marginal aero effectiveness $\partial N_z/\partial\alpha = q\,S\,C_{L_\alpha}/(m g) \propto q$.
 
 This satisfies every constraint established above:
 
@@ -3019,15 +3020,72 @@ slope-correct — it re-introduces a $\cos\gamma$ dependence and forgoes the fix
 and rerouting the inversion **fold** toward small $\alpha$ (intervenes on the α output and changes the
 documented fold behavior in [load_factor_allocation.md](../algorithms/load_factor_allocation.md)).
 
-*Implementation.* Deferred to an `/impl` plan; **not yet built**. The reconciliation must use smooth
-forms for the surrounding **flight-physics** §2b operators in this path, per the smooth-dynamics
-standard and roadmap SD-1 — specifically the non-negativity floor (SD-LG-12) and the settle clip
-(SD-LG-11). (The relaxation-input floor SD-LG-13 reads the one-sided gear contact reaction and is
-exempt as contact physics.) $q_\text{ref}$ is verified so $w_a \to 1$ before rotation and $w_a < 1$
-across the roll-out.
+*Implementation.* Tracked in the consolidated landing-gear plan
+([landing_gear_dynamics.md](../implementation/landing_gear_dynamics.md), IP-LGD-26/27/28); **not yet
+built**.
+Only the effectiveness weight itself is in scope: the existing $\max(0,\cdot)$ apportionment floor and
+the other §2b operators are left **unchanged** here. (Whether to smooth those flight-physics operators
+is a separate, not-yet-agreed decision — see the §Smoothness Audit and OQ-LG-25, not part of this
+resolution.) $q_\text{ref}$ is set per the §2 non-dimensional policy and verified so $w_a \to 1$ before
+rotation and $w_a < 1$ across the roll-out.
 
 **Status:** Resolved — Alternative 1 (effectiveness-weighted gear-relative aero demand).
 Implementation pending (`/impl`); not yet built.
+
+### OQ-LG-25 — Whether and how to reconcile the flight-physics smoothness-audit findings
+
+**Problem.** The agreed [smooth-dynamics standard](../guidelines/general.md#smooth-dynamics--no-slope-discontinuities)
+requires flight-physics models to be $C^1$ with no in-envelope corner. The §Smoothness Audit below
+catalogs the flight-physics-coupling sites in the gear→aircraft path that currently use a hard
+$\operatorname{sat}$/$\operatorname{clamp}$/$\min$/$\max$ (SD-LG-9, 10, 11, 12, 14, 15, 17) plus one
+$C^1$-but-not-$C^2$ consistency item (`smoothstepEdges`). **Reconciling these is a design decision that
+has not been agreed.** Three things are undecided: (a) whether to reconcile, and which findings; (b)
+the specific smooth form per site (the standard names *candidate* forms, but the choice is not
+settled); and (c) — the substantive sub-decision — how any new regularization scale is parameterized.
+Until decided, none of these is authorized implementation work, and none appears on an implementation
+plan.
+
+The parameterization sub-decision: several candidate forms introduce a scale that exists **only** to
+round a corner ($V_\text{floor}$ for SD-LG-9, the $\bar a_x$ blend width for SD-LG-10, a soft-min
+tolerance for SD-LG-14, a command-saturation knee width for SD-LG-17). The §2 non-dimensional policy
+mandates required per-aircraft config fields for *physical* gear knobs; whether a pure
+numerical-smoothness scale is likewise a per-aircraft config field, or a fixed non-dimensional
+constant, is not settled.
+
+**Alternatives.**
+
+1. **Reconcile all in-scope findings; regularization scales as required per-aircraft non-dimensional
+   config fields.**
+   - *Benefits:* full standard compliance; uniform with the existing §2 parameterization; per-aircraft
+     tunable across airframes spanning orders of magnitude.
+   - *Drawbacks:* adds several config fields that are *numerical*, not physical, parameters, which
+     every aircraft config must then carry; larger change surface; smoothing may require re-tuning the
+     settle / force-channel behavior.
+   - *Prerequisite:* define each scale on the $V_\text{stall}$ / $g$ scales.
+2. **Reconcile all in-scope findings; regularization scales as fixed non-dimensional constants** (named
+   constants in code, not per-aircraft config).
+   - *Benefits:* full compliance with minimal config churn; treats numerical epsilons as what they are.
+   - *Drawbacks:* departs from the §2 "everything in the aircraft config" stance for these scales; one
+     global constant may not suit every airframe.
+   - *Prerequisite:* justify that each constant is airframe-independent in non-dimensional form.
+3. **Reconcile a prioritized subset** — e.g. only the finding(s) demonstrably active in the realistic
+   low-speed roll-out (SD-LG-9, the `V_safe` floor) — deferring the rest.
+   - *Benefits:* smallest change targeting the highest-impact corner; least risk of disturbing
+     validated behavior.
+   - *Drawbacks:* leaves known flight-physics corners standing; partial compliance.
+   - *Prerequisite:* confirm which findings actually perturb a validated scenario.
+4. **Defer all reconciliation;** keep the §Smoothness Audit as a standing catalog and revisit when a
+   corner is observed to cause a problem.
+   - *Benefits:* no regression risk now; observed need drives the work.
+   - *Drawbacks:* known violations of the agreed standard persist.
+   - *Prerequisite:* none.
+
+**Recommendation.** Deferred to the user — this records the decision rather than presuming it. The
+parameterization sub-decision (config field vs. constant) should be settled together with whichever
+alternative is chosen, since it sets the precedent for the rest of the SD-1 audit.
+
+**Status:** Open — awaiting decision. Gates any SD-1 landing-gear flight-physics smoothing
+reconciliation; not blocking the OQ-LG-24 implementation or any currently-planned work.
 
 ## Smoothness Audit — Slope-Discontinuity Findings
 
@@ -3041,17 +3099,20 @@ nature). The in-scope findings here are therefore in the **gear→aircraft coupl
 `src/Aircraft.cpp` (§2a/§2b), which shapes aerodynamic lift and the load-factor command as functions
 of aircraft flight state. The tire/suspension/contact constructs in `WheelUnit.cpp`,
 `LandingGear.cpp`, and `SurfaceFrictionUniform.cpp` are listed separately as **exempt**, for the
-record. **These findings are a catalog only; reconciling each in-scope site is separate, explicitly-
-instructed code work** (the SD-1 reconciliation phase), and must not be done without instruction.
+record. **These findings are an undecided catalog, not authorized work.** Whether and how to reconcile
+them — and how to parameterize any new regularization scale — is the design decision tracked in
+**[OQ-LG-25](#oq-lg-25--whether-and-how-to-reconcile-the-flight-physics-smoothness-audit-findings)**;
+until it is resolved, none of these is on any implementation plan and none may be implemented. The
+"candidate smooth form" column gives the form suggested by the standard, not an agreed choice.
 
 ### Compliant flight-physics patterns (the target forms)
 
 - **`phiAuthority`** (`Aircraft.cpp`) — the $C^2$ smootherstep on $\operatorname{clamp}((V/V_\text{ref})^2,0,1)$ used for the §2a authority fade $\Phi(V)$ and the attitude blend. The house standard.
 - **`sigma = V / sqrt(V*V + 0.25)`** (`Aircraft.cpp`, §2b-ii modeled wheel-drag sign) — a smooth regularized $\operatorname{sign}(V)$ on a flight-state signal; the model for any flight-physics sign regularization.
 
-### Flight-physics-coupling findings (in scope)
+### Flight-physics-coupling findings (in scope — undecided, see OQ-LG-25)
 
-| ID | Site (file · construct) | Corner is hit when | Severity | Recommended smooth form |
+| ID | Site (file · construct) | Corner is hit when | Severity | Candidate smooth form (pending OQ-LG-25) |
 | --- | --- | --- | --- | --- |
 | SD-LG-9 | `Aircraft.cpp` · velocity floor `std::max(V_inertial, 1.0)` (force channel `V_safe`) | $V=1$ m/s — squarely in the roll-out; feeds $\dot\gamma_\text{arrest}$ and the yaw→accel term | **High** | `sqrt(V*V + V_floor*V_floor)` |
 | SD-LG-10 | `Aircraft.cpp` · settle transition-speed switch `(axbar>=0 ? v_takeoff : v_land)` | $\bar a_x$ crosses 0 (decel↔accel) — `v_trans`, hence `s_unload`, jumps | **Med** | blend the two transition speeds with a smooth weight in $\bar a_x$ |
