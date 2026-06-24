@@ -44,6 +44,7 @@ _GA_CONFIG = {
         "dtheta_wn_roll_ratio": 9.79,
         "dtheta_wn_yaw_ratio": 4.89,
         "dtheta_vref_ratio": 1.0,
+        "aero_effectiveness_vref_ratio": 1.0,
         "att_filt_tau_ratio": 1.22,
         "nz_relax_wn_ratio": 2.45,
         "nz_relax_zeta_nd": 0.8,
@@ -451,4 +452,85 @@ def test_full_stop_landing_settles_on_gear():
     assert min_gear_frac > 0.7, (
         f"aircraft floats on the wing during roll-out: min gear load "
         f"{min_gear_frac:.2f} W (expected ~1 W on the gear)"
+    )
+
+
+def test_full_stop_landing_converges_no_lowspeed_divergence_oq_lg24():
+    # OQ-LG-24 acceptance: continue the flown full-stop landing ALL THE WAY to a stop. The
+    # aero-effectiveness weight w_a on the gear-relative aero demand must collapse the commanded
+    # angle of attack to zero as aero control authority vanishes at low speed, instead of pinning it
+    # at the achievable-envelope fold (≈ stall AoA). Before the fix the on-ground attitude diverged
+    # nose-up below ~0.25× stall and the stiff strut contact blew up (the aircraft was flung off the
+    # runway). The roll-out must reach a stop on the gear with bounded attitude and no launch.
+    import math
+
+    cfg_path = _repo_config("small_uas_ksba.json")
+    if not os.path.isfile(cfg_path):
+        pytest.skip(f"config not found: {cfg_path}")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    weight = cfg["inertia"]["mass_kg"] * 9.80665
+    s_ref = cfg["aircraft"]["S_ref_m2"]
+    cl_alpha = cfg["lift_curve"]["cl_alpha"]
+    cl_max = cfg["lift_curve"]["cl_max"]
+    v_stall = math.sqrt(2.0 * weight / (1.225 * s_ref * cl_max))
+
+    dt = 0.01
+    v_ref = 1.20 * v_stall
+    gamma = math.radians(6.0)
+    q0 = 0.5 * 1.225 * v_ref * v_ref
+    a_trim = (math.cos(gamma) * weight / (q0 * s_ref)) / cl_alpha
+    cfg["initial_state"].update(
+        {"altitude_m": 4.0, "pitch_rad": -gamma + a_trim,
+         "velocity_north_mps": v_ref * math.cos(gamma),
+         "velocity_east_mps": 0.0, "velocity_down_mps": v_ref * math.sin(gamma)}
+    )
+    ac = liteaero_sim_py.Aircraft(json.dumps(cfg), dt_s=dt)
+    ac.set_terrain(liteaero_sim_py.FlatTerrain(0.0))
+
+    cmd = liteaero_sim_py.AircraftCommand()
+    cmd.throttle_nd = 0.0
+
+    first_wow_t = None
+    max_pitch_deg_after_td = 0.0
+    max_alt_after_td = 0.0
+
+    for _ in range(int(60.0 / dt)):
+        s = ac.state()
+        v_h = math.hypot(s.velocity_north_mps, s.velocity_east_mps)
+        v_d = s.velocity_down_mps
+        wow = ac.contact_forces().weight_on_wheels
+        t = s.time_s
+
+        if wow:
+            cmd.n_z = 1.0
+        else:
+            gamma_cur = math.atan2(v_d, max(v_h, 0.1))
+            cmd.n_z = max(0.2, min(1.8, math.cos(gamma) + 2.0 * (gamma_cur - gamma)))
+
+        if wow and first_wow_t is None:
+            first_wow_t = t
+        # Sample the low-speed roll-out after the touchdown impact transient (≥1 s) — this is the
+        # sub-0.25×-stall regime where the divergence previously occurred.
+        if first_wow_t is not None and (t - first_wow_t) >= 1.0:
+            assert math.isfinite(s.pitch_rad), "attitude diverged (non-finite)"
+            max_pitch_deg_after_td = max(max_pitch_deg_after_td, abs(math.degrees(s.pitch_rad)))
+            max_alt_after_td = max(max_alt_after_td, abs(s.altitude_m))
+        ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
+
+    s = ac.state()
+    final_speed = math.hypot(math.hypot(s.velocity_north_mps, s.velocity_east_mps),
+                             s.velocity_down_mps)
+
+    assert first_wow_t is not None, "aircraft never touched down"
+    assert final_speed < 1.0, (
+        f"roll-out did not converge to a stop: final speed {final_speed:.2f} m/s "
+        f"(low-speed divergence)"
+    )
+    assert max_alt_after_td < 1.0, (
+        f"aircraft launched off the runway (gear contact blow-up): max alt "
+        f"{max_alt_after_td:.2f} m"
+    )
+    assert max_pitch_deg_after_td < 20.0, (
+        f"on-ground attitude diverged nose-up: max|pitch| {max_pitch_deg_after_td:.1f} deg"
     )

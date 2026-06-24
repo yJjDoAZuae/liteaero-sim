@@ -115,6 +115,7 @@ static const std::string kGaJson = R"({
         "dtheta_zeta_nd": 0.7, "dtheta_wn_pitch_ratio": 7.34,
         "dtheta_wn_roll_ratio": 9.79, "dtheta_wn_yaw_ratio": 4.89,
         "dtheta_vref_ratio": 1.0, "att_filt_tau_ratio": 1.22,
+        "aero_effectiveness_vref_ratio": 1.0,
         "nz_relax_wn_ratio": 2.45, "nz_relax_zeta_nd": 0.8,
         "settle_gain_nd": 25.0, "settle_clip_nd": 1.0, "settle_tau_ratio": 0.52,
         "settle_wheel_rr_nd": 0.05, "settle_vland_ratio": 1.0,

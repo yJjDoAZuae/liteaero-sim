@@ -33,6 +33,7 @@ _AIRCRAFT_GEAR_FIELDS: list[str] = [
     "dtheta_wn_roll_ratio",
     "dtheta_wn_yaw_ratio",
     "dtheta_vref_ratio",
+    "aero_effectiveness_vref_ratio",
     "att_filt_tau_ratio",
     "nz_relax_wn_ratio",
     "nz_relax_zeta_nd",

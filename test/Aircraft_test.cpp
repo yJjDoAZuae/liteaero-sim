@@ -73,6 +73,7 @@ static nlohmann::json makeConfig() {
             "dtheta_wn_roll_ratio": 9.79,
             "dtheta_wn_yaw_ratio": 4.89,
             "dtheta_vref_ratio": 1.0,
+            "aero_effectiveness_vref_ratio": 1.0,
             "att_filt_tau_ratio": 1.22,
             "nz_relax_wn_ratio": 2.45,
             "nz_relax_zeta_nd": 0.8,
@@ -624,6 +625,7 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
             "dtheta_zeta_nd": 0.7, "dtheta_wn_pitch_ratio": 7.34,
             "dtheta_wn_roll_ratio": 9.79, "dtheta_wn_yaw_ratio": 4.89,
             "dtheta_vref_ratio": 1.0, "att_filt_tau_ratio": 1.22,
+            "aero_effectiveness_vref_ratio": 1.0,
             "nz_relax_wn_ratio": 2.45, "nz_relax_zeta_nd": 0.8,
             "settle_gain_nd": 25.0, "settle_clip_nd": 1.0, "settle_tau_ratio": 0.52,
             "settle_wheel_rr_nd": 0.05, "settle_vland_ratio": 1.0,
@@ -1154,4 +1156,53 @@ TEST(AircraftTest, LandingGear_TireNeverPropels_FullScenario) {
     EXPECT_LT(max_abs_fx, 5.0f)
         << "free-rolling tire produced longitudinal traction during the roll; max|F_x|="
         << max_abs_fx << " N (must be ≈ 0 — the tire must never propel)";
+}
+
+// ---------------------------------------------------------------------------
+// OQ-LG-24: the aero-effectiveness weight w_a on the gear-relative aero demand makes the
+// commanded angle of attack decay to zero as aero control authority collapses at low speed,
+// rather than being pinned at the achievable-envelope fold (≈ stall AoA). Before the fix the
+// on-ground attitude diverged nose-up below ~0.25× stall and the stiff strut contact blew up
+// (pitch ±80°, the aircraft flung off the runway). Here a low-speed ground roll-out must
+// decelerate to a stop on the gear with bounded attitude and no launch.
+// ---------------------------------------------------------------------------
+TEST(AircraftTest, LandingGear_LowSpeedRollout_Converges_OQ_LG24) {
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addLandingGear(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 0.65;   // settled-on-gear ride height
+    cfg["initial_state"]["velocity_north_mps"] = 12.0;   // ~0.5× stall; rolls down through 0.25× stall
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_z = 1.0f;
+    constexpr float kDt       = 0.02f;
+    constexpr int   kSteps    = static_cast<int>(90.0f / kDt);
+    constexpr float kRad2Deg  = 57.2957795f;
+
+    float max_abs_alpha_deg = 0.0f;
+    float max_abs_alt       = 0.0f;
+    for (int i = 1; i <= kSteps; ++i) {
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+        const float a_deg = std::abs(ac->state().alpha() * kRad2Deg);
+        const float alt   = std::abs(ac->state().positionDatum().height_WGS84_m());
+        if (a_deg > max_abs_alpha_deg) max_abs_alpha_deg = a_deg;
+        if (alt   > max_abs_alt)       max_abs_alt       = alt;
+        ASSERT_TRUE(std::isfinite(a_deg)) << "attitude diverged (non-finite) at step " << i;
+    }
+    const auto& vel = ac->state().velocity_NED_mps();
+    const float v_horiz = std::sqrt(vel.x() * vel.x() + vel.y() * vel.y());
+    EXPECT_LT(v_horiz, 1.0f)
+        << "low-speed roll-out did not converge to a stop; final |v_horiz|=" << v_horiz << " m/s";
+    EXPECT_LT(max_abs_alpha_deg, 12.0f)
+        << "commanded angle of attack diverged toward the stall fold; max|alpha|="
+        << max_abs_alpha_deg << " deg";
+    EXPECT_LT(max_abs_alt, 1.0f)
+        << "aircraft launched off the runway (gear contact blow-up); max|alt|="
+        << max_abs_alt << " m";
 }

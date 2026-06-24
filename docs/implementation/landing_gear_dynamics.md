@@ -20,16 +20,17 @@ dependency-ordered, status-correct list. Four phases:
 - **Phase D — pending debt** (`todo`): the OQ-LG-24 effectiveness weight (resolved Alternative 1) and
   the OQ-LG-15 diagnostic-instrumentation cleanup.
 
-**Resolved OQs reflected here:** OQ-LG-5, 6, 7, 9–24. **Open OQs:** OQ-LG-1, 2, 3, 4, 8 (unrelated; no
-work item depends on them) and **OQ-LG-25** (whether/how to reconcile the flight-physics
-smoothness-audit findings — *gates no item in this plan*; the SD-1 reconciliations are deliberately
-not work items until OQ-LG-25 is resolved).
+**Resolved OQs reflected here:** OQ-LG-5, 6, 7, 9–23, and OQ-LG-24 **on its mechanism only**. **Open
+OQs:** OQ-LG-1, 2, 3, 4, 8 (unrelated; no work item depends on them); **OQ-LG-26** (the *definition* of
+the OQ-LG-24 weight `w_a` — the FBW load-factor command authority — **blocks IP-LGD-26/27/28**, whose
+interim implementation used an unaccepted provisional form and is to be backed out); and **OQ-LG-25**
+(whether/how to reconcile the flight-physics smoothness-audit findings — gates no item in this plan).
 
 **Design authority:** [`landing_gear.md`](../design/landing_gear.md),
 [`aircraft.md`](../design/aircraft.md),
 [`aircraft_config_v1.md`](../schemas/aircraft_config_v1.md)
 
-**Last updated:** 2026-06-23
+**Last updated:** 2026-06-24 (OQ-LG-24 `w_a` definition reopened as OQ-LG-26; IP-LGD-26/27/28 blocked, interim build to be backed out; IP-LGD-29 blocked pending a scope decision)
 
 ---
 
@@ -62,10 +63,28 @@ not work items until OQ-LG-25 is resolved).
 | IP-LGD-23 | done | Additive axial-acceleration settle/rotation term (`_settle_*`) with ground fade `Φ_g` and clip (OQ-LG-23) | IP-LGD-22 | [landing_gear.md §2b-ii, §OQ-LG-23](../design/landing_gear.md) |
 | IP-LGD-24 | done | Non-dimensionalize all §2a/§2b gear knobs as required config ratios × physical scales; `initialize()` throws if any is missing (OQ-LG-17) | IP-LGD-18, IP-LGD-19, IP-LGD-20, IP-LGD-21, IP-LGD-22, IP-LGD-23 | [landing_gear.md §2 Parameterization, §OQ-LG-17](../design/landing_gear.md) |
 | IP-LGD-25 | done | JSON + proto round-trip for the §2a/§2b state (`_force_x`, `_fz_stance_filter`, `_dtheta_*_filter`, `_nz_relax_filter`, `_settle_axbar`, attitude filter, CL-recovery flags) | IP-LGD-18, IP-LGD-19, IP-LGD-20, IP-LGD-21, IP-LGD-22, IP-LGD-23 | [landing_gear.md §Serialization](../design/landing_gear.md), [aircraft.md §Serialization](../design/aircraft.md) |
-| IP-LGD-26 | todo | Add required non-dimensional `aero_effectiveness_vref_ratio` to every aircraft config (`configs/*.json`, `test/data/aircraft/*.json`), `makeConfig()`, and the config schema doc | — | [landing_gear.md §OQ-LG-24](../design/landing_gear.md#oq-lg-24--aerodynamic-load-factor-allocation-is-not-limited-by-available-control-authority-at-low-q), [aircraft_config_v1.md](../schemas/aircraft_config_v1.md) |
-| IP-LGD-27 | todo | In `Aircraft`: read `aero_effectiveness_vref_ratio` in `initialize()` (derive `_aero_effectiveness_vref_mps`, throw if missing); in `step()` §2b apply `w_a = phiAuthority(V_air, V_ref)` to the gear-relative demand inside the existing `max(0,·)` floor (OQ-LG-24 Alt 1; floor and other operators unchanged) | IP-LGD-26, IP-LGD-22 | [landing_gear.md §OQ-LG-24](../design/landing_gear.md#oq-lg-24--aerodynamic-load-factor-allocation-is-not-limited-by-available-control-authority-at-low-q) |
-| IP-LGD-28 | todo | Scenario acceptance test: flown full-stop roll-out decelerates to a stop on the gear with no sub-0.25×-stall nose-up attitude divergence (extend `test_full_stop_landing_settles_on_gear` or add a sibling pytest) | IP-LGD-27 | [landing_gear.md §OQ-LG-24](../design/landing_gear.md#oq-lg-24--aerodynamic-load-factor-allocation-is-not-limited-by-available-control-authority-at-low-q), [landing_gear.md §Test Strategy](../design/landing_gear.md#test-strategy) |
-| IP-LGD-29 | todo | Remove the TEMPORARY OQ-LG-15 diagnostic instrumentation: `WheelUnit::ContactDiag`, `_diag`, `lastContactDiag()` (`WheelUnit.hpp/.cpp`), and the `nose_*` diagnostic CSV columns in the gear test | — | [landing_gear.md §OQ-LG-15 resolution](../design/landing_gear.md) |
+| IP-LGD-26 | blocked (OQ-LG-26) | Add required non-dimensional `aero_effectiveness_vref_ratio` to every aircraft config (`configs/*.json`, `test/data/aircraft/*.json`), `makeConfig()`, and the config schema doc | — | [landing_gear.md §OQ-LG-26](../design/landing_gear.md#oq-lg-26--fbw-load-factor-command-authority-definition-of-the-oq-lg-24-weight) |
+| IP-LGD-27 | blocked (OQ-LG-26) | In `Aircraft`: read the `w_a` reference parameter in `initialize()`; in `step()` §2b apply `w_a` to the gear-relative demand inside the existing `max(0,·)` floor (OQ-LG-24 mechanism) | IP-LGD-26, IP-LGD-22 | [landing_gear.md §OQ-LG-26](../design/landing_gear.md#oq-lg-26--fbw-load-factor-command-authority-definition-of-the-oq-lg-24-weight) |
+| IP-LGD-28 | blocked (OQ-LG-26) | Scenario acceptance test: flown full-stop roll-out decelerates to a stop on the gear with no sub-0.25×-stall nose-up attitude divergence | IP-LGD-27 | [landing_gear.md §OQ-LG-26](../design/landing_gear.md#oq-lg-26--fbw-load-factor-command-authority-definition-of-the-oq-lg-24-weight), [landing_gear.md §Test Strategy](../design/landing_gear.md#test-strategy) |
+| IP-LGD-29 | blocked (decision) | Remove the TEMPORARY OQ-LG-15 diagnostic instrumentation. **As-written scope is over-aggressive** — see blocked reason | — | [landing_gear.md §OQ-LG-15 resolution](../design/landing_gear.md) |
+
+> **IP-LGD-26/27/28 blocked reason:** OQ-LG-24 settled only the *mechanism* (weight the gear-relative
+> demand by `w_a`); the **definition** of `w_a` — the FBW load-factor command authority it represents,
+> bounded by the aero `∝q` ceiling — is the open question OQ-LG-26 and is undocumented. An interim build
+> implemented a provisional form (the §2a smootherstep fade with a single `V_ref`) and a premature
+> `aero_effectiveness_vref_ratio` config field; that form is not an accepted definition and is **to be
+> backed out**. These items cannot complete until OQ-LG-26 fixes the `w_a` definition and
+> parameterization.
+>
+> **IP-LGD-29 blocked reason:** Removing `ContactDiag` / `lastContactDiag()` would break the
+> **permanent** regression `AircraftTest.LandingGear_TireNeverPropels_FullScenario`
+> (`Aircraft_test.cpp`) and the `TireDynamics.Emit_FreeRollSweepCsv` documentation emitter, which use
+> the accessor to observe the Pacejka longitudinal force `F_x` separately from rolling resistance —
+> a decomposition not recoverable from the public aggregate `step()` force vector. Only the OQ-LG-15
+> diagnostic *test* (`LandingGear_FullStop_OQ_LG15_Diagnostic`) and its `nose_*` CSV columns are
+> genuinely temporary. Whether to (a) retain the force-breakdown accessor as a permanent observability
+> interface and remove only the diagnostic test/CSV, or (b) remove the accessor and rework the two
+> dependent tests, is a not-yet-agreed decision; blocked pending it.
 
 ---
 

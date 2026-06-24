@@ -153,6 +153,10 @@ private:
     float  _dtheta_wn_yaw_rad_s   = 2.0f;
     float  _dtheta_zeta_nd        = 0.7f;
     float  _dtheta_vref_mps       = 24.0f; // V_ref for the V² authority fade Φ(V) (OQ-LG-19)
+    // OQ-LG-24: V_ref for the aero-effectiveness weight w_a = Φ(V_air, V_ref) applied to the
+    // gear-relative aero load-factor demand (§2b), so the commanded α decays to zero as aero
+    // control effectiveness collapses on the ground. Config-derived (× V_stall); not serialized.
+    float  _aero_effectiveness_vref_mps = 24.0f;
     // H₁ FBW load-handoff parameters (OQ-LG-17): distinct from the FBW *command* filter
     // (nz_wn) and slower than the body rotational mode H₂. The destancing low-pass shares
     // this timescale (both isolate the steady gear load), so it is NOT an independent knob:
