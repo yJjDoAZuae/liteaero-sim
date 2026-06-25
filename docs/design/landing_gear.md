@@ -172,24 +172,18 @@ $$\mathbf{F}_{\text{gear}}^W = R_{WN}\,R_{NB}\,\mathbf{f}_{\text{body}}$$
 
 All three components (x, y, z) contribute to ax, ay, az. When the flight-path angle
 $\gamma \neq 0$ — as during a gear bounce — the vertical normal component $F_z$ projects
-as $F_z\sin\gamma$ onto wind-x. Whether this cross-axis coupling is a correct physical
-effect or a model fidelity limitation of the wind-frame integrator is an open question
-(OQ-LG-10).
+as $F_z\sin\gamma$ onto wind-x. This cross-axis coupling is the correct physical effect of the
+full wind-frame transform and is retained; the on-ground attitude transients it would otherwise
+produce are handled by the rotation-deviation state (§2a) and adequate gear damping, not by
+removing the coupling.
 
 **2. Gear force & moment integration — rotation-deviation state plus the n_z load handoff (apportionment relaxation + additive axial-acceleration settle term).**
 
-> **Status: implemented (2026-06).** This is the authoritative design for how gear forces and
-> moments couple into the load-factor model; it replaced the earlier two-speed hold-time n_z
-> suppression. The rotation-deviation state §2a, the apportionment relaxation §2b-i, and the
-> additive axial-acceleration settle/rotation term §2b-ii (OQ-LG-23) are all implemented and
-> guarded by scenario tests — see the "Implementation status" note at the end of this section. The
-> root-cause analysis that motivated the integration is recorded as OQ-LG-15 (resolved).
-
 The load-factor model represents body attitude kinematically (pitch = flight-path angle γ +
 α, with α set by the LFA), so it has no rotational-inertia state. A long-lever-arm gear
-contact force applied against that zero-inertia attitude produces a non-physical feedback
-(OQ-LG-15). The design below restores the missing rotational inertia where it matters and
-routes gear force and moment into the FBW channels.
+contact force applied against that zero-inertia attitude produces a non-physical feedback (the
+gear–attitude feedback artifact). The design below restores the missing rotational inertia where it
+matters and routes gear force and moment into the FBW channels.
 
 The load-factor model normally sets the body attitude to FPA + α with zero rotational inertia.
 The gear couples in through **two mechanisms, both driven by the gear-derived loads** so that
@@ -203,8 +197,8 @@ the body's inertial pitch/bank response — through a **stable second-order low-
 inputs** (a damped spring–mass–damper, $H_2(s)=\omega^2/(s^2+2\zeta\omega s+\omega^2)$ scaled
 per channel):
 
-The required behavioral properties of $\Delta\theta$ are (these are the agreed
-acceptance properties any realization must satisfy; symbols defined in OQ-LG-18):
+The required behavioral properties of $\Delta\theta$ are (the acceptance properties any realization
+must satisfy):
 
 - **P1 — Asymptotic decay to zero when the gear is unloaded.** When the gear force is
   zero, $\Delta\theta$ returns to zero *asymptotically* through the filter's restoring
@@ -230,15 +224,16 @@ acceptance properties any realization must satisfy; symbols defined in OQ-LG-18)
   guarantees $\Delta\theta$ and its forcing vanish identically off-ground.
 
 $\Delta\theta$ is forced by two gear-derived inputs **with distinct transfers** (these are *not*
-both a low-pass — see OQ-LG-18/19/20):
+both a low-pass):
 
 1. **Force channel** (pitch) — the **destanced gear vertical load**'s flight-path contribution
    (the body's inertial resistance to the gear *arresting the descent*). Realized as the
-   high-pass-complement transfer $G(s) = -(s+2\zeta\omega_n)/D$ acting on the destanced,
-   dynamic-pressure-faded gear flight-path rate $u = \dot\gamma_{\text{arrest}}\,\Phi(V)$,
-   $\Phi(V)=\mathrm{sat}(V^2/V_{\text{ref}}^2)$ (OQ-LG-19 fade) — $\to 0$ in true steady roll and
-   at low speed. $G(s)$ is realized in the sim via the library's general `tustin_2_tf`+`tf2ss`
-   (OQ-LG-20), with **no free integrator**.
+   high-pass-complement transfer $G(s) = -(s+2\zeta\omega_n)/D$, where $D = s^2+2\zeta\omega_n s+\omega_n^2$
+   is the same second-order denominator as $H_2$, acting on the destanced, dynamic-pressure-faded gear
+   flight-path rate $u = \dot\gamma_{\text{arrest}}\,\Phi(V)$, with the $C^2$ smootherstep
+   dynamic-pressure authority fade $\Phi(V)=\operatorname{smootherstep}(\operatorname{clamp}(V^2/V_{\text{ref}}^2,0,1))$
+   — $\to 0$ in true steady roll and at low speed. $G(s)$ is realized in the sim via the library's
+   general `tustin_2_tf`+`tf2ss`, with **no free integrator**.
 2. **Moment channel** — the **gear moment** $\mathbf{M}^W = R_{WN}R_{NB}\mathbf{M}^B$ as $M^W/I$
    (direct angular forcing) through the **low-pass** $H_2$, $\Delta\theta_{\text{moment}} =
    (1/\omega_n^2)\,H_2(M/I)$ (finite DC = static stance), per axis (pitch from $M_y^W/I_{yy}$,
@@ -246,9 +241,9 @@ both a low-pass — see OQ-LG-18/19/20):
    perturbation $\Delta a_y$). **Not faded** — gear torque persists at zero airspeed.
 
 The $H_2$ aerodynamic parameters ($\omega_n,\zeta$) are physical rotational-mode characteristics
-supplied as constants (the inertia tensor alone is dimensionally insufficient for a frequency);
-per OQ-LG-19 the aero-mediated parts scale with dynamic pressure, applied here as the explicit
-$\Phi(V)$ fade on the force channel.
+supplied as constants (the inertia tensor alone is dimensionally insufficient for a frequency); the
+aero-mediated parts scale with dynamic pressure, applied here as the explicit $\Phi(V)$ fade on the
+force channel.
 
 $\Delta\theta$ is summed into **both** the aero angle of attack and the gear-geometry attitude:
 
@@ -263,8 +258,8 @@ starts at zero, and CL follows. This is the confirmed mechanism — the FPA move
 but the lag is produced by $\Delta\theta$ responding to the **gear load**, not by filtering the
 FPA. When the gear unloads, $\Delta\theta\to 0$ and $\alpha_\text{aero}\to\alpha_\text{cmd}$:
 exactly trim-aero, no added dynamics. The same $\Delta\theta$ in $\theta_\text{geom}$ breaks the
-OQ-LG-15 sweep — the body does not follow the gear-force-induced FPA swing, so the contact
-point is not swept through space at the FPA rate.
+gear–attitude feedback sweep — the body does not follow the gear-force-induced FPA swing, so the
+contact point is not swept through space at the FPA rate.
 
 **Never integrated into `q_nw`; no stuck bias.** $\Delta\theta$ is a separate state, **never
 integrated into the primary attitude quaternion `q_nw`**. Its restoring term (the spring
@@ -289,14 +284,14 @@ with $w_a(q)$ the **(b-iii) aero-effectiveness authority weight** defined below.
 $$\bar a_x = \mathrm{LP}\!\left[\frac{T - D_\text{aero} - D_\text{wheel}(V) - D_\text{brake}}{m}\right]
 \quad(\text{steady modeled longitudinal acceleration, not raw EOM}\ a_x).$$
 
-**(b-i) Apportionment relaxation (OQ-LG-22; retained).** $n_{z,\text{gear}}$ is the **actual**
+**(b-i) Apportionment relaxation.** $n_{z,\text{gear}}$ is the **actual**
 unilateral ground reaction normalized by weight, smoothed by the load-handoff filter $H_1$; the
 wing is asked only for the residual the gear is not already carrying. In steady state the total
 delivered load factor is $n_{z,\text{aero}}+n_{z,\text{gear}} = n_{z,\text{cmd}}$, so command
 authority is preserved and the gear has no command authority. This part **holds** a settled state
 once reached: as the gear loads up, $n_{z,\text{gear}}\to1$ and the wing command $\to0$.
 
-**(b-ii) Additive axial-acceleration term (OQ-LG-23; resolved).** On its own, part (b-i) is
+**(b-ii) Additive axial-acceleration term.** On its own, part (b-i) is
 **degenerate**: the gear is a spring whose force depends on how much the wing is already
 supporting, so every split with $n_{z,\text{aero}}+n_{z,\text{gear}}=n_{z,\text{cmd}}$ is
 self-consistent, and the model can rest in the wrong one — the wing floating the aircraft at
@@ -311,7 +306,7 @@ The single gain $k_s>0$ converts this to a load-factor increment; the increment 
 filtered** and **clipped to $\pm\Delta_{\max}$**; $\Phi_g$ is a ground-engagement fade — a
 **stall-referenced speed smoothstep combined with the WoW signal** ($\Phi_g = S_\text{unload}(V)\cdot
 \mathrm{WoW}$), distinct from the §2a rotation-influence dynamic-pressure fade, with **separate
-landing/takeoff transition speeds** (shared width) — see OQ-LG-23.
+landing/takeoff transition speeds** (shared width).
 
 This construction is what keeps the settle loop stable: feeding the **raw** axial acceleration —
 which carries the oscillatory bounce/chatter of the gear and tire contact drag — back into the
@@ -394,23 +389,12 @@ The contact model stays **quasi-static / algebraic** (no strut ODE, no implicit 
 integrator); the only added integrated dynamics are these filters (Tustin / `FilterSS2Clip`),
 and the aircraft EOM stays RK4.
 
-*Parameterization:* the **rotation-deviation filter $H_2$** (§2a) and the **apportionment filter
-$H_1$** (b-i) are parameterized per OQ-LG-17 — $H_2$ from physical rotational characteristics (the
-inertia tensor, each axis through its own $I_{xx}/I_{yy}/I_{zz}$), $H_1$ from FBW load-handoff
-characteristics. The additive settle/rotation gain $k_s$ and fade $\Phi_g$ (b-ii) are set per
-OQ-LG-23.
-
-*Implementation status.* Part **(b-i)** — the $H_1$ apportionment relaxation on the actual gear
-reaction (OQ-LG-22, Alternative 4) — is implemented in the code, **and is retained**. The
-`_body_in_hard_contact` flag-lifecycle fix (clear on genuine separation via the signed
-`BodyCollider::minCornerClearance_m()`) is also implemented (committed). What is **not yet
-implemented** the relaxation alone is degenerate and leaves a floating equilibrium (measured: wing
-$\approx 0.8\,W$, gear $0.18\,W$, agl held high, pitch nose-down). Part **(b-ii)**, the additive
-axial-acceleration term (OQ-LG-23, resolved), **is now implemented** and corrects this: with it, the
-full-stop roll-out settles onto the gear (gear $\approx 1.0\,W$, no float) and the powered go-around
-rotates and climbs. It is guarded by the full-stop "sits on the gear" and powered go-around scenario
-tests (§Test Strategy), which run against a freshly built binary (the test harness loads the
-build-output extension and refuses to run against a stale one).
+*Parameterization:* the **rotation-deviation filter $H_2$** (§2a) is parameterized from physical
+rotational characteristics (the inertia tensor, each axis through its own $I_{xx}/I_{yy}/I_{zz}$); the
+**apportionment filter $H_1$** (b-i) from FBW load-handoff characteristics, distinct from the FBW
+command filter and slower than $H_2$. The additive settle/rotation gain $k_s$ and fade $\Phi_g$ (b-ii)
+are configured per §2b-ii. (Every knob is a required non-dimensional config field; see the
+parameterization summary below.)
 
 *Parameterization (non-dimensional, no hardcoded defaults).* Every knob in this integration
 (§2a/§2b) is a **required, non-dimensional** config field — `Aircraft::initialize()` has no
@@ -553,8 +537,9 @@ so $\delta$, $\dot\delta$, and the normal force $F_z$ are identical on every sub
 `substeps` therefore does **not** refine $\delta$, $\dot\delta$, $F_z$, or the contact
 geometry, and does not advance the aircraft state; it only refines the wheel-spin transient.
 The class default is `substeps = 4`; some fixtures override it (the `LandingGear_FullStop`
-fixture sets `substeps = 1`). See OQ-LG-15 for why raising `substeps` does not mitigate the
-deep-penetration force spikes.
+fixture sets `substeps = 1`). Raising `substeps` does not mitigate the deep-penetration force
+spikes — those are a single-step penetration artifact (see §7, Gear Oscillation Stability), not a
+wheel-spin transient that finer substepping would resolve.
 
 **Note:** unsprung mass and tyre spring compliance are second-order effects relevant only
 to a full 6DOF equations-of-motion model (`Aircraft6DOF`). The quasi-static strut is
@@ -669,7 +654,7 @@ with a deadband below $|\omega_w| < 0.01$ rad/s to avoid chatter).
 #### 4a. Integration Method and Stability
 
 The wheel ODE is integrated by **Tustin (bilinear) discretization** using a predictor-corrector
-scheme (OQ-LG-5). At each inner substep:
+scheme. At each inner substep:
 
 1. Compute $\dot{\omega}_w^k$ from $F_x(\omega_w^k)$, $\tau_\text{brake}(\omega_w^k)$, and
    $\tau_\text{roll}(\omega_w^k)$.
@@ -682,7 +667,7 @@ scheme (OQ-LG-5). At each inner substep:
 Tustin is unconditionally stable for linear stiffness and second-order accurate in time.
 The `substeps` value is a configuration parameter set per aircraft in the JSON config.
 For the trim-aero model, it is chosen as a deliberate engineering trade-off between
-integration accuracy and computational cost: the 3× Nyquist accuracy bound from OQ-LG-5
+integration accuracy and computational cost: the 3× Nyquist accuracy bound
 gives the minimum substep count for high-fidelity wheel spin dynamics, but those values
 are computationally prohibitive for a trim-aero simulation that does not require high
 dynamic fidelity in the wheel spin-up transient. The configured value need not satisfy
@@ -693,10 +678,10 @@ braking behavior for the intended scenario.
 
 The rolling-condition clamp applied under explicit Euler (which snapped $\omega_w$ when
 the sign of $\kappa$ changed mid-substep) was removed when the Tustin integrator was
-introduced (OQ-LG-5).
+introduced.
 
-A separate, deliberate **quasi-static free-roll clamp** is retained (OQ-LG-11
-resolution). When no brake torque is applied, `WheelUnit::step()` sets
+A separate, deliberate **quasi-static free-roll clamp** is retained. When no brake torque is
+applied, `WheelUnit::step()` sets
 
 $$\omega_w = \max\!\bigl(0,\; V_{cx}/r_w\bigr)$$
 
@@ -717,7 +702,7 @@ The four canonical tyre events are handled as follows:
 
 | Event | Condition | Action |
 | --- | --- | --- |
-| First contact | `penetration_m` transitions $\leq 0 \to > 0$ | $\omega_w$ arrives from airborne bearing drag (OQ-LG-6); clamp immediately sets $\omega_w = V_{cx}/r_w$ when no brake is applied |
+| First contact | `penetration_m` transitions $\leq 0 \to > 0$ | $\omega_w$ arrives from airborne bearing drag; clamp immediately sets $\omega_w = V_{cx}/r_w$ when no brake is applied |
 | Liftoff | `penetration_m` transitions $> 0 \to \leq 0$ | Strut resets to zero; airborne bearing drag ODE takes over |
 | Free roll (no brake) | `brake_demand_nd` $< 10^{-4}$ | $\omega_w$ clamped to $V_{cx}/r_w$ exactly; $\kappa = 0$; $F_x = 0$ |
 | Lockup | $\omega_w \to 0$ under full braking | Tustin ODE integrates; regularized by rolling-resistance deadband at $\lvert\omega_w\rvert < 0.01$ rad/s |
@@ -835,7 +820,7 @@ $$\Delta E_\text{damp}(A, \omega) = \frac{\pi}{2}\,A^2\,\omega\,(b_c + b_e)$$
 This is always positive — damping removes energy regardless of the $b_c/b_e$ ratio. Low
 $b_e$ (fast rebound, slow decay) does **not** inject energy; it merely prolongs the
 oscillation. This DF analysis describes the *physical* gear-spring bounce mode. Note that
-the `LandingGear_FullStop` terminal-velocity behavior (OQ-LG-15) is **not** this spring
+the `LandingGear_FullStop` terminal-velocity behavior is **not** this spring
 limit cycle: the diagnostic shows it is a numerical artifact (deep single-step penetration
 producing a one-step forward impulse), oscillating at the contact sampling rate rather than
 the spring natural frequency. The DF spring-mode analysis here remains valid for assessing
@@ -1065,7 +1050,7 @@ speeds and outer timesteps.
 
 The Tustin predictor-corrector evaluates Pacejka longitudinal and lateral formulas twice per
 substep (once at $\omega_k$, once at $\omega^*$). $N_\text{sub}$ is set per aircraft by the
-3× Nyquist rule (OQ-LG-5 resolution). All arithmetic is single-precision `float`.
+3× Nyquist rule. All arithmetic is single-precision `float`.
 
 ### Memory Footprint (tricycle gear)
 

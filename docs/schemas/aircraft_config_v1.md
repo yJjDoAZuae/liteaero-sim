@@ -98,10 +98,10 @@ very different dimensional values). The three scales are:
 | `dtheta_vref_ratio` | float | × `V_stall` | > 0 | Reference speed for the V² authority fade Φ(V). |
 | `aero_authority_v_lower_ratio` | float | × `V_stall` (speed) | `0 < lower < upper ≤ 1` | Lower edge of the aero-authority weight `w_a` transition band, as an **airspeed** ratio `V/V_stall` (squared to dynamic pressure internally). Below this speed the wing is given no commanded load-factor authority (`w_a = 0`). Keep above ~0.5 so authority is fully handed off across the sustained low-speed roll-out. See [landing_gear.md §2b (b-iii)](../design/landing_gear.md). |
 | `aero_authority_v_upper_ratio` | float | × `V_stall` (speed) | `0 < lower < upper ≤ 1` | Upper edge of the `w_a` transition band, as an **airspeed** ratio `V/V_stall`. At/above this speed the wing has full authority (`w_a = 1`); keep `≤ 1` (below stall) so flight and takeoff rotation are unaffected. See [landing_gear.md §2b (b-iii)](../design/landing_gear.md). |
-| `att_filt_tau_ratio` | float | × gear period | > 0 | Attitude-reference velocity low-pass τ (OQ-LG-21). |
+| `att_filt_tau_ratio` | float | × gear period | > 0 | Attitude-reference velocity low-pass τ: how heavily per-step gear-bounce wobble is rejected from the low-speed attitude reference while retaining the runway-slope/approach trend. |
 | `nz_relax_wn_ratio` | float | × `g/V_stall` | > 0 | H₁ FBW load-handoff natural frequency. |
 | `nz_relax_zeta_nd` | float | (pure nd) | > 0 | H₁ FBW load-handoff damping ratio. |
-| `settle_gain_nd` | float | (pure nd) | > 0 | Gain on the steady axial-deficit (g) → load-factor settle increment (OQ-LG-23). |
+| `settle_gain_nd` | float | (pure nd) | > 0 | Gain on the steady axial-deficit (g) → load-factor settle increment that sheds wing lift on landing and builds it on takeoff. |
 | `settle_clip_nd` | float | (pure nd) | > 0 | Clip (± g) on the settle increment. |
 | `settle_tau_ratio` | float | × gear period | > 0 | Low-pass τ on the steady longitudinal-force deficit ā_x. |
 | `settle_wheel_rr_nd` | float | (pure nd) | > 0 | Steady rolling-drag coefficient for the D_wheel(V) model. |
@@ -111,6 +111,32 @@ very different dimensional values). The three scales are:
 
 The H₂ destancing low-pass `dtheta_stance_tau_s` is **not** a configured field: it is derived as
 `1 / (nz_relax_wn_ratio · g/V_stall)` because it shares the H₁ load-handoff timescale.
+
+#### Choosing the gear-coupling values
+
+These are control-design knobs, not measured physical constants; tune them against the
+landing/takeoff scenario tests. Because they are non-dimensional ratios, the reference values below
+are a sound starting point for *any* airframe. The model they parameterize is specified in
+[landing_gear.md §Integration Contract](../design/landing_gear.md).
+
+- **Body rotational response to gear loads (`dtheta_*`).** The H₂ filters set how the body's
+  pitch/roll/yaw deviation responds to gear force and moment. Natural frequencies are fractions of the
+  flight-path frequency `g/V_stall` (reference: pitch ≈ 7.3, roll ≈ 9.8, yaw ≈ 4.9), with damping
+  `dtheta_zeta_nd ≈ 0.7`. Higher `wn` = a stiffer, faster body rotational response (less deviation
+  under a given gear load); the values must clear the command-filter Nyquist bound at the chosen `dt`.
+- **FBW load-handoff (`nz_relax_*`).** The H₁ filter smooths the gear's share of the commanded load
+  factor as the wing hands off to the gear. It is a *control* characteristic, distinct from and slower
+  than the body rotational mode: `nz_relax_wn_ratio ≈ 2.5` (× `g/V_stall`), `nz_relax_zeta_nd ≈ 0.8`.
+- **Aero-authority hand-off (`aero_authority_v_lower/upper_ratio`).** The airspeed band over which the
+  FBW gives up commanding aerodynamic load factor as the aircraft settles onto the gear. Reference:
+  lower ≈ 0.55, upper ≈ 0.80 (× `V_stall`). Place the band below stall so flight is unaffected, and the
+  lower edge above ≈ 0.5 so authority is fully handed off across the sustained low-speed roll-out — too
+  low a band relocates the on-ground attitude divergence rather than removing it.
+- **Settle / rotation (`settle_*`).** The additive term that sheds wing lift on landing (and builds it
+  on takeoff) from the steady longitudinal-force deficit. Reference: `settle_gain_nd ≈ 25`,
+  `settle_clip_nd ≈ 1.0` g, `settle_tau_ratio ≈ 0.5` (× gear period), `settle_wheel_rr_nd ≈ 0.05`, and
+  fade transition speeds `settle_vland_ratio ≈ 1.0` / `settle_vtakeoff_ratio ≈ 1.15` with shared
+  `settle_vwidth_ratio ≈ 0.5` (× `V_stall`).
 
 ---
 
