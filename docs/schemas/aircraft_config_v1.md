@@ -96,7 +96,8 @@ very different dimensional values). The three scales are:
 | `dtheta_wn_roll_ratio` | float | × `g/V_stall` | > 0 | Roll rotation-deviation natural frequency. |
 | `dtheta_wn_yaw_ratio` | float | × `g/V_stall` | > 0 | Yaw rotation-deviation natural frequency. |
 | `dtheta_vref_ratio` | float | × `V_stall` | > 0 | Reference speed for the V² authority fade Φ(V). |
-| `aero_effectiveness_vref_ratio` | float | × `V_stall` | > 0 | Reference speed for the aero-effectiveness weight `w_a` on the gear-relative aero load-factor demand (OQ-LG-24). |
+| `aero_authority_v_lower_ratio` | float | × `V_stall` (speed) | `0 < lower < upper ≤ 1` | Lower edge of the aero-authority weight `w_a` transition band, as an **airspeed** ratio `V/V_stall` (squared to dynamic pressure internally). Below this speed the wing is given no commanded load-factor authority (`w_a = 0`). Keep above ~0.5 so authority is fully handed off across the sustained low-speed roll-out. See [landing_gear.md §2b (b-iii)](../design/landing_gear.md). |
+| `aero_authority_v_upper_ratio` | float | × `V_stall` (speed) | `0 < lower < upper ≤ 1` | Upper edge of the `w_a` transition band, as an **airspeed** ratio `V/V_stall`. At/above this speed the wing has full authority (`w_a = 1`); keep `≤ 1` (below stall) so flight and takeoff rotation are unaffected. See [landing_gear.md §2b (b-iii)](../design/landing_gear.md). |
 | `att_filt_tau_ratio` | float | × gear period | > 0 | Attitude-reference velocity low-pass τ (OQ-LG-21). |
 | `nz_relax_wn_ratio` | float | × `g/V_stall` | > 0 | H₁ FBW load-handoff natural frequency. |
 | `nz_relax_zeta_nd` | float | (pure nd) | > 0 | H₁ FBW load-handoff damping ratio. |

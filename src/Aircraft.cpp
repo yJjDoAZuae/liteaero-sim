@@ -34,6 +34,15 @@ static inline float smoothstepEdges(float x, float lo, float hi) {
     return t * t * (3.0f - 2.0f * t);
 }
 
+// C² smootherstep rising from 0 (x ≤ lo) to 1 (x ≥ hi). Used for the OQ-LG-24/26 aero-authority
+// weight w_a(q) over the dynamic-pressure band [q_lo, q_hi]: 6t⁵ − 15t⁴ + 10t³, with zero first and
+// second derivatives at both knots (no in-envelope corner; smooth-dynamics standard).
+static inline float smootherstepEdges(float x, float lo, float hi) {
+    if (hi <= lo) return x >= hi ? 1.0f : 0.0f;
+    const float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -131,10 +140,18 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _dtheta_wn_yaw_rad_s   = ac.at("dtheta_wn_yaw_ratio").get<float>()   * f_scale_rad_s;
     // V_ref for the V² authority fade Φ(V) (× V_stall).
     _dtheta_vref_mps       = ac.at("dtheta_vref_ratio").get<float>()     * v_scale_mps;
-    // OQ-LG-24: V_ref for the aero-effectiveness weight w_a on the gear-relative aero demand
-    // (§2b). On the V_stall scale; with ratio = 1 the weight is ≡1 across the flight envelope and
-    // < 1 only through the sub-stall roll-out, where it collapses the commanded α to zero.
-    _aero_effectiveness_vref_mps = ac.at("aero_effectiveness_vref_ratio").get<float>() * v_scale_mps;
+    // OQ-LG-24/26: aero-authority weight w_a(q) band edges. The config knobs are SPEED ratios
+    // (× V_stall — how the load-factor hand-off is reasoned about); they are converted to dynamic
+    // pressure here, q_edge = ½ρ₀(r·V_stall)² = r²·q_stall, so the smootherstep itself remains a
+    // function of q. The band lies below stall (r ≤ 1) → w_a ≡ 1 in the flight envelope, → 0 (commanded
+    // α → 0) on the ground.
+    {
+        const float q_stall_pa = 0.5f * 1.225f * _stall_speed_mps * _stall_speed_mps;
+        const float v_lo = ac.at("aero_authority_v_lower_ratio").get<float>();
+        const float v_hi = ac.at("aero_authority_v_upper_ratio").get<float>();
+        _wa_q_lo_pa = v_lo * v_lo * q_stall_pa;
+        _wa_q_hi_pa = v_hi * v_hi * q_stall_pa;
+    }
     // OQ-LG-21 attitude-reference velocity low-pass τ (× gear period): how heavily per-step
     // gear-bounce wobble is rejected at low speed while retaining the runway-slope/approach trend.
     _att_filt_tau_s        = ac.at("att_filt_tau_ratio").get<float>()    * gear_period_s;
@@ -427,15 +444,15 @@ void Aircraft::step(double time_sec,
         float settle_incr    = _settle_gain_nd * (_settle_axbar / kGravity_mps2) * phi_g;
         settle_incr          = std::clamp(settle_incr, -_settle_clip_nd, _settle_clip_nd);
 
-        // (OQ-LG-24) Aero-effectiveness weight on the gear-relative demand: aero control
-        // authority collapses with dynamic pressure, so weight the apportionment residual
-        // (n_z_cmd − H₁ n_z_gear) by w_a = Φ(V_air, V_ref). The sub-unity weight turns the
-        // unity-gain on-ground apportionment fixed point into a contraction, so the aero
-        // command — and hence the commanded α — decays to zero as the wing loses authority,
-        // instead of being pinned at the achievable-envelope fold. Slope-correct: cos γ is
-        // carried by the gear and cancels out of the residual. The settle term and the
-        // non-negativity floor are unchanged.
-        const float w_aero = phiAuthority(V_air, _aero_effectiveness_vref_mps);
+        // (OQ-LG-24/26) Aero-authority weight w_a(q) on the gear-relative demand: the FBW's authority
+        // to command aerodynamic load factor, a C² smootherstep on dynamic pressure rising 0→1 across
+        // a band below stall q (§2b (b-iii)). Weighting the apportionment residual
+        // (n_z_cmd − H₁ n_z_gear) by a sub-unity factor near rest turns the unity-gain on-ground
+        // apportionment fixed point into a contraction, so the aero command — and hence the commanded
+        // α — decays to zero as q→0 (the band sits at zero below it), instead of being pinned at the
+        // peak-CL fold. Slope-correct: cos γ is carried by the gear and cancels out of the residual.
+        // The settle term and the non-negativity floor are unchanged.
+        const float w_aero = smootherstepEdges(q_inf, _wa_q_lo_pa, _wa_q_hi_pa);
         n_z_shaped = std::max(0.0f, w_aero * (n_z_shaped - nz_relax) + settle_incr);
     }
 

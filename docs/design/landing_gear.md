@@ -280,9 +280,11 @@ derotation/settle; nose-gear contact (forward, nose-up) → higher CL → nose-u
 The wing must not double-supply the load the gear carries, and on the ground it must shed lift to
 settle onto the gear (landing) and build lift to rotate off it (takeoff). Two cooperating parts:
 
-$$n_{z,\text{shaped}} = \max\!\Bigl(0,\; \underbrace{n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}}_{\text{(b-i) apportionment}}
+$$n_{z,\text{shaped}} = \max\!\Bigl(0,\; w_a(q)\,\underbrace{\bigl(n_{z,\text{cmd}} - H_1(s)\,n_{z,\text{gear}}\bigr)}_{\text{(b-i) apportionment}}
 \; + \; \underbrace{\operatorname{clip}\!\bigl(k_s\,\tfrac{\bar a_x}{g}\,\Phi_g(V),\;\pm\Delta_{\max}\bigr)}_{\text{(b-ii) settle/rotation}}\Bigr),
 \qquad n_{z,\text{gear}} = \max\!\bigl(0,\,-F_z^B/(m g)\bigr),$$
+
+with $w_a(q)$ the **(b-iii) aero-effectiveness authority weight** defined below.
 
 $$\bar a_x = \mathrm{LP}\!\left[\frac{T - D_\text{aero} - D_\text{wheel}(V) - D_\text{brake}}{m}\right]
 \quad(\text{steady modeled longitudinal acceleration, not raw EOM}\ a_x).$$
@@ -319,6 +321,46 @@ and **clipping** the increment, removes that path: the increment cannot track co
 and cannot exceed a bounded lift change. The low-pass also makes the applied vertical force
 **continuous across weight-on-wheels transitions** (no force step at touchdown or liftoff), so the
 WoW factor in $\Phi_g$ can be a raw binary.
+
+**(b-iii) Aero-effectiveness authority weight $w_a(q)$.** The gear-relative aero demand (b-i) is
+weighted by $w_a(q)\in[0,1]$ — the FBW's authority to command aerodynamic load factor, bounded by what
+the wing can physically produce. It is a **smooth ($C^2$) function of dynamic pressure $q$ alone** (no
+weight-on-wheels switch or mode state) that rises from $0$ to $1$ across a transition band placed
+**below** stall dynamic pressure $q_\text{stall}=\tfrac12\rho_0 V_\text{stall}^2$:
+
+$$w_a(q) = \operatorname{smootherstep}\!\Bigl(\operatorname{clamp}\!\Bigl(\tfrac{q - q_\text{lo}}{q_\text{hi}-q_\text{lo}},\,0,\,1\Bigr)\Bigr),
+\quad q_\text{lo}=r_\text{lo}^2\,q_\text{stall},\;\; q_\text{hi}=r_\text{hi}^2\,q_\text{stall},$$
+
+where $\operatorname{smootherstep}(t)=t^3(6t^2-15t+10)$. The transition's **lower** and **upper** band
+edges $r_\text{lo}$, $r_\text{hi}$ are required non-dimensional config parameters specified as **speed
+ratios** $V/V_\text{stall}$ (`aero_authority_v_lower_ratio`, `aero_authority_v_upper_ratio`) — because
+the load-factor hand-off is reasoned about in airspeed — and are converted to the equivalent
+dynamic-pressure edges internally, $q_\text{edge}=\tfrac12\rho_0(r\,V_\text{stall})^2=r^2 q_\text{stall}$.
+The weight itself remains a smooth function of $q$. Constraint: $0 < r_\text{lo} < r_\text{hi} \le 1$
+(the band strictly below stall). Below $r_\text{lo}V_\text{stall}$ the wing is given no command
+authority ($w_a=0$); above $r_\text{hi}V_\text{stall}$ it has full authority ($w_a=1$).
+
+*Why this form.* As $q\to0$ the band sits at zero ($w_a\to0$ faster than $q$), so the angle of attack
+the weighted demand inverts to, $\alpha \approx w_a\,(n_{z,\text{cmd}}-H_1 n_{z,\text{gear}})\,mg/(q\,S\,C_{L_\alpha})$,
+**decays to zero** rather than saturating at the peak-$C_L$ fold angle — the on-ground attitude is not
+driven nose-up. Because $w_a<1$ through the band it also turns the unity-gain (b-i) apportionment fixed
+point into a contraction, so the aero command collapses to zero on the ground (slope-correct:
+$\cos\gamma$ is carried by the gear and cancels in the (b-i) residual, so a sloped runway never commands
+$\alpha$ at rest). Because the band's upper edge is below stall $q$, $w_a\equiv1$ across the entire
+flight envelope — flight and takeoff rotation are unaffected — and the $C^2$ smootherstep has no
+in-envelope corner (smooth-dynamics standard). A weight-on-wheels-scheduled authority — which a real
+FBW would likely use for takeoff/landing mode logic — is deliberately avoided here to keep the model a
+smooth, state-machine-free function of $q$.
+
+*Band placement.* The edges must be chosen so $w_a$ is already near zero across the *sustained*
+low-speed roll-out, not merely in the $q\to0$ limit: since the commanded angle scales as
+$\alpha\sim w_a/q$, a band placed too low leaves $w_a$ near 1 at small $q$ and merely **relocates** the
+fold-pinning to the band's upper edge. Keep the lower edge above the speeds where the aircraft lingers
+near the ground ($r_\text{lo}\gtrsim 0.5$) and the upper edge below stall ($r_\text{hi}\le 1$) so
+flight authority is unaffected. Below the lower edge the FBW may still provide rotational (attitude)
+damping, but it does not attempt to sustain load factor — that hand-off is exactly what $w_a$ models.
+Reference values: $r_\text{lo}\approx0.55$, $r_\text{hi}=0.80$ (speed ratios $V/V_\text{stall}$;
+equivalently $q$-edges $0.30$ and $0.64\,q_\text{stall}$).
 
 Behavior of the combined law:
 
@@ -1078,9 +1120,9 @@ simulation rate.
 | OQ-LG-19 | ~~Force-channel input definition: spurious, V→0-unbounded steady Δθ in steady ground roll~~ **Resolved: destanced gear vertical load (Alt A) with a dynamic-pressure authority fade $\Phi(V)$ that emulates aero/FBW authority decay on rollout/takeoff; realized as the C² smootherstep $\Phi(V)=\mathrm{smootherstep}(\mathrm{clamp}(V^2/V_{\text{ref}}^2,0,1))$ shared with OQ-LG-21** | — |
 | OQ-LG-20 | ~~Realization of the force-channel transfer $G(s)$~~ **Resolved: realize $G(s)$ in the sim using the library's existing general `tustin_2_tf`+`tf2ss` functions with an inline two-state step; no integrator, no drift, and no problem-specific filter design added to the shared control library** | — |
 | OQ-LG-21 | ~~Velocity-derived attitude singular at low horizontal speed (FPA whips the zero-inertia attitude → 20 g gear spikes)~~ **Resolved: C² smootherstep dynamic-pressure factor $\Phi(V)$ blends the attitude reference from instantaneous velocity to a low-pass-filtered (slope-following) velocity at low speed; body rates derived from the committed attitude (consistent, near-zero at quiescence); near-stop hold; supersedes the interim gear-only body-rate override** | — |
-| OQ-LG-24 | ~~The aero load-factor command does not decay to zero as aero control effectiveness collapses ($\propto q$): a residual aero command survives the §2b apportionment fixed point, exceeds the vanishing achievable envelope, and the inversion pins commanded $\alpha$ at the fold (≈ stall AoA), tilting the on-ground attitude nose-up and diverging the very-low-speed roll-out~~ **Resolved (Alternative 1): a $C^2$ smootherstep dynamic-pressure effectiveness weight $w_a=\operatorname{smootherstep}(\operatorname{clamp}(q/q_\text{ref},0,1))$ multiplies the gear-relative (post-apportionment) aero demand at the $n_z$ command-processing stage; the sub-unity weight collapses the unity-gain fixed point so the aero command and commanded $\alpha$ decay to zero — slope-correct ($\cos\gamma$ carried by the gear cancels), no α-output intervention, no switch. Implementation pending (`/impl`).** | — |
+| OQ-LG-24 | ~~The aero load-factor command does not decay to zero as aero control effectiveness collapses ($\propto q$): a residual aero command survives the §2b apportionment fixed point, exceeds the vanishing achievable envelope, and the inversion pins commanded $\alpha$ at the fold (≈ stall AoA), tilting the on-ground attitude nose-up and diverging the very-low-speed roll-out~~ **Resolved: the gear-relative (post-apportionment) aero demand is weighted by $w_a(q)$ at the $n_z$ command-processing stage — a $C^2$ smootherstep on dynamic pressure rising $0\to1$ across a band below stall $q$ (center/width as fractions of $q_\text{stall}$), so the commanded $\alpha$ decays to zero as $q\to0$ instead of saturating at the fold; slope-correct ($\cos\gamma$ carried by the gear cancels), no α-output intervention, no switch. Definition in §2b (b-iii); $w_a$ form per OQ-LG-26.** | — |
 | OQ-LG-25 | Whether and how to reconcile the flight-physics smoothness-audit findings (SD-LG-9/10/11/12/14/15/17 + `smoothstepEdges`) catalogued in §Smoothness Audit — whether to reconcile and which, the smooth form per site, and whether new regularization scales are per-aircraft config fields or fixed non-dimensional constants. Not yet agreed; gates any SD-1 landing-gear reconciliation | Not blocking current work |
-| OQ-LG-26 | The OQ-LG-24 weight $w_a$ has no defined form: it represents the FBW's authority to command aerodynamic load factor (a control-law behavior, bounded above by the aero $\propto q$ effectiveness ceiling), not a pure dynamic-pressure effect. The FBW's intended behavior and parameterization are undocumented | Blocking — OQ-LG-24 has no admissible $w_a$ form until resolved |
+| OQ-LG-26 | ~~The OQ-LG-24 weight $w_a$ has no defined form: it represents the FBW's authority to command aerodynamic load factor (a control-law behavior), not a pure dynamic-pressure effect, and the FBW's intended behavior is undocumented~~ **Resolved: $w_a$ is a smooth ($C^2$) smootherstep on dynamic pressure $q$, rising $0\to1$ across a transition band below stall $q$ (center and width as fractions of $q_\text{stall}$), so the commanded $\alpha$ decays to zero as $q\to0$; deliberately no weight-on-wheels state machine. Definition in §2b (b-iii).** | — |
 
 ---
 
@@ -3017,23 +3059,18 @@ slope-correct); and rerouting the inversion **fold** toward small $\alpha$ (inte
 changes the documented fold behavior in
 [load_factor_allocation.md](../algorithms/load_factor_allocation.md)).
 
-**NOT settled — the definition of $w_a$.** $w_a$ represents the **FBW's authority to command
-aerodynamic load factor** — a control-law behavior — bounded above by the aero plant's load-factor
-effectiveness ($\partial N_z/\partial\alpha \propto q$). It is **not** a pure dynamic-pressure effect,
-and its intended behavior and parameterization are unsettled and undocumented — see
-[OQ-LG-26](#oq-lg-26--fbw-load-factor-command-authority-definition-of-the-oq-lg-24-weight). Until
-OQ-LG-26 is resolved, $w_a$ has no defined form and this resolution specifies **only the mechanism**
-above.
+**The definition of $w_a$ (settled — OQ-LG-26).** $w_a$ represents the **FBW's authority to command
+aerodynamic load factor** — a control-law behavior, not a pure dynamic-pressure effect. It is defined
+as a **smooth ($C^2$) function of dynamic pressure $q$** — a `smootherstep` rising $0\to1$ across a
+transition band placed below stall $q$, with the band center and width parameterized as fractions of
+$q_\text{stall}$ — chosen so the commanded $\alpha$ **decays to zero as $q\to0$** rather than saturating
+at the peak-$C_L$ fold angle. The full definition is the model content in §2b, part (b-iii); the
+selection rationale (including why a smooth $q$-function was chosen over a weight-on-wheels state
+machine) is recorded under OQ-LG-26.
 
-*Implementation status.* An interim build (plan IP-LGD-26/27/28) used a **provisional** form — the §2a
-smootherstep fade $w_a = \operatorname{smootherstep}(\operatorname{clamp}(q/q_\text{ref},0,1))$ with a
-single $V_\text{ref}$ — that is **not** an accepted definition: it models neither the aero
-effectiveness (it falls as $q^3$, not the physical $q$) nor the FBW behavior; it merely happens to
-collapse the fixed point. It and the premature `aero_effectiveness_vref_ratio` config field are
-**blocked on OQ-LG-26 and to be backed out**.
-
-**Status:** Resolved on the **mechanism** (weight the gear-relative residual). The **definition of
-$w_a$ is open** — OQ-LG-26. No accepted implementation.
+**Status:** Resolved — the mechanism here plus the $w_a$ definition in §2b (b-iii). Implementation
+tracked by IP-LGD-26/27/28 (the interim single-$V_\text{ref}$ form is replaced by the §2b
+band-center/width parameterization).
 
 ### OQ-LG-25 — Whether and how to reconcile the flight-physics smoothness-audit findings
 
@@ -3092,56 +3129,23 @@ reconciliation; not blocking the OQ-LG-24 implementation or any currently-planne
 
 ### OQ-LG-26 — FBW load-factor command authority (definition of the OQ-LG-24 weight)
 
-**Problem.** OQ-LG-24 settled the *mechanism* — scale the gear-relative aero load-factor demand by a
-weight $w_a$ that is sub-unity near rest — but **what $w_a$ is** was never specified. $w_a$ represents
-the **fly-by-wire system's authority to command aerodynamic load factor**: how much load factor the
-control law allocates to the wing as the aircraft transitions from flying to rolling on the gear. This
-is a **control-law behavior**, not a plant property. The aero plant's load-factor effectiveness
-($\partial N_z/\partial\alpha = q\,S\,C_{L_\alpha}/(m g) \propto q$) is only the **ceiling** on $w_a$
-— the wing cannot deliver more load factor than it can physically produce — but the FBW's behavior
-*below* that ceiling (its load-handoff / flight-phase / authority logic) is a separate contributor and
-is **not** a function of dynamic pressure alone. The FBW's intended behavior here is undocumented. Its
-definition and parameterization must be settled before $w_a$ can be given a form, the OQ-LG-24
-implementation completed, or any config parameter defined.
+**Resolution.** The OQ-LG-24 weight $w_a$ — the FBW's authority to command aerodynamic load factor — is
+defined as a **smooth ($C^2$) smootherstep function of dynamic pressure $q$ alone**, rising $0\to1$
+across a transition band placed below stall dynamic pressure, with the band **center** and **width**
+parameterized as fractions of $q_\text{stall}$. The complete design — formula, parameters, and
+properties — is the model content in **§2b, part (b-iii)**; it is not duplicated here.
 
-**Alternatives.**
+**Rationale.** The factor keys on $q$ so that the angle of attack the weighted demand inverts to
+**decays to zero as $q\to0$** (the band sits at zero below it), rather than the $\propto q$
+plant-effectiveness form which would leave $\alpha$ saturating at the peak-$C_L$ fold angle. A smooth
+$q$-function was chosen over a weight-on-wheels-scheduled authority to avoid a WoW-triggered state
+machine — even though a real FBW would almost certainly use WoW-informed mode logic for takeoff and
+landing — keeping the model a smooth, state-machine-free function of $q$. The band lies below stall $q$
+so authority is full ($w_a\equiv1$) across the flight envelope. (This is a refined Alternative 3 — a
+dedicated authority schedule — with scheduling variable $q$ and a deliberately step-shaped profile
+distinct from the plant $\propto q$ effectiveness.)
 
-1. **FBW authority tied to the existing FBW load-handoff characterization, bounded by the aero
-   ceiling.** Derive $w_a$ from the same FBW load-handoff family that already parameterizes the §2b-i
-   apportionment relaxation $H_1$ (OQ-LG-17: FBW load-handoff $\omega_n/\zeta$, distinct from the FBW
-   command filter and from dynamic pressure), saturated by the aero $\propto q$ effectiveness ceiling.
-   - *Benefits:* models $w_a$ as what it is — an FBW control behavior; reuses an existing, agreed FBW
-     characterization rather than inventing a knob; the aero ceiling enters as a physical bound.
-   - *Drawbacks:* couples $w_a$ to the load-handoff dynamics (must confirm that is the intended
-     authority behavior); the ceiling-vs-authority combination must be defined precisely.
-   - *Prerequisite:* confirm the FBW load-factor authority is the same behavior as the load handoff.
-2. **Aero-effectiveness-only weight (the plant ceiling as the whole model).** Define $w_a$ from the
-   allocator's own effectiveness $\partial N_z/\partial\alpha \propto q$, normalized to a reference and
-   smoothly saturated (e.g. $q/(q+q_\text{ref})$ or $1-e^{-q/q_\text{ref}}$, both $\propto q$ near
-   zero — physically faithful, unlike the $\propto q^3$ smootherstep).
-   - *Benefits:* physically faithful to the plant; uses a quantity the allocator already computes; one
-     reference parameter.
-   - *Drawbacks:* models only the ceiling, **not** the FBW behavior — likely insufficient per the FBW
-     intent; ties on-ground command authority purely to airspeed.
-   - *Prerequisite:* a decision that the FBW behavior *is* purely the plant effectiveness.
-3. **A dedicated FBW load-factor authority schedule** (a new control characteristic), bounded by the
-   aero ceiling.
-   - *Benefits:* most explicit; can encode flight-phase / ground-state authority management directly.
-   - *Drawbacks:* most new design and parameters; each must be justified against FBW intent.
-   - *Prerequisite:* specify the schedule and its parameterization.
-4. **(Rejected) Borrowed §2a singularity-removal smootherstep fade with a lone $V_\text{ref}$** (the
-   interim implementation). Convenient and $C^2$, but it is neither the aero effectiveness (falls as
-   $q^3$, not $q$) nor the FBW behavior; it only happens to collapse the fixed point. Not a principled
-   definition.
-
-**Recommendation.** Deferred — this requires the user's characterization of the FBW's intended
-load-factor command authority. The leading candidate is Alternative 1 (reuse the FBW load-handoff
-characterization as the authority basis, bounded by the aero $\propto q$ ceiling), since it treats
-$w_a$ as the control behavior it is and reuses an agreed FBW characterization; but the intent is the
-user's to set.
-
-**Status:** Open — awaiting the FBW-behavior characterization. **Blocks** the OQ-LG-24 implementation
-(the $w_a$ form and the `aero_effectiveness_vref_ratio` parameter).
+**Status:** Resolved. Design content in §2b (b-iii); implementation tracked by IP-LGD-26/27/28.
 
 ## Smoothness Audit — Slope-Discontinuity Findings
 
