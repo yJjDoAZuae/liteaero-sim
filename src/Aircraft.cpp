@@ -149,6 +149,10 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
         const float q_stall_pa = 0.5f * 1.225f * _stall_speed_mps * _stall_speed_mps;
         const float v_lo = ac.at("aero_authority_v_lower_ratio").get<float>();
         const float v_hi = ac.at("aero_authority_v_upper_ratio").get<float>();
+        if (!(v_lo > 0.0f && v_lo < v_hi && v_hi <= 1.0f))
+            throw std::invalid_argument(
+                "Aircraft::initialize: aero_authority_v_lower_ratio/upper_ratio must satisfy "
+                "0 < lower < upper <= 1 (airspeed-ratio w_a band edges, below stall)");
         _wa_q_lo_pa = v_lo * v_lo * q_stall_pa;
         _wa_q_hi_pa = v_hi * v_hi * q_stall_pa;
     }

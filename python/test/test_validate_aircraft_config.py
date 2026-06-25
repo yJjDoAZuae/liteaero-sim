@@ -87,6 +87,26 @@ def test_valid_config_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Aero-authority w_a band edges (OQ-LG-26): 0 < lower < upper <= 1
+# ---------------------------------------------------------------------------
+
+
+def test_band_lower_not_below_upper_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["aero_authority_v_lower_ratio"] = 0.8
+    cfg["aircraft"]["aero_authority_v_upper_ratio"] = 0.5
+    with pytest.raises(ValueError, match="lower < upper"):
+        validate(cfg)
+
+
+def test_band_upper_above_stall_raises() -> None:
+    cfg = valid()
+    cfg["aircraft"]["aero_authority_v_upper_ratio"] = 1.2
+    with pytest.raises(ValueError, match="lower < upper"):
+        validate(cfg)
+
+
+# ---------------------------------------------------------------------------
 # Schema version
 # ---------------------------------------------------------------------------
 

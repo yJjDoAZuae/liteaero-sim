@@ -179,6 +179,16 @@ def validate(config: dict) -> None:
         if aircraft[field] <= 0:
             raise ValueError(f"'{field}' must be > 0, got {aircraft[field]}.")
 
+    # Cross-field: the aero-authority w_a(q) band edges (airspeed ratios) must form a rising
+    # transition band below stall (0 < lower < upper <= 1); see landing_gear.md §2b (b-iii).
+    band_lower = aircraft["aero_authority_v_lower_ratio"]
+    band_upper = aircraft["aero_authority_v_upper_ratio"]
+    if not 0 < band_lower < band_upper <= 1:
+        raise ValueError(
+            "'aero_authority_v_lower_ratio'/'aero_authority_v_upper_ratio' must satisfy "
+            f"0 < lower < upper <= 1, got lower={band_lower}, upper={band_upper}."
+        )
+
     # -- range checks: airframe -------------------------------------------
     if airframe["g_max_nd"] <= 0:
         raise ValueError(

@@ -62,8 +62,10 @@ public:
     StrutState strutState() const;
     void       setStrutState(const StrutState& s);
 
-    // OQ-LG-15 diagnostic — breakdown of the most recent step()'s contact force.
-    // TEMPORARY: remove once the deep-penetration forward-force artifact is fixed.
+    // Per-step contact-force breakdown (normal/longitudinal/lateral/rolling-resistance forces, slip
+    // ratio and angle, contact-patch velocities, wheel spin). A permanent model-diagnosis interface:
+    // these components are not recoverable from the aggregate `step()` force vector, and the tire-force
+    // regression tests (e.g. LandingGear_TireNeverPropels) assert on them.
     struct ContactDiag {
         float           F_z          = 0.f;  // normal force magnitude (N)
         float           F_x          = 0.f;  // Pacejka longitudinal force (N, +fwd)
@@ -93,7 +95,7 @@ private:
     float           _wheel_speed_rps           = 0.0f;
     float           _cf                        = 0.0f;
     float           _cv                        = 0.0f;
-    ContactDiag     _diag;   // OQ-LG-15 diagnostic cache (TEMPORARY)
+    ContactDiag     _diag;   // most-recent contact-force breakdown (diagnostic accessor)
 };
 
 }  // namespace liteaero::simulation

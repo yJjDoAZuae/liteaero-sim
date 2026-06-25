@@ -239,6 +239,25 @@ Proto message definitions live in `proto/liteaerosim.proto`. Generated types mus
 - `DynamicElement` subclasses use the NVI pattern (`onSerialize`/`onDeserialize`) for the JSON format; the base class injects `schema_version` and `type`. See [docs/design/dynamic_element.md](../design/dynamic_element.md) for details.
 - Non-`DynamicBlock` classes (e.g., `KinematicState`, `LiftCurveModel`, `LoadFactorAllocator`) add the four methods as plain public member functions. Stateless classes use a static factory for deserialization: `static T deserializeJson(const nlohmann::json&)`.
 
+### Diagnostic and verbose state output
+
+Every stateful model already exposes its full internal state through the serialization interface
+above. **Models are also expected to provide diagnostic-friendly accessors for verbose internal
+state** — intermediate quantities and decomposed signals that are not part of the public `step()`
+output but are needed to diagnose model behavior (e.g. a contact force broken into its physical
+components, filter states, solver residuals, the realized vs. commanded value of a controlled
+quantity). Because the serialization machinery already captures internal state, exposing a
+diagnostic-friendly form of it is a small, justified extension and is squarely **within design scope**
+— not throwaway scaffolding.
+
+- Such accessors are **permanent design elements**. Do not label them "temporary" or mark them for
+  removal once a particular investigation closes; model diagnosis is a recurring need.
+- Where a diagnostic accessor exposes a quantity a regression test must assert on — one not
+  recoverable from the public `step()` output (for example a force component vs. the aggregate force
+  vector) — it is load-bearing and must be retained.
+- Prefer a structured form (a small struct or a JSON object) over scattered one-off getters, so the
+  verbose state is discoverable and can share the serialization representation where practical.
+
 ---
 
 ## Architectural Design Patterns

@@ -63,20 +63,18 @@ flight-physics smoothness-audit findings — gates no item in this plan).
 | IP-LGD-23 | done | Additive axial-acceleration settle/rotation term (`_settle_*`) with ground fade `Φ_g` and clip (OQ-LG-23) | IP-LGD-22 | [landing_gear.md §2b-ii, §OQ-LG-23](../design/landing_gear.md) |
 | IP-LGD-24 | done | Non-dimensionalize all §2a/§2b gear knobs as required config ratios × physical scales; `initialize()` throws if any is missing (OQ-LG-17) | IP-LGD-18, IP-LGD-19, IP-LGD-20, IP-LGD-21, IP-LGD-22, IP-LGD-23 | [landing_gear.md §2 Parameterization, §OQ-LG-17](../design/landing_gear.md) |
 | IP-LGD-25 | done | JSON + proto round-trip for the §2a/§2b state (`_force_x`, `_fz_stance_filter`, `_dtheta_*_filter`, `_nz_relax_filter`, `_settle_axbar`, attitude filter, CL-recovery flags) | IP-LGD-18, IP-LGD-19, IP-LGD-20, IP-LGD-21, IP-LGD-22, IP-LGD-23 | [landing_gear.md §Serialization](../design/landing_gear.md), [aircraft.md §Serialization](../design/aircraft.md) |
-| IP-LGD-26 | done | Add required non-dimensional `aero_authority_v_lower_ratio` and `aero_authority_v_upper_ratio` (airspeed-ratio band edges) to every aircraft config (`configs/*.json`, `test/data/aircraft/*.json`), `makeConfig()`, the binding-test fixtures, the validator, and the config schema doc | — | [landing_gear.md §2b (b-iii)](../design/landing_gear.md), [aircraft_config_v1.md](../schemas/aircraft_config_v1.md) |
+| IP-LGD-26 | done | Add required non-dimensional `aero_authority_v_lower_ratio` and `aero_authority_v_upper_ratio` (airspeed-ratio band edges) to every aircraft config (`configs/*.json`, `test/data/aircraft/*.json`), `makeConfig()`, the binding-test fixtures, the validator, and the config schema doc; enforce `0 < lower < upper ≤ 1` in `Aircraft::initialize()` (throws) and `validate_aircraft_config.py`, with C++ and pytest coverage | — | [landing_gear.md §2b (b-iii)](../design/landing_gear.md), [aircraft_config_v1.md](../schemas/aircraft_config_v1.md) |
 | IP-LGD-27 | done | In `Aircraft`: read the two band ratios in `initialize()` (derive `_wa_q_lo_pa`, `_wa_q_hi_pa` from `q_stall`); in `step()` §2b apply `w_a(q) = smootherstepEdges(q, q_lo, q_hi)` to the gear-relative demand inside the existing `max(0,·)` floor | IP-LGD-26, IP-LGD-22 | [landing_gear.md §2b (b-iii)](../design/landing_gear.md) |
 | IP-LGD-28 | done | Scenario acceptance tests: C++ `LandingGear_LowSpeedRollout_Converges_OQ_LG24` (sub-stall roll-out converges, α bounded, no launch) and pytest `test_full_stop_landing_converges_no_lowspeed_divergence_oq_lg24` (flown landing through the transition band) | IP-LGD-27 | [landing_gear.md §2b (b-iii)](../design/landing_gear.md), [landing_gear.md §Test Strategy](../design/landing_gear.md#test-strategy) |
-| IP-LGD-29 | blocked (decision) | Remove the TEMPORARY OQ-LG-15 diagnostic instrumentation. **As-written scope is over-aggressive** — see blocked reason | — | [landing_gear.md §OQ-LG-15 resolution](../design/landing_gear.md) |
+| IP-LGD-29 | done | **Retain** `ContactDiag`/`lastContactDiag()` as a permanent model-diagnosis interface (de-labeled from "TEMPORARY"); the per-wheel force breakdown is not recoverable from the aggregate `step()` force and is used by the tire-force regression tests. No removal — the proposed deletion is cancelled. | — | [landing_gear.md §OQ-LG-15 resolution](../design/landing_gear.md) |
 
-> **IP-LGD-29 blocked reason:** Removing `ContactDiag` / `lastContactDiag()` would break the
-> **permanent** regression `AircraftTest.LandingGear_TireNeverPropels_FullScenario`
-> (`Aircraft_test.cpp`) and the `TireDynamics.Emit_FreeRollSweepCsv` documentation emitter, which use
-> the accessor to observe the Pacejka longitudinal force `F_x` separately from rolling resistance —
-> a decomposition not recoverable from the public aggregate `step()` force vector. Only the OQ-LG-15
-> diagnostic *test* (`LandingGear_FullStop_OQ_LG15_Diagnostic`) and its `nose_*` CSV columns are
-> genuinely temporary. Whether to (a) retain the force-breakdown accessor as a permanent observability
-> interface and remove only the diagnostic test/CSV, or (b) remove the accessor and rework the two
-> dependent tests, is a not-yet-agreed decision; blocked pending it.
+> **IP-LGD-29 resolution:** The original item (remove the "TEMPORARY" OQ-LG-15 diagnostic) was a stale
+> directive. The `ContactDiag` accessor exposes the per-wheel `F_x`/`F_y`/`F_rr`/slip breakdown that is
+> not recoverable from the public aggregate force vector, a permanent regression
+> (`LandingGear_TireNeverPropels_FullScenario`) and the tire data-emitter depend on it, and it remains
+> useful for diagnosing model behavior. Decision: **keep it** as a permanent diagnostic interface (code
+> comments de-labeled); the OQ-LG-15 diagnostic test and its CSV are likewise retained as diagnosis
+> tooling. Nothing is removed.
 
 ---
 

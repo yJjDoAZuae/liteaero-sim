@@ -464,6 +464,13 @@ static nlohmann::json makeConfigWithRollRate(float roll_rate_wn_rad_s) {
     return c;
 }
 
+static nlohmann::json makeConfigWithBandEdges(float lower, float upper) {
+    auto c = makeConfig();
+    c["aircraft"]["aero_authority_v_lower_ratio"] = lower;
+    c["aircraft"]["aero_authority_v_upper_ratio"] = upper;
+    return c;
+}
+
 TEST(AircraftTest, NyquistViolation_Nz_Throws) {
     auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
     EXPECT_THROW(ac->initialize(makeConfigWithNz(40.0f), 0.1f), std::invalid_argument);
@@ -477,6 +484,27 @@ TEST(AircraftTest, NyquistViolation_Ny_Throws) {
 TEST(AircraftTest, NyquistViolation_RollRate_Throws) {
     auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
     EXPECT_THROW(ac->initialize(makeConfigWithRollRate(40.0f), 0.1f), std::invalid_argument);
+}
+
+// OQ-LG-26: the aero-authority w_a(q) band edges (airspeed ratios) must satisfy 0 < lower < upper ≤ 1.
+TEST(AircraftTest, BandEdges_LowerNotBelowUpper_Throws) {
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
+    EXPECT_THROW(ac->initialize(makeConfigWithBandEdges(0.8f, 0.5f), 0.1f), std::invalid_argument);
+}
+
+TEST(AircraftTest, BandEdges_UpperAboveStall_Throws) {
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
+    EXPECT_THROW(ac->initialize(makeConfigWithBandEdges(0.55f, 1.2f), 0.1f), std::invalid_argument);
+}
+
+TEST(AircraftTest, BandEdges_NonPositiveLower_Throws) {
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
+    EXPECT_THROW(ac->initialize(makeConfigWithBandEdges(0.0f, 0.8f), 0.1f), std::invalid_argument);
+}
+
+TEST(AircraftTest, BandEdges_Valid_DoesNotThrow) {
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>());
+    EXPECT_NO_THROW(ac->initialize(makeConfigWithBandEdges(0.55f, 0.8f), 0.1f));
 }
 
 // ---------------------------------------------------------------------------

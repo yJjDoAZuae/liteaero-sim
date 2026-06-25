@@ -77,7 +77,7 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
                 _wheel_speed_rps = omega_k + 0.5f * dt_s * (odot_k + odot_star);
             }
         }
-        _diag = ContactDiag{};   // OQ-LG-15 diagnostic: clear when airborne (TEMPORARY)
+        _diag = ContactDiag{};   // clear the contact-force breakdown when airborne
         return {};
     }
 
@@ -238,7 +238,7 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
     result.moment_body_nm = contact_point_body_m.cross(force);
     result.in_contact     = true;
 
-    // OQ-LG-15 diagnostic cache (TEMPORARY)
+    // Cache the per-wheel contact-force breakdown for the diagnostic accessor.
     _diag.F_z = F_z;  _diag.F_x = F_x;  _diag.F_y = F_y;  _diag.F_rr = F_rr;
     _diag.kappa = kappa;  _diag.alpha_t = alpha_t;
     _diag.V_cx = V_cx;  _diag.V_cy = V_cy;  _diag.omega = _wheel_speed_rps;
