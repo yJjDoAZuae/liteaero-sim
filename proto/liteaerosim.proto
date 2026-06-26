@@ -374,6 +374,10 @@ message BodyColliderParams {
     // §5a per-corner velocity-arrest damping, derived from airframe mass + step in
     // initialize(); serialized so deserialize reproduces behavior without mass/dt.
     float                          arrest_damping_corner_nspm = 4;
+    // §5d scrape friction (collider-level, non-dimensional, default 0 = frictionless):
+    // tangential F = -mu*F_pen*vhat_t - (k_visc*b_corner)*v_t at penetrating corners.
+    float                          friction_coulomb_nd = 5;  // mu
+    float                          friction_viscous_nd = 6;  // k_visc (scales b_corner)
 }
 
 // ---------------------------------------------------------------------------

@@ -51,6 +51,10 @@ void BodyCollider::initialize(const nlohmann::json& config, float mass_kg, float
     _restitution_nd =
         std::clamp(config.value("restitution_nd", 0.f), 0.f, std::nextafter(1.0f, 0.0f));
 
+    // §5d scrape friction: single, optional, non-dimensional knobs, >= 0.
+    _friction_coulomb_nd = std::max(0.f, config.value("friction_coulomb_nd", 0.f));
+    _friction_viscous_nd = std::max(0.f, config.value("friction_viscous_nd", 0.f));
+
     // §5a velocity-arrest damping, derived (OQ-BC-5): distribute an aggregate
     // b_total = mass / (kArrestSteps * dt) across all corners so that even with
     // every corner penetrating, the aggregate CFL bound b_total*dt/mass = 1/N_arr
@@ -104,8 +108,10 @@ ContactForces BodyCollider::step(const liteaero::nav::KinematicStateSnapshot& sn
             const float pen = terrain_h - corner_altitude;
             if (pen <= 0.f) continue;
 
-            // Penetration rate: NED-z of corner velocity (positive = sinking)
-            const float pen_dot = (R_nb * (v_body + omega.cross(corner_body))).z();
+            // Corner velocity in NED: z is the sink rate (positive = sinking);
+            // the horizontal (x,y) components are the tangential ground slip.
+            const Eigen::Vector3f v_corner_ned = R_nb * (v_body + omega.cross(corner_body));
+            const float pen_dot = v_corner_ned.z();
 
             // §5a velocity-arrest contact (body_collider.md §5a). A purely
             // dissipative, penetration-modulated force F = max(0, c * delta * delta_dot)
@@ -121,9 +127,26 @@ ContactForces BodyCollider::step(const liteaero::nav::KinematicStateSnapshot& sn
             const float c_nspm2 = (hz > 0.f) ? _b_corner_nspm / hz : 0.f;
             const float F_pen   = std::max(0.f, c_nspm2 * pen_eff * pen_dot);
 
-            // Upward NED force → body frame
-            const Eigen::Vector3f F_body = R_bn * Eigen::Vector3f{0.f, 0.f, -F_pen};
+            // Normal arrest force, upward in NED (flat-terrain normal = NED -z).
+            Eigen::Vector3f F_ned{0.f, 0.f, -F_pen};
 
+            // §5d scrape friction (body_collider.md §5d) at this penetrating corner.
+            // Coulomb term -mu*F_pen*vhat_t opposes slip scaled by the normal force
+            // (regularized through zero slip to avoid chatter); the viscous "plowing"
+            // term -(k_visc*b_corner)*v_t opposes slip directly with a mass-scaled
+            // coefficient and acts even in steady scrape where F_pen ~ 0. Both are
+            // zero by default (frictionless until configured).
+            const Eigen::Vector3f v_t_ned{v_corner_ned.x(), v_corner_ned.y(), 0.f};
+            const float speed_t = v_t_ned.norm();
+            if (speed_t > 0.f &&
+                (_friction_coulomb_nd > 0.f || _friction_viscous_nd > 0.f)) {
+                const float c_visc = _friction_viscous_nd * _b_corner_nspm;
+                const float coulomb = _friction_coulomb_nd * F_pen
+                    / std::sqrt(speed_t * speed_t + kSlipRegMps * kSlipRegMps);
+                F_ned -= (coulomb + c_visc) * v_t_ned;
+            }
+
+            const Eigen::Vector3f F_body = R_bn * F_ned;
             out.force_body_n   += F_body;
             out.moment_body_nm += corner_body.cross(F_body);
             out.weight_on_wheels = true;
@@ -232,6 +255,8 @@ nlohmann::json BodyCollider::serializeJson() const {
     j["volumes"] = vols;
     j["restitution_nd"] = _restitution_nd;
     j["arrest_damping_corner_nspm"] = _b_corner_nspm;
+    j["friction_coulomb_nd"] = _friction_coulomb_nd;
+    j["friction_viscous_nd"] = _friction_viscous_nd;
     return j;
 }
 
@@ -245,6 +270,8 @@ void BodyCollider::deserializeJson(const nlohmann::json& j) {
     _restitution_nd =
         std::clamp(j.value("restitution_nd", 0.f), 0.f, std::nextafter(1.0f, 0.0f));
     _b_corner_nspm = j.value("arrest_damping_corner_nspm", 0.f);
+    _friction_coulomb_nd = std::max(0.f, j.value("friction_coulomb_nd", 0.f));
+    _friction_viscous_nd = std::max(0.f, j.value("friction_viscous_nd", 0.f));
     recomputeMaxReach();
 }
 
@@ -253,6 +280,8 @@ std::vector<uint8_t> BodyCollider::serializeProto() const {
     proto.set_schema_version(1);
     proto.set_restitution_nd(_restitution_nd);
     proto.set_arrest_damping_corner_nspm(_b_corner_nspm);
+    proto.set_friction_coulomb_nd(_friction_coulomb_nd);
+    proto.set_friction_viscous_nd(_friction_viscous_nd);
     for (const auto& v : _volumes) {
         auto* pv = proto.add_volumes();
         pv->set_name(v.name);
@@ -276,6 +305,8 @@ void BodyCollider::deserializeProto(const std::vector<uint8_t>& bytes) {
     _restitution_nd =
         std::clamp(proto.restitution_nd(), 0.f, std::nextafter(1.0f, 0.0f));
     _b_corner_nspm = proto.arrest_damping_corner_nspm();
+    _friction_coulomb_nd = std::max(0.f, proto.friction_coulomb_nd());
+    _friction_viscous_nd = std::max(0.f, proto.friction_viscous_nd());
     _volumes.clear();
     for (int i = 0; i < proto.volumes_size(); ++i) {
         const auto& pv = proto.volumes(i);

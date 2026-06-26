@@ -81,6 +81,9 @@ private:
     // arrests an impact over ~N_arr outer steps. Chosen so the worst-case
     // aggregate CFL bound b_total*dt/m = 1/N_arr stays well below 1 (§5a).
     static constexpr float kArrestSteps = 3.0f;
+    // §5d slip-velocity regularization scale (m/s): smooths the Coulomb friction
+    // direction through zero slip to avoid stick-slip chatter.
+    static constexpr float kSlipRegMps = 0.05f;
 
     std::vector<CollisionVolumeParams> _volumes;
     // Single collider-level coefficient of restitution consumed by the §5b hard
@@ -90,6 +93,12 @@ private:
     // initialize() as mass / (n_corners_total * kArrestSteps * dt) so the
     // worst-case aggregate over all corners meets the §5a stability bound.
     float _b_corner_nspm = 0.f;
+    // §5d scrape friction, collider-level non-dimensional knobs (default 0 =
+    // frictionless). Coulomb coefficient mu, and a viscous "plowing" factor that
+    // scales the §5a per-corner damping (so the dimensional viscous coefficient is
+    // mass-scaled and tuning-free). Both clamped to >= 0 on load.
+    float _friction_coulomb_nd = 0.f;
+    float _friction_viscous_nd = 0.f;
     // Maximum distance from CG to any corner of any volume, over all orientations.
     // Used as the AGL early-exit threshold.
     float _max_reach_m = 0.f;

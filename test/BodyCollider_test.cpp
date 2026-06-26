@@ -61,6 +61,22 @@ static KinematicStateSnapshot makeSinkingSnap(
     return makeSnap(alt_m, q_nb, Eigen::Vector3f{0.f, 0.f, sink_mps});
 }
 
+// A snapshot penetrating terrain while sliding forward at `fwd_mps` and sinking
+// at `sink_mps` — used by the §5d scrape-friction tests.
+static KinematicStateSnapshot makeSlidingSnap(float alt_m, float fwd_mps, float sink_mps)
+{
+    return makeSnap(alt_m, Eigen::Quaternionf::Identity(),
+                    Eigen::Vector3f{fwd_mps, 0.f, sink_mps});
+}
+
+static nlohmann::json makeFrictionConfig(float mu, float k_visc)
+{
+    auto cfg = makeConfig();
+    cfg["friction_coulomb_nd"] = mu;
+    cfg["friction_viscous_nd"] = k_visc;
+    return cfg;
+}
+
 // ---------------------------------------------------------------------------
 // Basic contact detection
 // ---------------------------------------------------------------------------
@@ -407,4 +423,57 @@ TEST(BodyColliderTest, RestitutionRoundTrips) {
 
     BodyCollider from_proto; from_proto.deserializeProto(original.serializeProto());
     EXPECT_FLOAT_EQ(from_proto.restitution_nd(), 0.25f);
+}
+
+// ---------------------------------------------------------------------------
+// §5d scrape friction — Coulomb + viscous plowing, collider-level, default off
+// ---------------------------------------------------------------------------
+
+TEST(BodyColliderTest, NoFriction_ByDefault_NoTangentialForce) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);  // friction defaults to 0
+
+    // Penetrating, sliding forward and sinking → only the normal force, no tangential.
+    const auto cf = c.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    EXPECT_NEAR(cf.force_body_n.x(), 0.f, 1e-6f) << "No tangential force when frictionless";
+    EXPECT_NEAR(cf.force_body_n.y(), 0.f, 1e-6f);
+    EXPECT_LT(cf.force_body_n.z(), 0.f) << "Normal arrest force still present";
+}
+
+TEST(BodyColliderTest, ViscousFriction_OpposesSteadyScrape) {
+    // Steady scrape: sliding forward with no sink, so F_pen ~ 0 and Coulomb is
+    // inactive — the viscous plowing term still decelerates the slide.
+    BodyCollider c;
+    c.initialize(makeFrictionConfig(/*mu=*/0.f, /*k_visc=*/0.5f), 1000.f, 0.01f);
+
+    const auto cf = c.step(makeSlidingSnap(0.1f, 5.f, 0.f));
+    EXPECT_LT(cf.force_body_n.x(), 0.f) << "Viscous friction opposes the forward slide";
+    EXPECT_NEAR(cf.force_body_n.z(), 0.f, 1e-6f) << "No normal force without a sink rate";
+}
+
+TEST(BodyColliderTest, CoulombFriction_AddsUnderNormalLoad) {
+    // Sinking + sliding so F_pen > 0; Coulomb then opposes the slide.
+    BodyCollider c0, c1;
+    c0.initialize(makeFrictionConfig(0.f,  0.f), 1000.f, 0.01f);
+    c1.initialize(makeFrictionConfig(0.8f, 0.f), 1000.f, 0.01f);
+
+    const auto cf0 = c0.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    const auto cf1 = c1.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    EXPECT_NEAR(cf0.force_body_n.x(), 0.f, 1e-6f);
+    EXPECT_LT(cf1.force_body_n.x(), 0.f) << "Coulomb friction opposes the slide under normal load";
+}
+
+TEST(BodyColliderTest, FrictionRoundTrips) {
+    auto cfg = makeFrictionConfig(0.6f, 0.3f);
+    BodyCollider original; original.initialize(cfg, 1000.f, 0.01f);
+
+    BodyCollider from_json;  from_json.deserializeJson(original.serializeJson());
+    BodyCollider from_proto; from_proto.deserializeProto(original.serializeProto());
+
+    const auto a = original.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    const auto b = from_json.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    const auto d = from_proto.step(makeSlidingSnap(0.1f, 5.f, 2.f));
+    ASSERT_LT(a.force_body_n.x(), 0.f);  // friction actually exercised
+    EXPECT_NEAR(b.force_body_n.x(), a.force_body_n.x(), 1e-3f);
+    EXPECT_NEAR(d.force_body_n.x(), a.force_body_n.x(), 1e-3f);
 }

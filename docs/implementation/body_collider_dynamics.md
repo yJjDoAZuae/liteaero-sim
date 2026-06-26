@@ -27,15 +27,11 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-3 | done | Reduce `CollisionVolumeParams` to geometry — remove `stiffness_npm`/`damping_nspm` (struct + proto + parse/serialize) — and update the C++ test fixtures. (JSON config dead-key strip pending — see Notes.) | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
 | IP-BC-4 | done | Add airframe mass + outer `dt` to `BodyCollider::initialize`; derive the per-corner arrest damping `_b_corner_nspm = m / (n_corners_total * N_arr * dt)` (fixed internal `kArrestSteps = 3`), serialized so deserialize reproduces behavior; `Aircraft` passes `_inertia.mass_kg`, `_outer_dt_s` | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
 | IP-BC-5 | done | Replace the Kelvin–Voigt penalty in `BodyCollider::step` with the velocity-arrest force $F=\max(0,\,c\,\delta\dot\delta)$, $c=$ `_b_corner_nspm`$/h_z$ (no spring); BodyCollider tests migrated to the velocity-arrest semantics (no static force, scales with $\delta\dot\delta$, no suction, mass-scaling) | IP-BC-2, IP-BC-3, IP-BC-4 | [body_collider.md §5a](../design/body_collider.md) |
-| IP-BC-6 | todo | Add `friction_coulomb_nd` ($\mu$) and `friction_viscous_nd` ($c_t$) to `CollisionVolumeParams` JSON + proto + parse/serialize (default 0 → frictionless until set) | — | [body_collider.md §5d](../design/body_collider.md) |
-| IP-BC-7 | blocked (IP-BC-5, IP-BC-6) | Apply the tangential force $-\mu F_\text{pen}\hat{\mathbf v}_{t,\text{reg}} - c_t\mathbf v_t$ at penetrating corners in `BodyCollider::step`, regularized near zero slip | IP-BC-5, IP-BC-6 | [body_collider.md §5d](../design/body_collider.md) |
+| IP-BC-6 | done | Add collider-level `friction_coulomb_nd` ($\mu$) and `friction_viscous_nd` ($k_\text{visc}$) to `BodyColliderParams` JSON + proto + parse/serialize (default 0 → frictionless). Viscous coefficient derived as $k_\text{visc}\cdot$`b_corner` (mass-scaled, OQ-BC-5) | — | [body_collider.md §5d](../design/body_collider.md) |
+| IP-BC-7 | done | Apply the tangential force $-\mu F_\text{pen}\hat{\mathbf v}_{t,\text{reg}} - k_\text{visc} b_\text{corner}\mathbf v_t$ at penetrating corners in `BodyCollider::step`, Coulomb direction regularized by `kSlipRegMps` | IP-BC-5, IP-BC-6 | [body_collider.md §5d](../design/body_collider.md) |
 | IP-BC-8 | todo | Add the §5c dedicated $\Delta\theta$ serialized state (per-axis second-order filter) to `BodyCollider` (JSON + proto + `reset`), and plumb the inertia tensor into `initialize` for the per-axis $\omega_n,\zeta$ sourcing | — | [body_collider.md §5c](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md), Serialization |
 | IP-BC-9 | blocked (IP-BC-5, IP-BC-8) | Drive the body-collider $\Delta\theta$ from the contact moment through $H_2$ and sum it into the kinematic attitude in `Aircraft::step`, separately from the gear $\Delta\theta$ | IP-BC-5, IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
 
-> **IP-BC-7 blocked reason:** the tangential force scales the Coulomb term by the normal force
-> $F_\text{pen}$, which does not exist until IP-BC-5 lands the velocity-arrest normal force; the
-> friction config fields (IP-BC-6) must also be present.
->
 > **IP-BC-9 blocked reason:** the rotational reaction is driven by the contact moment produced by the
 > new normal (and tangential) force, so IP-BC-5 must land first; the $\Delta\theta$ state and filter
 > sourcing (IP-BC-8) must exist to receive it.
