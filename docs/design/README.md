@@ -52,6 +52,7 @@ Prior to 2026-05-21, subsystem design authority documents were stored in
 | [`dynamic_element.md`](dynamic_element.md) | `DynamicElement` / `SisoElement` lifecycle contract; Filter and Propulsion hierarchies |
 | [`aircraft.md`](aircraft.md) | `Aircraft` — integration loop, use cases, serialization |
 | [`landing_gear.md`](landing_gear.md) | `LandingGear` — contact forces, wheel dynamics, serialization |
+| [`body_collider.md`](body_collider.md) | `BodyCollider` — OBB terrain backstop, penalty contact, hard-constraint coupling |
 | [`propulsion.md`](propulsion.md) | `V_Propulsion`, `PropulsionJet`, `PropulsionProp`, `PropulsionEDF` |
 | [`aero_coeff_estimator.md`](aero_coeff_estimator.md) | `AeroCoeffEstimator`, `AeroPerformance` |
 | [`aero_coefficient_model.md`](aero_coefficient_model.md) | Aerodynamic coefficient model |

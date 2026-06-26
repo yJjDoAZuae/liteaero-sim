@@ -1,5 +1,5 @@
 // BodyCollider unit tests.
-// Design authority: docs/architecture/landing_gear.md §BodyCollider
+// Design authority: docs/design/body_collider.md
 
 #include "collision/BodyCollider.hpp"
 #include <liteaero/nav/KinematicStateSnapshot.hpp>
