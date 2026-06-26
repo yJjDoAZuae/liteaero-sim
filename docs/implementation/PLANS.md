@@ -11,6 +11,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | Plan file | Scope | Status |
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Consolidated landing-gear plan: wheel dynamics (OQ-LG-5/6), gear→aircraft force-&-moment coupling (OQ-LG-9–23), and pending debt (OQ-LG-24 effectiveness weight, OQ-LG-15 diagnostic cleanup). SD-1 smoothness reconciliations excluded (undecided — OQ-LG-25) | Active |
+| [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a inelastic velocity-arrest normal contact, §5b restitution-consistent hard constraint, §5c dedicated $\Delta\theta$ rotational reaction, §5d Coulomb + viscous scrape friction. All OQs resolved (OQ-BC-1…5); no blocked items | Active |
 
 ---
 
@@ -51,7 +52,6 @@ and require no implementation plan:
 - `LoadFactorAllocator`, `LiftCurveModel`, `AeroPerformance`, `AeroCoeffEstimator` (stateless)
 - All propulsion types (`PropulsionJet`, `PropulsionEDF`, `PropulsionProp`)
 - `Aircraft` (full lifecycle, JSON + proto serialization, all subsystem integration)
-- `BodyCollider`
 - `Atmosphere`, `Wind`, `Turbulence`, `Gust`
 - `TerrainMesh` / LOD pipeline; Python terrain ingestion pipeline
 - `SensorAirData`

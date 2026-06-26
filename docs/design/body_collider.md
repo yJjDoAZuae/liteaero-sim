@@ -164,12 +164,13 @@ the shared contact path described in [aircraft.md](aircraft.md) step 10.
 
 ### 5. Proposed Improvements (Not Yet Implemented)
 
-> **Status: decided, not yet implemented.** Nothing in §5 is implemented, but the design of all four
-> items is now **decided** — OQ-BC-1/2/3/4 are all resolved (see the resolution notes). These are the
-> improvements requested for the body collider, informed by the landing-gear model: make the contact
-> *inelastic* (its purpose is to arrest penetration like a crash, not to rebound like rubber), and — as
-> a nice-to-have — give it gear-style rotational reactions. No open questions remain; implementation
-> requires an `/impl` plan and explicit instruction.
+> **Status: decided, not yet implemented.** Nothing in §5 is implemented, but the design is now fully
+> **decided** — OQ-BC-1…5 are all resolved (see the resolution notes), so no open questions remain.
+> These are the improvements requested for the body collider, informed by the landing-gear model: make
+> the contact *inelastic* (its purpose is to arrest penetration like a crash, not to rebound like
+> rubber), and — as a nice-to-have — give it gear-style rotational reactions. Implementation is tracked
+> in [body_collider_dynamics.md](../implementation/body_collider_dynamics.md) and requires explicit
+> instruction.
 
 **§5a — Inelastic normal contact: dissipation-dominated velocity-arrest (decided, OQ-BC-1 →
 Alternative 3).** Replace the elastic Kelvin–Voigt penalty with a purely **dissipative** normal force
@@ -182,17 +183,29 @@ without its spring), under the no-tension floor that forbids adhesion and does n
 $$F = \max\!\bigl(0,\; c\,\delta\,\dot\delta\bigr),$$
 
 with the simpler pure damper $F=\max(0,\,b\dot\delta)$ as the fallback if onset continuity proves
-unnecessary. The single damping scale is **non-dimensional and airframe-independent**, set as an
-arrest time $\tau = m_\text{eff}/b = N\,dt$ with $N\gtrsim2\text{–}3$ steps (the stability bound below)
-rather than a fixed dimensional constant — the non-dimensionalization discipline applied to the gear
-(§Parameterization in [landing_gear.md](landing_gear.md)). The contact provides **no static restoring
-force**; static non-penetration is owned by the §5b hard constraint (OQ-BC-2 at $e=0$, itself an exact
-inelastic velocity projection), and the arrest force only reduces the approach velocity so the
-constraint's per-step correction stays small. *Why not a spring:* the design target $e\approx0$ makes an
-energy-storing spring (Kelvin–Voigt or Hunt–Crossley) the wrong primitive — driving its restitution to
-zero is the ill-conditioned regime (Hunt–Crossley's $a\!\leftrightarrow\!e$ map diverges as $e\to0$;
-over-damped KV leaks a speed-dependent, only-approximate $e$ and keeps a contact-onset force step). A
-dissipative arrest encodes $e=0$ directly.
+unnecessary. The contact provides **no static restoring force**; static non-penetration is owned by the
+§5b hard constraint (OQ-BC-2; an inelastic velocity projection), and the arrest force only reduces the
+approach velocity so the constraint's per-step correction stays small. *Why not a spring:* the design
+target $e\approx0$ makes an energy-storing spring (Kelvin–Voigt or Hunt–Crossley) the wrong primitive —
+driving its restitution to zero is the ill-conditioned regime (Hunt–Crossley's $a\!\leftrightarrow\!e$
+map diverges as $e\to0$; over-damped KV leaks a speed-dependent, only-approximate $e$ and keeps a
+contact-onset force step). A dissipative arrest encodes $e=0$ directly.
+
+**Parameterization and derivation (decided, OQ-BC-5).** The body collider exposes **exactly one
+user-facing contact parameter — a non-dimensional coefficient of restitution $e$** (`restitution_nd`,
+default $0$, clamped to $[0,1)$), consumed by the §5b hard constraint. There is **no per-volume and no
+per-corner user parameter**: `CollisionVolumeParams` is reduced to geometry (`name`,
+`half_extents_body_m`, `center_offset_body_m`). `Aircraft` supplies the airframe mass $m$, the outer
+step $dt$, and the inertia tensor to `BodyCollider::initialize` (the architectural correction; the
+inertia also serves §5c). The §5a velocity-arrest **damping is derived internally and is independent of
+$e$**: with a fixed internal arrest factor $N_\text{arr}\approx3$ (arrest over $\sim N_\text{arr}$
+steps), the aggregate damping is $b_\text{total}=m/(N_\text{arr}\,dt)$, which satisfies the discrete
+stability bound $b_\text{total}\,dt/m = 1/N_\text{arr} < 1$ **by construction on every airframe and at
+every step rate**. The per-corner coefficient distributes $b_\text{total}$ across the corners
+penetrating this step (normalizing by the live active-corner count), so the aggregate is
+pose-independent — an internal convention, not a knob. The result is tuning-free: the author sets only
+$e$ (and may leave it at $0$), and because the derived damping scales with $m$ and $dt$ the dimensional
+behavior is identical across airframes.
 
 **Stability of the velocity-arrest contact.** Verified across the four layers it must hold at: the
 continuous dynamics, the explicit discrete scheme with the one-step lag, the composition with the
@@ -221,17 +234,22 @@ pre-integration pose (one-step lag), advanced by RK4, then projected by the §5b
    limits ($dt<2/\omega_n$ for the spring and the damper bound) *and still bounces*. The one-step lag is
    benign here: lag erodes margin only by adding phase to a **resonant** loop (the gear/attitude limit
    cycle); a first-order non-oscillatory decay has no resonance to excite, and the lag is already counted
-   in the forward-Euler bound. For the modulated form $c\delta/m$ is bounded because $\delta$ is capped
-   ($2h_z$), so the same bound applies at the worst case $c(2h_z)\,dt/m_\text{eff}<1$.
+   in the forward-Euler bound. The decided derivation sets $b_\text{total}=m/(N_\text{arr}\,dt)$ with
+   fixed $N_\text{arr}\approx3$, so $b_\text{total}\,dt/m=1/N_\text{arr}$ sits safely inside this bound
+   on every airframe and at every step rate. For the modulated form $c\delta/m$ is bounded because
+   $\delta$ is capped ($2h_z$), so the same bound applies at the worst case $c(2h_z)\,dt/m<1$.
 
-3. **Composition with the $e=0$ constraint — non-expansive.** Each step the damper contracts the normal
-   velocity by $(1-\tfrac{b}{m}dt)\in(0,1)$ (a contraction under the bound), and the projection sets
-   $v_\text{normal}=0$ at $e=0$, which is **non-expansive** ($\lVert Pv\rVert\le\lVert v\rVert$) and
-   **non-oscillatory** (it absorbs velocity; reflection would require $e>0$). A contraction composed with
-   a non-expansive projection is non-expansive in normal kinetic energy — no growth, no launch. Both
-   operators only remove normal velocity, so the airframe cannot be ejected; the worst case is "stuck to
-   the surface" (the desired plastic behavior), and it still departs under aero/gear lift once clearance
-   returns (the $0.05\text{ m}$ release hysteresis).
+3. **Composition with the restitution constraint — contraction for $e\in[0,1)$.** Each step the damper
+   contracts the normal velocity by $(1-\tfrac{b}{m}dt)\in(0,1)$ (a contraction under the bound), and the
+   §5b projection maps the normal approach velocity $v_\text{normal}\mapsto -e\,v_\text{normal}$ (it
+   removes $(1+e)\,v_\text{normal}$). For $e\in[0,1)$ that projection is a **contraction** with factor
+   $e$ ($\lVert Pv\rVert = e\lVert v\rVert \le \lVert v\rVert$): at $e=0$ it zeros the velocity (fully
+   plastic), and as $e\to1$ it approaches energy-preserving reflection. A contraction composed with a
+   contraction is a contraction in normal kinetic energy — **no growth, no launch** for any $e<1$. Both
+   the damper (purely dissipative) and the projection (energy $\times e^2$ per contact) only remove
+   normal energy, so the airframe cannot be ejected; the worst case at $e=0$ is "stuck to the surface"
+   (the desired plastic behavior), and it still departs under aero/gear lift once clearance returns (the
+   $0.05\text{ m}$ release hysteresis).
 
 4. **Attitude-coupling stability — the gear failure mode does not recur.** That artifact was a loop
    (stiff spring $\to$ FPA swing $\to$ swept contact point $\to$ spring) closed by an **oscillatory**
@@ -243,29 +261,48 @@ pre-integration pose (one-step lag), advanced by RK4, then projected by the §5b
    in $\theta_\text{geom}$. This layer is stable **conditional on** the §5c filter being parameterized as
    in the gear (OQ-BC-3 Alternative 1).
 
-*Edge cases.* (a) The bound applies to the **aggregate** $N$-corner damping versus the total effective
-mass/inertia, evaluated with a **conservative (small) effective mass** at the off-CG contact, so
-$b_\text{total}\,dt/m_\text{min}<1$. (b) A deep single-step incursion (high sink rate $\times$ large $dt$)
+*Edge cases.* (a) The decided derivation makes the **aggregate** damping
+$b_\text{total}=m/(N_\text{arr}\,dt)$ pose-independent (live per-corner normalization), so the bound
+$b_\text{total}\,dt/m=1/N_\text{arr}<1$ holds at every pose and airframe by construction — no
+effective-mass estimate to tune. (b) A deep single-step incursion (high sink rate $\times$ large $dt$)
 penetrates a bounded $\approx v_\text{sink}\,dt$ before the lagged, capped force acts; the §5b constraint
 guarantees non-penetration — transient penetration, not instability. (c) Both forms send $F\to0$
 continuously as $\dot\delta\to0$ (and the modulated form as $\delta\to0$), so the no-tension switch is
 $C^0$ with no force jump — this design **removes** a chatter source that Kelvin–Voigt's clipped finite
 spring force introduces.
 
+*Robustness across the restitution range $e$.* $e$ is the only authored contact parameter, so the
+verification must hold for every reasonable value — and it does, **for all $e\in[0,1)$**. (i)
+*Computational.* $e$ enters **only** the §5b algebraic projection $v\mapsto -e\,v$ — no integration, no
+$e$-dependent stiffness, hence no CFL condition on $e$; it is numerically stable for any $e\in[0,1]$.
+The §5a damper is derived from the fixed $N_\text{arr}$ and is **independent of $e$**, so its bound
+$1/N_\text{arr}<1$ is untouched by the restitution choice. (ii) *Dynamical.* The per-contact normal-energy
+map has factor $e^2<1$ for $e<1$, so energy is monotonically removed and the response grades smoothly
+with $e$ — plastic at $e=0$, progressively springier toward $e\to1$, bounded throughout — with no value
+in the range producing growth, chatter, or a step-size penalty. The elastic limit $e=1$
+(energy-preserving perfect bounce, marginally stable) lies outside the inelastic-backstop intent and is
+excluded by clamping $e$ to $[0,1)$. (iii) *Physical consistency.* $e$ is dimensionless and
+frame-independent, so the same $e$ yields the same restitution on every airframe, while the derived
+damping scales with $m,dt$ to keep the arrest timescale ($N_\text{arr}$ steps) identical across the
+fleet. The whole range $e\in[0,1)$ — design intent near $0$ — therefore gives reasonable,
+physically-consistent dynamic and computational behavior, with no tuning required.
+
 *Conclusion.* The velocity-arrest contact is dynamically stable **unconditionally** (real-negative
 eigenvalue, no oscillatory mode, strictly dissipative) and numerically stable under the single bound
-$b\,dt/m_\text{eff}\lesssim1$; it composes stably with the $e=0$ constraint and does not re-excite the
-gear/attitude loop. It is strictly easier to keep stable than the current Kelvin–Voigt contact. The
-verification holds subject to three conditions, each carried as a prerequisite or test: the aggregate
-CFL bound with a conservative effective mass, the §5c moment-filter parameterization, and the §5b
-constraint owning static position. When §5a is implemented, this analysis should be promoted to a
-numerical-analysis document in [`docs/algorithms/`](../algorithms/) per the `/algo` convention.
+$b\,dt/m\lesssim1$ — met by construction since $b_\text{total}\,dt/m=1/N_\text{arr}$ — and it composes
+stably with the restitution constraint **for all $e\in[0,1)$**, without re-exciting the gear/attitude
+loop. It is strictly easier to keep stable than the current Kelvin–Voigt contact. The verification holds
+subject to two remaining conditions, each carried as a prerequisite or test: the §5c moment-filter
+parameterization, and the §5b constraint owning static position. When §5a is implemented, this analysis
+should be promoted to a numerical-analysis document in [`docs/algorithms/`](../algorithms/) per the
+`/algo` convention.
 
 **§5b — Penalty / hard-constraint role split (decided, OQ-BC-2 → Alternative 2).** The
 post-integration hard constraint (§3) is the **primary** non-penetration mechanism and is made
 *restitution-consistent*: instead of hard-zeroing the corner normal velocity it removes $(1+e)$ of
-the normal approach component with a configured restitution $e\approx0$, bounding penetration every
-step. The penalty force (§5a) is demoted to supplying in-contact damping and the contact moment for
+the normal approach component (i.e. $v_\text{normal}\mapsto -e\,v_\text{normal}$) with the **single
+collider-level coefficient of restitution $e$** (`restitution_nd`, default $0$, the only user-facing
+contact knob — see the §5a parameterization and OQ-BC-5), bounding penetration every step. The penalty force (§5a) is demoted to supplying in-contact damping and the contact moment for
 §5c — it no longer has to be stiff enough to arrest the impact before penetration, so there is no
 stiff-spring step-size penalty. The lesson from the gear is that a stiff backstop firing against the
 load-factor model's near-zero-inertia, velocity-slaved attitude produces non-physical feedback and
@@ -390,6 +427,15 @@ Configuration (not serialized state) per volume: `name`, `half_extents_body_m`,
 `center_offset_body_m`, `stiffness_npm`, `damping_nspm`. The volume count here is below the
 ten-field threshold that would warrant a standalone schema document; it is specified inline.
 
+> **Decided config change (§5a/§5b, OQ-BC-5 — not yet implemented).** Per-volume `stiffness_npm` and
+> `damping_nspm` are removed; `CollisionVolumeParams` reduces to geometry (`name`,
+> `half_extents_body_m`, `center_offset_body_m`). A single collider-level `restitution_nd` (the §5b
+> coefficient of restitution, default $0$, range $[0,1)$) is added to `BodyColliderParams`, and §5d adds
+> collider-level `friction_coulomb_nd` and `friction_viscous_nd`. The §5a velocity-arrest damping is
+> derived in `initialize` from the airframe mass and step `dt` (now supplied by `Aircraft`), not stored.
+> The as-built `CollisionVolumeParams` / proto blocks above and below reflect the current code and will
+> change when the plan lands.
+
 ### Proto Message
 
 ```proto
@@ -429,11 +475,32 @@ force per penetrating corner.
 
 ## Open Questions
 
-_No open questions remain — OQ-BC-1…4 are all resolved; see the resolution notes below._
+All open questions are resolved (resolution notes below).
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
 | _(none open)_ | — | — |
+
+### OQ-BC-5 — §5a Velocity-Arrest Coefficient Parameterization *(Resolved)*
+
+**Resolution (single non-dimensional user knob — coefficient of restitution $e$ alone).** The body
+collider exposes **exactly one user-facing contact parameter, a non-dimensional coefficient of
+restitution $e$** (`restitution_nd`, default $0$, clamped to $[0,1)$), consumed by the §5b hard
+constraint. There is **no per-volume and no per-corner user parameter**; `CollisionVolumeParams` is
+reduced to geometry. `Aircraft` supplies the airframe mass, outer step $dt$, and inertia tensor to
+`BodyCollider::initialize` (the architectural correction — the inertia also serves §5c), and the §5a
+velocity-arrest damping is **derived internally and independently of $e$** from a fixed arrest factor
+$N_\text{arr}\approx3$: $b_\text{total}=m/(N_\text{arr}\,dt)$, distributed across the live penetrating
+corners. The full design and the parameter derivation are documented in §5a. **Rationale (user):** the
+collider is a non-penetration backstop, not a tuned suspension; its one parameter must be
+non-dimensional and tuning-free with a wide robust range, and the config-only architecture (no airframe
+properties) is an architectural error to fix, not a constraint to design around. **Verification:** the
+§5a stability analysis is extended to prove that **all reasonable $e$** give reasonable behavior — for
+every $e\in[0,1)$ the contact is dynamically stable (per-contact normal energy $\times e^2$, monotone
+decay) and computationally stable ($e$ enters only an algebraic projection, no CFL; the derived damper
+is $e$-independent and stable by construction), graded smoothly from plastic ($e=0$) toward the
+excluded elastic limit ($e\to1$). **Not yet implemented** (tracked in
+[body_collider_dynamics.md](../implementation/body_collider_dynamics.md)).
 
 ### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
 
