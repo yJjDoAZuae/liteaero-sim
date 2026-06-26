@@ -294,6 +294,13 @@ def test_touch_and_go_rotates_to_climb_fpa():
     gamma_target = math.radians(6.0)   # commanded climb flight-path angle
     k_fpa = 6.0                        # FPA-error -> load-factor gain
     nz_max = 2.5
+    # Rotation speed: the nose-up input is gated on airspeed (never on elapsed time) so the
+    # aircraft never rotates below stall speed and provokes a power-on stall at rotation.
+    weight = cfg["inertia"]["mass_kg"] * g
+    v_stall = math.sqrt(
+        2.0 * weight / (1.225 * cfg["aircraft"]["S_ref_m2"] * cfg["lift_curve"]["cl_max"])
+    )
+    v_rotate = 1.15 * v_stall
 
     cfg["initial_state"].update(
         {"altitude_m": 20.0, "velocity_north_mps": 15.0 * math.cos(math.radians(6.0)),
@@ -307,6 +314,8 @@ def test_touch_and_go_rotates_to_climb_fpa():
     cmd.throttle_nd = 0.0
 
     first_wow_t = None
+    settle_start_t = None              # when weight-on-wheels was last continuously established
+    powered = False                    # latched: full throttle, stays on through liftoff
     go = False
     settled_agl = None
     wow_cleared_after_go = False
@@ -330,13 +339,31 @@ def test_touch_and_go_rotates_to_climb_fpa():
             first_wow_t = t
         if first_wow_t is not None:
             max_abs_pitch_post_td_deg = max(max_abs_pitch_post_td_deg, pitch_deg)
-        if first_wow_t is not None and (t - first_wow_t) >= 3.0 and not go:
+
+        # Touch-and-go, properly sequenced (NOT a simultaneous throttle + stick input):
+        #   1. settle    — wait until weight-on-wheels is held continuously (not still bouncing);
+        #   2. throttle  — apply full throttle, hold n_z = 1 (no rotation yet);
+        #   3. accelerate— let speed build under power;
+        #   4. rotate    — apply the nose-up command only once airspeed >= v_rotate, gated on
+        #                  airspeed (never on elapsed time) to avoid rotating below stall speed.
+        if wow:
+            if settle_start_t is None:
+                settle_start_t = t
+        else:
+            settle_start_t = None       # bouncing: not yet settled
+        # Latch full throttle once settled — it stays on through liftoff (the go-around is committed),
+        # so it must NOT be tied to continuous weight-on-wheels.
+        if not powered and settle_start_t is not None and (t - settle_start_t) >= 0.5:
+            powered = True
+        # Latch the rotation once airspeed reaches v_rotate (gated on airspeed, not elapsed time).
+        if powered and not go and V >= v_rotate:
             go = True
             settled_agl = s.altitude_m
 
+        cmd.throttle_nd = 1.0 if powered else 0.0
+        cmd.n_z = (max(0.0, min(nz_max, 1.0 + k_fpa * (gamma_target - gamma))) if go else 1.0)
+
         if go:
-            cmd.throttle_nd = 1.0
-            cmd.n_z = max(0.0, min(nz_max, 1.0 + k_fpa * (gamma_target - gamma)))
             if not wow:
                 wow_cleared_after_go = True
             # Realized normal load factor from path curvature: n = cos(gamma) + V*gammadot/g.

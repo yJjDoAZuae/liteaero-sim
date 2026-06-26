@@ -3373,15 +3373,24 @@ Setup:
 
 - `FlatTerrain`, zero wind, a config that carries a real propulsion model (e.g. the prop engine
   in `small_uas_ksba.json`) and landing gear.
-- Approach to touchdown; once weight-on-wheels settles, command the go-around: full throttle and a
-  **closed-loop normal-load-factor command that pulls for a target climb flight-path angle**,
-  $n_z = 1 + k\,(\gamma_{\text{target}} - \gamma)$ (clamped to the airframe $g$ limits), rather than
-  a fixed open-loop $n_z$. A fixed $n_z$ can pass on a technicality (AGL creeping up a few meters);
-  the FPA-target loop asserts the aircraft actually rotates and holds a commanded climb gradient.
+- Fly the approach to touchdown, then a **properly sequenced** go-around — throttle and rotation are
+  *separate, ordered* events, never a simultaneous input:
+  1. **Settle** — wait until weight-on-wheels is held *continuously* (settled, not still bouncing).
+  2. **Throttle** — apply full throttle and hold $n_z = 1$ (no rotation yet). The throttle **latches
+     on** — it stays applied through liftoff (it must not be tied to continuous weight-on-wheels).
+  3. **Accelerate** — let airspeed build under power.
+  4. **Rotate** — only once airspeed reaches the rotation speed $V_R$ (e.g. $1.15\,V_\text{stall}$),
+     command the rotation with a **closed-loop normal-load-factor command that pulls for a target
+     climb flight-path angle**, $n_z = 1 + k\,(\gamma_{\text{target}} - \gamma)$ (clamped to the
+     airframe $g$ limits), not a fixed open-loop $n_z$. The rotation is **gated on airspeed, never on
+     elapsed time** — rotating below stall speed would provoke a power-on stall at rotation. (A fixed
+     $n_z$ can also pass on a technicality — AGL creeping up a few meters — so the FPA-target loop
+     asserts the aircraft actually rotates and holds a commanded climb gradient.)
 
 Pass criteria:
 
-- WOW transitions true → false (genuine lift-off) within a bounded time after the go-around command.
+- The nose-up command is issued **only at or above $V_R$** (airspeed-gated, not time-gated).
+- WOW transitions true → false (genuine lift-off) within a bounded time after the rotation command.
 - The aircraft reaches and holds the target climb FPA $\gamma_{\text{target}}$ (within tolerance);
   equivalently, sustained climb rate $-v_D > 0$ once established.
 - The realized normal load factor follows the command during rotation (it is **not** clamped to
