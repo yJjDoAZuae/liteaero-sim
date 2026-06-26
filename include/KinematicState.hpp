@@ -147,12 +147,16 @@ public:
 
     // ── Post-integration terrain hard constraint ──────────────────────────────
 
-    // Shift altitude up by penetration_m and zero the NED-downward velocity
-    // component.  Called by Aircraft::step() after integration whenever
-    // BodyCollider::maxCornerPenetration_m() reports positive penetration.
-    // Upward velocity (negative NED-z) is preserved — the aircraft is already
-    // leaving terrain and needs no correction.
-    void applyTerrainHardConstraint(float penetration_m);
+    // Shift altitude up by penetration_m and apply a restitution-consistent
+    // correction to the NED-downward velocity component.  Called by
+    // Aircraft::step() after integration whenever BodyCollider::minCornerClearance_m()
+    // reports penetration.  The downward approach velocity v_D > 0 is mapped to
+    // -restitution_nd * v_D, i.e. (1 + restitution_nd) * v_D is removed: at
+    // restitution_nd = 0 (default) the velocity is fully arrested (inelastic);
+    // for 0 < restitution_nd < 1 the body rebounds at that fraction of the
+    // approach speed.  Upward velocity (negative NED-z) is preserved — the
+    // aircraft is already leaving terrain and needs no correction.
+    void applyTerrainHardConstraint(float penetration_m, float restitution_nd = 0.f);
 
     // ── Serialization ─────────────────────────────────────────────────────────
 

@@ -22,8 +22,8 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 
 | ID | Status | Title | Depends on | Design refs |
 | --- | --- | --- | --- | --- |
-| IP-BC-1 | todo | Add optional `restitution_nd` (default 0) to `BodyColliderParams` JSON + proto + `parse`/`serialize`; existing configs unaffected by the default | — | [body_collider.md §5b](../design/body_collider.md), Serialization |
-| IP-BC-2 | todo | Generalize `KinematicState::applyTerrainHardConstraint(pen, restitution_nd)` to remove $(1+e)\,v_z$ instead of hard-zeroing; pass the configured restitution from `Aircraft::step` step 12 | IP-BC-1 | [body_collider.md §5b, §3](../design/body_collider.md) |
+| IP-BC-1 | done | Add optional `restitution_nd` (default 0) to `BodyColliderParams` JSON + proto + `parse`/`serialize`; existing configs unaffected by the default | — | [body_collider.md §5b](../design/body_collider.md), Serialization |
+| IP-BC-2 | done | Generalize `KinematicState::applyTerrainHardConstraint(pen, restitution_nd)` to remove $(1+e)\,v_z$ instead of hard-zeroing; pass the configured restitution from `Aircraft::step` step 12 | IP-BC-1 | [body_collider.md §5b, §3](../design/body_collider.md) |
 | IP-BC-3 | todo | Reduce `CollisionVolumeParams` to geometry — remove `stiffness_npm`/`damping_nspm` (JSON + proto + parse/serialize) — and migrate every `body_collider` config and test fixture | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
 | IP-BC-4 | todo | Add airframe mass, outer `dt`, and inertia tensor to `BodyCollider::initialize`; derive the aggregate arrest damping $b_\text{total}=m/(N_\text{arr}\,dt)$ (fixed internal $N_\text{arr}\approx3$), distributed across the live penetrating corners | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
 | IP-BC-5 | todo | Replace the Kelvin–Voigt penalty in `BodyCollider::step` with the velocity-arrest force $F=\max(0,\,c\,\delta\dot\delta)$ (no spring); TDD: inelastic ($e{=}0$) drop tests and $e$-range robustness across the 5 kg / 1045 kg / 5500 kg fixtures | IP-BC-2, IP-BC-3, IP-BC-4 | [body_collider.md §5a](../design/body_collider.md) |
@@ -35,7 +35,7 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 > **IP-BC-7 blocked reason:** the tangential force scales the Coulomb term by the normal force
 > $F_\text{pen}$, which does not exist until IP-BC-5 lands the velocity-arrest normal force; the
 > friction config fields (IP-BC-6) must also be present.
-
+>
 > **IP-BC-9 blocked reason:** the rotational reaction is driven by the contact moment produced by the
 > new normal (and tangential) force, so IP-BC-5 must land first; the $\Delta\theta$ state and filter
 > sourcing (IP-BC-8) must exist to receive it.

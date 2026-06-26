@@ -625,7 +625,8 @@ void Aircraft::step(double time_sec,
             _contact_forces.moment_body_nm += bc_impact.moment_body_nm;
             _contact_forces.weight_on_wheels = true;
             _body_in_hard_contact = true;
-            _state.applyTerrainHardConstraint(pen);
+            // §5b: restitution-consistent constraint (OQ-BC-2). e = 0 fully arrests.
+            _state.applyTerrainHardConstraint(pen, _body_collider.restitution_nd());
         } else if (clearance > kBodySeparationMargin_m) {
             // The body has genuinely separated from the terrain — release the
             // hard-contact latch so weight_on_wheels reporting is accurate.

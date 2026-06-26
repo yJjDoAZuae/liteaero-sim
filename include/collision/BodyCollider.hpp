@@ -61,6 +61,11 @@ public:
         const liteaero::nav::KinematicStateSnapshot& snap,
         const liteaero::terrain::Terrain& terrain) const;
 
+    // Coefficient of restitution for the §5b restitution-consistent terrain hard
+    // constraint (body_collider.md §5b / OQ-BC-5). The single user-facing contact
+    // parameter; non-dimensional, default 0 (fully inelastic), clamped to [0, 1).
+    [[nodiscard]] float restitution_nd() const { return _restitution_nd; }
+
     [[nodiscard]] nlohmann::json       serializeJson()                               const;
     void                               deserializeJson(const nlohmann::json& j);
     [[nodiscard]] std::vector<uint8_t> serializeProto()                              const;
@@ -68,6 +73,9 @@ public:
 
 private:
     std::vector<CollisionVolumeParams> _volumes;
+    // Single collider-level coefficient of restitution consumed by the §5b hard
+    // constraint. Clamped to [0, 1) on load.
+    float _restitution_nd = 0.f;
     // Maximum distance from CG to any corner of any volume, over all orientations.
     // Used as the AGL early-exit threshold.
     float _max_reach_m = 0.f;

@@ -830,6 +830,38 @@ TEST(KinematicStateTest, TerrainHardConstraint_PreservesUpwardVelocity) {
         << "Upward velocity must be preserved (aircraft is already leaving terrain)";
 }
 
+// body_collider.md §5b / OQ-BC-2: the constraint is restitution-consistent.
+// Downward approach velocity v_D > 0 maps to -e * v_D.
+TEST(KinematicStateTest, TerrainHardConstraint_RestitutionReflectsDownwardVelocity) {
+    WGS84_Datum datum;
+    datum.setHeight_WGS84_m(-1.f);
+    KinematicState s(0.0, datum,
+                     Eigen::Vector3f{0.f, 0.f, 50.f},  // sinking at 50 m/s
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+
+    s.applyTerrainHardConstraint(1.f, /*restitution_nd=*/0.5f);
+
+    EXPECT_NEAR(s.velocity_NED_mps().z(), -25.f, 1e-3f)
+        << "v_D -> -e * v_D: 50 m/s down at e=0.5 must rebound to 25 m/s up";
+}
+
+TEST(KinematicStateTest, TerrainHardConstraint_ZeroRestitutionFullyArrests) {
+    WGS84_Datum datum;
+    datum.setHeight_WGS84_m(-1.f);
+    KinematicState s(0.0, datum,
+                     Eigen::Vector3f{0.f, 0.f, 50.f},
+                     Eigen::Vector3f::Zero(),
+                     Eigen::Quaternionf::Identity(),
+                     Eigen::Vector3f::Zero());
+
+    s.applyTerrainHardConstraint(1.f, /*restitution_nd=*/0.f);
+
+    EXPECT_NEAR(s.velocity_NED_mps().z(), 0.f, 1e-6f)
+        << "e = 0 is fully inelastic: downward velocity is arrested to zero";
+}
+
 TEST(KinematicStateSerializationTest, ProtoSchemaVersionMismatchThrows) {
     KinematicState s = makeNonTrivialState();
     // Build a valid snapshot then corrupt the schema_version field via JSON

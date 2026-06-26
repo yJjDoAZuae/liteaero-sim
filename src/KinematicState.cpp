@@ -378,9 +378,12 @@ void KinematicState::deserializeProto(const std::vector<uint8_t>& bytes)
     snapshot_ = liteaero::nav::KinematicStateUtil::deserializeProto(bytes);
 }
 
-void KinematicState::applyTerrainHardConstraint(float penetration_m)
+void KinematicState::applyTerrainHardConstraint(float penetration_m, float restitution_nd)
 {
     snapshot_.position.altitude_m += penetration_m;
+    // Restitution-consistent velocity correction: remove (1 + e) of the downward
+    // approach component, i.e. v_D -> -e * v_D.  e = 0 fully arrests (inelastic);
+    // 0 < e < 1 rebounds at that fraction.  Upward velocity is left untouched.
     if (snapshot_.velocity_ned_mps.z() > 0.f)
-        snapshot_.velocity_ned_mps.z() = 0.f;
+        snapshot_.velocity_ned_mps.z() *= -restitution_nd;
 }

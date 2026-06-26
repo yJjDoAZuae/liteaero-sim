@@ -370,6 +370,7 @@ message CollisionVolumeParams {
 message BodyColliderParams {
     int32                          schema_version = 1;
     repeated CollisionVolumeParams volumes        = 2;
+    float                          restitution_nd = 3;  // §5b coefficient of restitution, [0,1)
 }
 
 // ---------------------------------------------------------------------------

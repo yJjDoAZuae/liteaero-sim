@@ -51,6 +51,9 @@ void BodyCollider::initialize(const nlohmann::json& config) {
     for (const auto& jv : config.at("volumes")) {
         _volumes.push_back(parseVolume(jv));
     }
+    // §5b coefficient of restitution: single, optional, non-dimensional, [0, 1).
+    _restitution_nd =
+        std::clamp(config.value("restitution_nd", 0.f), 0.f, std::nextafter(1.0f, 0.0f));
     recomputeMaxReach();
 }
 
@@ -216,6 +219,7 @@ nlohmann::json BodyCollider::serializeJson() const {
     nlohmann::json vols = nlohmann::json::array();
     for (const auto& v : _volumes) vols.push_back(serializeVolume(v));
     j["volumes"] = vols;
+    j["restitution_nd"] = _restitution_nd;
     return j;
 }
 
@@ -226,12 +230,15 @@ void BodyCollider::deserializeJson(const nlohmann::json& j) {
     for (const auto& jv : j.at("volumes")) {
         _volumes.push_back(parseVolume(jv));
     }
+    _restitution_nd =
+        std::clamp(j.value("restitution_nd", 0.f), 0.f, std::nextafter(1.0f, 0.0f));
     recomputeMaxReach();
 }
 
 std::vector<uint8_t> BodyCollider::serializeProto() const {
     las_proto::BodyColliderParams proto;
     proto.set_schema_version(1);
+    proto.set_restitution_nd(_restitution_nd);
     for (const auto& v : _volumes) {
         auto* pv = proto.add_volumes();
         pv->set_name(v.name);
@@ -254,6 +261,8 @@ void BodyCollider::deserializeProto(const std::vector<uint8_t>& bytes) {
         throw std::runtime_error("BodyCollider::deserializeProto: failed to parse bytes");
     if (proto.schema_version() != 1)
         throw std::runtime_error("BodyCollider::deserializeProto: unsupported schema_version");
+    _restitution_nd =
+        std::clamp(proto.restitution_nd(), 0.f, std::nextafter(1.0f, 0.0f));
     _volumes.clear();
     for (int i = 0; i < proto.volumes_size(); ++i) {
         const auto& pv = proto.volumes(i);

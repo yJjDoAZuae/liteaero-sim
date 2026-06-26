@@ -368,3 +368,42 @@ TEST(BodyColliderTest, ProtoRoundTrip) {
     const auto cf_restored = restored.step(makeSnap(0.05f), terrain);
     EXPECT_NEAR(cf_restored.force_body_n.z(), cf_orig.force_body_n.z(), 1e-3f);
 }
+
+// ---------------------------------------------------------------------------
+// restitution_nd — the single §5b user-facing contact parameter (OQ-BC-5)
+// ---------------------------------------------------------------------------
+
+TEST(BodyColliderTest, RestitutionDefaultsToZero) {
+    BodyCollider c;
+    c.initialize(makeConfig());  // no restitution_nd in config
+    EXPECT_FLOAT_EQ(c.restitution_nd(), 0.f);
+}
+
+TEST(BodyColliderTest, RestitutionParsedAndClamped) {
+    auto cfg = makeConfig();
+
+    cfg["restitution_nd"] = 0.3f;
+    BodyCollider a; a.initialize(cfg);
+    EXPECT_FLOAT_EQ(a.restitution_nd(), 0.3f);
+
+    cfg["restitution_nd"] = -0.2f;        // below range -> clamp to 0
+    BodyCollider b; b.initialize(cfg);
+    EXPECT_FLOAT_EQ(b.restitution_nd(), 0.f);
+
+    cfg["restitution_nd"] = 1.5f;         // >= 1 -> clamp just below 1
+    BodyCollider d; d.initialize(cfg);
+    EXPECT_LT(d.restitution_nd(), 1.f);
+    EXPECT_GT(d.restitution_nd(), 0.99f);
+}
+
+TEST(BodyColliderTest, RestitutionRoundTrips) {
+    auto cfg = makeConfig();
+    cfg["restitution_nd"] = 0.25f;
+    BodyCollider original; original.initialize(cfg);
+
+    BodyCollider from_json; from_json.deserializeJson(original.serializeJson());
+    EXPECT_FLOAT_EQ(from_json.restitution_nd(), 0.25f);
+
+    BodyCollider from_proto; from_proto.deserializeProto(original.serializeProto());
+    EXPECT_FLOAT_EQ(from_proto.restitution_nd(), 0.25f);
+}
