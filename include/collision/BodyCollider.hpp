@@ -18,8 +18,9 @@ struct CollisionVolumeParams {
     std::string     name;
     Eigen::Vector3f half_extents_body_m  = {0.5f, 0.3f, 0.2f};
     Eigen::Vector3f center_offset_body_m = Eigen::Vector3f::Zero();
-    float           stiffness_npm        = 10000.f;
-    float           damping_nspm         = 500.f;
+    // No per-volume contact parameter (body_collider.md §5a / OQ-BC-5): the
+    // velocity-arrest damping is a single collider-level quantity derived from
+    // the airframe mass and step in initialize().
 };
 
 // Body-axis OBB collision system. Each step checks all 8 corners of every
@@ -31,7 +32,11 @@ struct CollisionVolumeParams {
 // configuration only.
 class BodyCollider {
 public:
-    void initialize(const nlohmann::json& config);
+    // mass_kg and dt_s are the airframe mass and outer step rate; the §5a
+    // velocity-arrest damping is derived from them (body_collider.md §5a / OQ-BC-5).
+    // The defaults are a convenience for geometry unit tests — Aircraft always
+    // passes the real airframe mass and step.
+    void initialize(const nlohmann::json& config, float mass_kg = 1.0f, float dt_s = 0.01f);
     void reset() {}
 
     // Compute contact forces against terrain.
@@ -72,10 +77,19 @@ public:
     void                               deserializeProto(const std::vector<uint8_t>& bytes);
 
 private:
+    // Fixed internal arrest factor N_arr: the velocity-arrest aggregate damping
+    // arrests an impact over ~N_arr outer steps. Chosen so the worst-case
+    // aggregate CFL bound b_total*dt/m = 1/N_arr stays well below 1 (§5a).
+    static constexpr float kArrestSteps = 3.0f;
+
     std::vector<CollisionVolumeParams> _volumes;
     // Single collider-level coefficient of restitution consumed by the §5b hard
     // constraint. Clamped to [0, 1) on load.
     float _restitution_nd = 0.f;
+    // Per-corner velocity-arrest damping coefficient (N*s/m), derived in
+    // initialize() as mass / (n_corners_total * kArrestSteps * dt) so the
+    // worst-case aggregate over all corners meets the §5a stability bound.
+    float _b_corner_nspm = 0.f;
     // Maximum distance from CG to any corner of any volume, over all orientations.
     // Used as the AGL early-exit threshold.
     float _max_reach_m = 0.f;

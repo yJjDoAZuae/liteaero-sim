@@ -279,7 +279,9 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
 
     // 8. Body collider (optional — only initialized when "body_collider" section is present)
     if (config.contains("body_collider")) {
-        _body_collider.initialize(config.at("body_collider"));
+        // §5a: the velocity-arrest damping is derived from airframe mass and the
+        // outer step (OQ-BC-5); both are already set above.
+        _body_collider.initialize(config.at("body_collider"), _inertia.mass_kg, _outer_dt_s);
         _has_body_collider = true;
     } else {
         _has_body_collider = false;

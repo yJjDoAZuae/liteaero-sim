@@ -363,14 +363,17 @@ message CollisionVolumeParams {
     string   name                 = 1;
     Vector3f half_extents_body_m  = 2;
     Vector3f center_offset_body_m = 3;
-    float    stiffness_npm        = 4;
-    float    damping_nspm         = 5;
+    // No per-volume contact parameter (§5a / OQ-BC-5): the velocity-arrest damping
+    // is a single collider-level quantity derived from airframe mass and step.
 }
 
 message BodyColliderParams {
     int32                          schema_version = 1;
     repeated CollisionVolumeParams volumes        = 2;
     float                          restitution_nd = 3;  // §5b coefficient of restitution, [0,1)
+    // §5a per-corner velocity-arrest damping, derived from airframe mass + step in
+    // initialize(); serialized so deserialize reproduces behavior without mass/dt.
+    float                          arrest_damping_corner_nspm = 4;
 }
 
 // ---------------------------------------------------------------------------

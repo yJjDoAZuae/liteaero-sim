@@ -24,9 +24,9 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | --- | --- | --- | --- | --- |
 | IP-BC-1 | done | Add optional `restitution_nd` (default 0) to `BodyColliderParams` JSON + proto + `parse`/`serialize`; existing configs unaffected by the default | — | [body_collider.md §5b](../design/body_collider.md), Serialization |
 | IP-BC-2 | done | Generalize `KinematicState::applyTerrainHardConstraint(pen, restitution_nd)` to remove $(1+e)\,v_z$ instead of hard-zeroing; pass the configured restitution from `Aircraft::step` step 12 | IP-BC-1 | [body_collider.md §5b, §3](../design/body_collider.md) |
-| IP-BC-3 | todo | Reduce `CollisionVolumeParams` to geometry — remove `stiffness_npm`/`damping_nspm` (JSON + proto + parse/serialize) — and migrate every `body_collider` config and test fixture | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
-| IP-BC-4 | todo | Add airframe mass, outer `dt`, and inertia tensor to `BodyCollider::initialize`; derive the aggregate arrest damping $b_\text{total}=m/(N_\text{arr}\,dt)$ (fixed internal $N_\text{arr}\approx3$), distributed across the live penetrating corners | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
-| IP-BC-5 | todo | Replace the Kelvin–Voigt penalty in `BodyCollider::step` with the velocity-arrest force $F=\max(0,\,c\,\delta\dot\delta)$ (no spring); TDD: inelastic ($e{=}0$) drop tests and $e$-range robustness across the 5 kg / 1045 kg / 5500 kg fixtures | IP-BC-2, IP-BC-3, IP-BC-4 | [body_collider.md §5a](../design/body_collider.md) |
+| IP-BC-3 | done | Reduce `CollisionVolumeParams` to geometry — remove `stiffness_npm`/`damping_nspm` (struct + proto + parse/serialize) — and update the C++ test fixtures. (JSON config dead-key strip pending — see Notes.) | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
+| IP-BC-4 | done | Add airframe mass + outer `dt` to `BodyCollider::initialize`; derive the per-corner arrest damping `_b_corner_nspm = m / (n_corners_total * N_arr * dt)` (fixed internal `kArrestSteps = 3`), serialized so deserialize reproduces behavior; `Aircraft` passes `_inertia.mass_kg`, `_outer_dt_s` | — | [body_collider.md §5a, OQ-BC-5](../design/body_collider.md) |
+| IP-BC-5 | done | Replace the Kelvin–Voigt penalty in `BodyCollider::step` with the velocity-arrest force $F=\max(0,\,c\,\delta\dot\delta)$, $c=$ `_b_corner_nspm`$/h_z$ (no spring); BodyCollider tests migrated to the velocity-arrest semantics (no static force, scales with $\delta\dot\delta$, no suction, mass-scaling) | IP-BC-2, IP-BC-3, IP-BC-4 | [body_collider.md §5a](../design/body_collider.md) |
 | IP-BC-6 | todo | Add `friction_coulomb_nd` ($\mu$) and `friction_viscous_nd` ($c_t$) to `CollisionVolumeParams` JSON + proto + parse/serialize (default 0 → frictionless until set) | — | [body_collider.md §5d](../design/body_collider.md) |
 | IP-BC-7 | blocked (IP-BC-5, IP-BC-6) | Apply the tangential force $-\mu F_\text{pen}\hat{\mathbf v}_{t,\text{reg}} - c_t\mathbf v_t$ at penetrating corners in `BodyCollider::step`, regularized near zero slip | IP-BC-5, IP-BC-6 | [body_collider.md §5d](../design/body_collider.md) |
 | IP-BC-8 | todo | Add the §5c dedicated $\Delta\theta$ serialized state (per-axis second-order filter) to `BodyCollider` (JSON + proto + `reset`), and plumb the inertia tensor into `initialize` for the per-axis $\omega_n,\zeta$ sourcing | — | [body_collider.md §5c](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md), Serialization |
@@ -61,4 +61,19 @@ config-only. Coordinate the signature change so it is made once.
 
 **TDD / build.** Every item writes a failing test first. Build and test with the project toolchain:
 `PATH="/c/msys64/ucrt64/bin:$PATH" mingw32-make -C build liteaerosim_test liteaero_sim_py` then
-`ctest --test-dir build -R "BodyCollider|Aircraft|KinematicState"`.
+`ctest --test-dir build -R "BodyCollider|Aircraft|KinematicState"`. (Rebuild `liteaero_sim_py`
+whenever a header/source the binding depends on changes, or the staleness guard fails the CrossLang
+tests.)
+
+**Remaining after §5a/§5b code (not blocking, follow-ups):**
+
+- **JSON config dead-key strip.** `stiffness_npm`/`damping_nspm` are now ignored on load, but they
+  still appear in `configs/*.json`, `test/data/aircraft/*.json`, `python/assets/aircraft_configs/*.json`,
+  and `python/tools/gen_test_assets.py`. Strip them (rule 7) — non-breaking.
+- **Design-doc as-built reconciliation.** §5a/§5b are now implemented, so [body_collider.md](../design/body_collider.md)
+  needs a `/design update`: the §2 "current Kelvin–Voigt model" section, the Class Hierarchy, Interface,
+  Serialization, and proto blocks describe the pre-§5a code and must be refreshed; §5a/§5b move from
+  "decided, not yet implemented" to as-built.
+
+**Pre-existing unrelated failures:** `LandingGear.BearingDragCoeffs_NonzeroWhenSpindownConfigured` and
+`LandingGear.DifferentialBrake_ProducesYawMoment` fail independently of this plan (brake/spindown logic).

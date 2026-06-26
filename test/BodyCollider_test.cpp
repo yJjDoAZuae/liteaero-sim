@@ -22,17 +22,13 @@ private:
     float elev_;
 };
 
-static nlohmann::json makeConfig(
-    float hx = 0.5f, float hy = 0.3f, float hz = 0.2f,
-    float stiffness = 10000.f, float damping = 500.f)
+static nlohmann::json makeConfig(float hx = 0.5f, float hy = 0.3f, float hz = 0.2f)
 {
     return {{"volumes", nlohmann::json::array({
         {
             {"name",                 "test"},
             {"half_extents_body_m",  {hx, hy, hz}},
-            {"center_offset_body_m", {0.f, 0.f, 0.f}},
-            {"stiffness_npm",        stiffness},
-            {"damping_nspm",         damping}
+            {"center_offset_body_m", {0.f, 0.f, 0.f}}
         }
     })}};
 }
@@ -53,6 +49,16 @@ static KinematicStateSnapshot makeSnap(
     s.velocity_ned_mps       = vel_ned_mps;
     s.rates_body_rps         = rates_rps;
     return s;
+}
+
+// A snapshot penetrating terrain while sinking straight down at `sink_mps`.
+// The §5a velocity-arrest force is produced only by an active sink rate, so the
+// force tests supply one (a static penetration produces no force by design).
+static KinematicStateSnapshot makeSinkingSnap(
+    float alt_m, float sink_mps,
+    Eigen::Quaternionf q_nb = Eigen::Quaternionf::Identity())
+{
+    return makeSnap(alt_m, q_nb, Eigen::Vector3f{0.f, 0.f, sink_mps});
 }
 
 // ---------------------------------------------------------------------------
@@ -82,16 +88,28 @@ TEST(BodyColliderTest, NoContact_BottomCornersJustAboveTerrain) {
     EXPECT_FLOAT_EQ(cf.force_body_n.norm(), 0.f);
 }
 
-TEST(BodyColliderTest, Contact_BottomCornersBelow) {
+TEST(BodyColliderTest, Contact_SetsWeightOnWheels_EvenWhenStatic) {
     BodyCollider c;
     c.initialize(makeConfig(0.5f, 0.3f, 0.2f));
     FlatTerrain terrain{0.f};
 
-    // Aircraft at alt = 0.1 m → bottom corners at altitude 0.1 - 0.2 = -0.1 m
-    // penetration = 0 - (-0.1) = 0.1 m → should get upward force
+    // Bottom corners penetrate 0.1 m. Weight-on-wheels is set on any penetration,
+    // but the §5a velocity-arrest force is zero without a sink rate (no spring).
     const auto cf = c.step(makeSnap(0.1f), terrain);
     EXPECT_TRUE(cf.weight_on_wheels);
+    EXPECT_NEAR(cf.force_body_n.norm(), 0.f, 1e-6f);
+}
+
+TEST(BodyColliderTest, Contact_ProducesUpwardForce_WhenSinking) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), /*mass_kg=*/1000.f, /*dt_s=*/0.01f);
+    FlatTerrain terrain{0.f};
+
+    // Penetrating 0.1 m and sinking at 2 m/s → upward (-body-z) arrest force.
+    const auto cf = c.step(makeSinkingSnap(0.1f, 2.f), terrain);
+    EXPECT_TRUE(cf.weight_on_wheels);
     EXPECT_GT(cf.force_body_n.norm(), 0.f);
+    EXPECT_LT(cf.force_body_n.z(), 0.f);
 }
 
 // ---------------------------------------------------------------------------
@@ -100,78 +118,73 @@ TEST(BodyColliderTest, Contact_BottomCornersBelow) {
 
 TEST(BodyColliderTest, ForceIsUpward_BodyFrame_LevelAircraft) {
     BodyCollider c;
-    c.initialize(makeConfig());
+    c.initialize(makeConfig(), 1000.f, 0.01f);
 
-    // Level aircraft (Identity q_nb), penetrating 0.1 m → force must be in -body-Z (upward)
-    const auto cf = c.step(makeSnap(0.1f));
-    // body-Z is down; upward = negative body-Z
+    // Level aircraft sinking at 2 m/s, penetrating 0.1 m → force in -body-Z (up).
+    const auto cf = c.step(makeSinkingSnap(0.1f, 2.f));
     EXPECT_LT(cf.force_body_n.z(), 0.f);
-    // No lateral or fore-aft force from a vertical terrain normal
+    // No lateral or fore-aft force from a vertical terrain normal.
     EXPECT_NEAR(cf.force_body_n.x(), 0.f, 1e-3f);
     EXPECT_NEAR(cf.force_body_n.y(), 0.f, 1e-3f);
 }
 
 // ---------------------------------------------------------------------------
-// Spring force proportional to penetration
+// Velocity-arrest force law: F = c * delta * delta_dot (§5a)
 // ---------------------------------------------------------------------------
 
-TEST(BodyColliderTest, ForceProportionalToPenetration) {
-    // With no damping, force is purely spring: F = k * pen * n_corners_in_contact.
-    // Both cases hit the same 4 bottom corners with different penetration depths.
-    BodyCollider c1, c2;
-    c1.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 0.f));
-    c2.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 0.f));
+TEST(BodyColliderTest, ForceScalesWithPenetrationAndSinkRate) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
 
-    const auto cf1 = c1.step(makeSnap(0.1f));   // pen = 0.1 m per 4 corners
-    const auto cf2 = c2.step(makeSnap(0.05f));  // pen = 0.15 m per 4 corners
-
-    // Force magnitude ratio should equal penetration ratio: 0.15/0.10 = 1.5
+    // Proportional to penetration at a fixed sink rate (0.15 / 0.10 = 1.5).
+    const auto cf1 = c.step(makeSinkingSnap(0.1f,  2.f));   // pen = 0.10 m
+    const auto cf2 = c.step(makeSinkingSnap(0.05f, 2.f));   // pen = 0.15 m
     const float F1 = -cf1.force_body_n.z();
     const float F2 = -cf2.force_body_n.z();
     ASSERT_GT(F1, 0.f);
-    EXPECT_NEAR(F2 / F1, 1.5f, 0.05f);
+    EXPECT_NEAR(F2 / F1, 1.5f, 0.05f) << "F proportional to penetration at fixed sink rate";
+
+    // Proportional to sink rate at fixed penetration (2.0 / 1.0 = 2.0).
+    const auto cf_slow = c.step(makeSinkingSnap(0.1f, 1.f));
+    const auto cf_fast = c.step(makeSinkingSnap(0.1f, 2.f));
+    EXPECT_NEAR(-cf_fast.force_body_n.z() / -cf_slow.force_body_n.z(), 2.f, 0.05f)
+        << "F proportional to sink rate at fixed penetration";
 }
 
-// ---------------------------------------------------------------------------
-// Damping adds when sinking, not when rising
-// ---------------------------------------------------------------------------
-
-TEST(BodyColliderTest, DampingIncreasesForce_WhenSinkingIntoTerrain) {
+TEST(BodyColliderTest, ForcePresentOnlyWhenSinking) {
     BodyCollider c;
-    // Use non-zero damping
-    c.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 500.f));
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
 
-    // Static case (zero velocity)
-    const auto cf_static = c.step(makeSnap(0.1f));
+    const auto cf_static  = c.step(makeSnap(0.1f));               // no sink rate
+    const auto cf_sinking = c.step(makeSinkingSnap(0.1f, 1.f));   // sinking
 
-    // Sinking at 1 m/s downward in NED (velocity_down = +1)
-    const auto cf_sinking = c.step(
-        makeSnap(0.1f, Eigen::Quaternionf::Identity(),
-                 Eigen::Vector3f{0.f, 0.f, 1.f}));
-
-    const float F_static  = -cf_static.force_body_n.z();
-    const float F_sinking = -cf_sinking.force_body_n.z();
-    EXPECT_GT(F_sinking, F_static) << "Damping should add force when sinking";
+    EXPECT_NEAR(-cf_static.force_body_n.z(),  0.f, 1e-6f) << "No static restoring force (§5a)";
+    EXPECT_GT(  -cf_sinking.force_body_n.z(), 0.f)        << "Arrest force present when sinking";
 }
 
-TEST(BodyColliderTest, TwoWayDamping_WhenRising_ForceReducedButNotNegative) {
-    // Two-way damping: rising from terrain must reduce the contact force relative
-    // to the static case (energy absorption), but the force must remain >= 0
-    // (no suction pulling the aircraft back into the ground).
+TEST(BodyColliderTest, NoForce_WhenRising_NoSuction) {
+    // The dissipative force opposes sinking only; the max(0) floor forbids suction,
+    // so a rising corner produces zero force.
     BodyCollider c;
-    c.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 500.f));
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
 
-    const auto cf_static = c.step(makeSnap(0.1f));
-    const auto cf_rising = c.step(
-        makeSnap(0.1f, Eigen::Quaternionf::Identity(),
-                 Eigen::Vector3f{0.f, 0.f, -1.f}));
-
-    const float F_static = -cf_static.force_body_n.z();
+    const auto cf_rising = c.step(makeSinkingSnap(0.1f, -1.f));  // rising at 1 m/s
     const float F_rising = -cf_rising.force_body_n.z();
-    EXPECT_LT(F_rising, F_static)
-        << "Two-way damping must reduce contact force when aircraft is rising";
-    EXPECT_GE(F_rising, 0.f)
-        << "No suction: contact force must remain non-negative when rising";
+    EXPECT_NEAR(F_rising, 0.f, 1e-6f) << "No suction / no force when rising";
+    EXPECT_GE(F_rising, 0.f);
+}
+
+TEST(BodyColliderTest, ArrestDampingScalesWithMass) {
+    // §5a: the derived damping b_corner = m / (n_corners * N_arr * dt) scales with
+    // airframe mass, so a 2x heavier airframe gets 2x the arrest force.
+    BodyCollider light, heavy;
+    light.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
+    heavy.initialize(makeConfig(0.5f, 0.3f, 0.2f), 2000.f, 0.01f);
+
+    const float F_light = -light.step(makeSinkingSnap(0.1f, 2.f)).force_body_n.z();
+    const float F_heavy = -heavy.step(makeSinkingSnap(0.1f, 2.f)).force_body_n.z();
+    ASSERT_GT(F_light, 0.f);
+    EXPECT_NEAR(F_heavy / F_light, 2.f, 1e-3f);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +193,7 @@ TEST(BodyColliderTest, TwoWayDamping_WhenRising_ForceReducedButNotNegative) {
 
 TEST(BodyColliderTest, Inverted_180DegRoll_UpperCornersContact) {
     BodyCollider c;
-    c.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 0.f));
+    c.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
 
     // Roll 180° around body-X (forward axis): body-Z now points NED-up.
     // Aircraft center at alt = 0.1 m.
@@ -189,15 +202,9 @@ TEST(BodyColliderTest, Inverted_180DegRoll_UpperCornersContact) {
     const Eigen::Quaternionf q_inverted(
         Eigen::AngleAxisf(static_cast<float>(M_PI), Eigen::Vector3f::UnitX()));
 
-    const auto cf = c.step(makeSnap(0.1f, q_inverted));
+    // Sinking at 2 m/s (NED-down) so the penetrating upper corners are arrested.
+    const auto cf = c.step(makeSinkingSnap(0.1f, 2.f, q_inverted));
     EXPECT_TRUE(cf.weight_on_wheels);
-    // Force must be upward in body — but inverted means body-Z points up, so
-    // upward in world = positive body-Z in inverted aircraft.
-    // Actually: force in body frame = R_bn * F_NED. F_NED is upward = [0,0,-1] * F_n.
-    // For inverted R_nb: body-Z maps to NED-up, so R_bn.col(2) = [0,0,-1] in NED.
-    // R_bn * [0,0,-F_n] = R_nb^T * [0,0,-F_n].
-    // Inverted: R_nb = diag(1,-1,-1), so R_nb^T * [0,0,-F_n] = [0, 0, F_n].
-    // So force is in +body-Z (which is upward in world when inverted).
     EXPECT_GT(cf.force_body_n.norm(), 0.f);
 }
 
@@ -212,18 +219,14 @@ TEST(BodyColliderTest, Moment_ProducedWhenContactIsOffCenter) {
         {
             {"name",                 "test"},
             {"half_extents_body_m",  {0.5f, 0.3f, 0.2f}},
-            {"center_offset_body_m", {0.3f, 0.f, 0.f}},
-            {"stiffness_npm",        10000.f},
-            {"damping_nspm",         0.f}
+            {"center_offset_body_m", {0.3f, 0.f, 0.f}}
         }
     })}};
     BodyCollider c;
-    c.initialize(cfg);
+    c.initialize(cfg, 1000.f, 0.01f);
 
-    // Level aircraft, center offset moves all corners forward.
-    // Because box is shifted forward, all 8 corners have the same z penetration
-    // but they're offset in x → moment_body_nm.y() should be non-zero (pitching moment).
-    const auto cf = c.step(makeSnap(0.1f));
+    // Forward-shifted box, sinking: off-center contact → pitching moment.
+    const auto cf = c.step(makeSinkingSnap(0.1f, 2.f));
     EXPECT_GT(std::abs(cf.moment_body_nm.y()), 0.f)
         << "Forward-shifted box should produce a pitching moment";
 }
@@ -299,23 +302,20 @@ TEST(BodyColliderTest, MinCornerClearance_ZeroWhenJustTouching) {
 // ---------------------------------------------------------------------------
 
 TEST(BodyColliderTest, PenetrationCap_ForceIsBounded_UnderExtremeEmbedding) {
-    // pen_cap = 2 * hz = 2 * 0.2 = 0.4 m
-    // At alt = -10 m all 8 corners exceed the cap (pen ≈ 10 m each).
-    // At alt = -100 m all 8 corners also exceed the cap (pen ≈ 100 m each).
-    // With no damping and no velocity the force must be identical in both cases
-    // because the cap clamps all effective penetrations to 0.4 m.
-    // (Without the cap the forces would be 10× different.)
+    // Effective penetration is capped at 2*hz = 0.4 m, so two very different embed
+    // depths give the same force at the same sink rate (without the cap they would
+    // differ 10x).
     BodyCollider c_deep, c_extreme;
-    c_deep.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 0.f));
-    c_extreme.initialize(makeConfig(0.5f, 0.3f, 0.2f, 10000.f, 0.f));
+    c_deep.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
+    c_extreme.initialize(makeConfig(0.5f, 0.3f, 0.2f), 1000.f, 0.01f);
 
-    const auto cf_deep    = c_deep.step(makeSnap(-10.0f));
-    const auto cf_extreme = c_extreme.step(makeSnap(-100.0f));
+    const auto cf_deep    = c_deep.step(makeSinkingSnap(-10.0f, 2.f));
+    const auto cf_extreme = c_extreme.step(makeSinkingSnap(-100.0f, 2.f));
 
     const float F_deep    = -cf_deep.force_body_n.z();
     const float F_extreme = -cf_extreme.force_body_n.z();
     ASSERT_GT(F_deep, 0.f) << "Contact must be detected at 10 m depth";
-    EXPECT_NEAR(F_extreme, F_deep, 1.0f)
+    EXPECT_NEAR(F_extreme, F_deep, 1e-3f)
         << "Force must be equal at 10 m and 100 m depth — cap must clamp all corners";
 }
 
@@ -325,7 +325,7 @@ TEST(BodyColliderTest, PenetrationCap_ForceIsBounded_UnderExtremeEmbedding) {
 
 TEST(BodyColliderTest, JsonRoundTrip) {
     BodyCollider original;
-    original.initialize(makeConfig(0.4f, 0.25f, 0.15f, 8000.f, 400.f));
+    original.initialize(makeConfig(0.4f, 0.25f, 0.15f), 1000.f, 0.01f);
 
     const nlohmann::json j = original.serializeJson();
     ASSERT_EQ(j.at("schema_version").get<int>(), 1);
@@ -333,21 +333,21 @@ TEST(BodyColliderTest, JsonRoundTrip) {
 
     const auto& v0 = j.at("volumes").at(0);
     EXPECT_EQ(v0.at("name").get<std::string>(), "test");
-    EXPECT_FLOAT_EQ(v0.at("stiffness_npm").get<float>(), 8000.f);
-    EXPECT_FLOAT_EQ(v0.at("damping_nspm").get<float>(),  400.f);
 
     const auto& he = v0.at("half_extents_body_m");
     EXPECT_FLOAT_EQ(he.at(0).get<float>(), 0.4f);
     EXPECT_FLOAT_EQ(he.at(1).get<float>(), 0.25f);
     EXPECT_FLOAT_EQ(he.at(2).get<float>(), 0.15f);
 
-    // Deserialize into a fresh instance and verify behaviour is identical.
+    // Deserialize into a fresh instance and verify behaviour is identical (the
+    // derived arrest damping is serialized so the restored force matches).
     BodyCollider restored;
     restored.deserializeJson(j);
     FlatTerrain terrain{0.f};
-    const auto cf_orig    = original.step(makeSnap(0.05f), terrain);
-    const auto cf_restored = restored.step(makeSnap(0.05f), terrain);
+    const auto cf_orig     = original.step(makeSinkingSnap(0.05f, 2.f), terrain);
+    const auto cf_restored = restored.step(makeSinkingSnap(0.05f, 2.f), terrain);
     EXPECT_NEAR(cf_restored.force_body_n.z(), cf_orig.force_body_n.z(), 1e-3f);
+    EXPECT_LT(cf_orig.force_body_n.z(), 0.f);  // force is actually exercised
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +356,7 @@ TEST(BodyColliderTest, JsonRoundTrip) {
 
 TEST(BodyColliderTest, ProtoRoundTrip) {
     BodyCollider original;
-    original.initialize(makeConfig(0.4f, 0.25f, 0.15f, 8000.f, 400.f));
+    original.initialize(makeConfig(0.4f, 0.25f, 0.15f), 1000.f, 0.01f);
 
     const auto bytes = original.serializeProto();
 
@@ -364,9 +364,10 @@ TEST(BodyColliderTest, ProtoRoundTrip) {
     restored.deserializeProto(bytes);
 
     FlatTerrain terrain{0.f};
-    const auto cf_orig     = original.step(makeSnap(0.05f), terrain);
-    const auto cf_restored = restored.step(makeSnap(0.05f), terrain);
+    const auto cf_orig     = original.step(makeSinkingSnap(0.05f, 2.f), terrain);
+    const auto cf_restored = restored.step(makeSinkingSnap(0.05f, 2.f), terrain);
     EXPECT_NEAR(cf_restored.force_body_n.z(), cf_orig.force_body_n.z(), 1e-3f);
+    EXPECT_LT(cf_orig.force_body_n.z(), 0.f);
 }
 
 // ---------------------------------------------------------------------------

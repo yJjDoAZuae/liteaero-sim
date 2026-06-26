@@ -585,9 +585,7 @@ static nlohmann::json addBodyCollider(nlohmann::json config) {
         {
             {"name",                 "fuselage"},
             {"half_extents_body_m",  {1.0f, 0.5f, 0.3f}},
-            {"center_offset_body_m", {0.0f, 0.0f, 0.0f}},
-            {"stiffness_npm",        50000.0f},
-            {"damping_nspm",          2000.0f}
+            {"center_offset_body_m", {0.0f, 0.0f, 0.0f}}
         }
     })}};
     return config;
@@ -677,9 +675,7 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
             "volumes": [{
                 "name": "fuselage",
                 "half_extents_body_m":  [1.0, 1.0, 0.5],
-                "center_offset_body_m": [0.0, 0.0, 0.0],
-                "stiffness_npm": 100.0,
-                "damping_nspm":   10.0
+                "center_offset_body_m": [0.0, 0.0, 0.0]
             }]
         },
         "initial_state": {
