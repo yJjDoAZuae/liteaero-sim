@@ -1,0 +1,21 @@
+# Pre-commit hooks for clean commits.
+#
+# One-time setup per clone (the hook is config-only until installed):
+#     uv tool install pre-commit      # or: pipx install pre-commit
+#     pre-commit install              # run from the repo root (liteaero-sim)
+#
+# Thereafter `git commit` strips notebook outputs and kernel metadata automatically.
+# To strip every notebook now:  pre-commit run --all-files
+# Docs: https://pre-commit.com  •  https://github.com/kynan/nbstripout
+repos:
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+        name: strip notebook outputs & normalize kernel metadata
+        # Default behavior already clears every cell's `outputs` and nulls `execution_count`.
+        # --extra-keys additionally strips the volatile kernel metadata (`kernelspec` and
+        # `language_info`) so notebooks don't churn the diff with per-machine kernel / Python
+        # patch-version info. (Drop `metadata.kernelspec` from the list if you want notebooks to
+        # keep declaring their kernel.)
+        args: ["--extra-keys", "metadata.kernelspec metadata.language_info"]
