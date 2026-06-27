@@ -164,13 +164,14 @@ the shared contact path described in [aircraft.md](aircraft.md) step 10.
 
 ### 5. Proposed Improvements (Not Yet Implemented)
 
-> **Status: decided, not yet implemented.** Nothing in §5 is implemented, but the design is now fully
-> **decided** — OQ-BC-1…5 are all resolved (see the resolution notes), so no open questions remain.
-> These are the improvements requested for the body collider, informed by the landing-gear model: make
-> the contact *inelastic* (its purpose is to arrest penetration like a crash, not to rebound like
-> rubber), and — as a nice-to-have — give it gear-style rotational reactions. Implementation is tracked
-> in [body_collider_dynamics.md](../implementation/body_collider_dynamics.md) and requires explicit
-> instruction.
+> **Status (mixed).** §5a (velocity-arrest normal contact), §5b (restitution-consistent constraint),
+> and §5d (Coulomb + viscous scrape friction) are **implemented and tested** (OQ-BC-1/2/4/5 resolved).
+> §5c (the dedicated rotational channel) is **fully decided but not yet implemented** — all of
+> OQ-BC-3/6/7 are resolved: separate, attributed gear and body-collider moment **and** force channels
+> (parallel filters in `Aircraft`), behavior-preserving by the $H_2$/`LP`/$G(s)$ linearity invariant,
+> with the regression protection specified below. The rotational reaction itself already functions today
+> via the shared gear $\Delta\theta$ block (see §5c). Implementation is tracked in
+> [body_collider_dynamics.md](../implementation/body_collider_dynamics.md).
 
 **§5a — Inelastic normal contact: dissipation-dominated velocity-arrest (decided, OQ-BC-1 →
 Alternative 3).** Replace the elastic Kelvin–Voigt penalty with a purely **dissipative** normal force
@@ -310,18 +311,71 @@ limit cycles, and the constraint's velocity correction is a discrete analogue; t
 requirement (Test Strategy `Aircraft_BodyCollider_NoRelaunch`) is that the restitution-consistent
 projection does not excite the kinematic attitude.
 
-**§5c — Gear-style rotational reaction $\Delta\theta$ (decided nice-to-have, OQ-BC-3 → Alternative
-1).** A **dedicated** body-collider rotation-deviation state, driven by the collision **contact
-moment** through the same bounded second-order pattern the gear uses ([landing_gear.md
-§2a](landing_gear.md), properties P1–P4): a stable low-pass on $M^W/I$ that produces a body
-pitch/bank deviation $\Delta\theta$ feeding the kinematic attitude, decays to zero when the contact
-unloads (P1), holds a bounded steady deflection under sustained load (P2), adds no instantaneous body
-angular-velocity step at contact (P3), and is driven only by contact-derived quantities (P4). It is
-summed into the attitude **separately** from the gear's $\Delta\theta$ so the two contributions stay
-independently inspectable. A wing-low or tail-first ground strike then pitches/rolls the airframe
-*about* the contact realistically instead of the raw moment whipping the zero-inertia attitude. This
-makes the collider **stateful** (currently stateless), adding a serialized per-axis filter state
-(see Serialization). Depends on §5a/§5b being in place first; not yet implemented.
+**§5c — Gear-style rotational reaction $\Delta\theta$ (decided nice-to-have, OQ-BC-3/6/7 resolved; not
+yet implemented).** The goal is a rotational reaction to a body strike (a wing-low
+or tail-first contact pitches/rolls the airframe *about* the contact, via the §2a low-pass on $M/I$
+with properties P1–P4), with the gear and body-collider contributions **independently attributable**.
+
+*As-built today (the starting point).* The `Aircraft::step` rotation-deviation block
+([landing_gear.md §2a](landing_gear.md)) is **ungated** and driven by the **combined** contact force
+and moment (`contact_forces.force_body_n` / `.moment_body_nm`), which already include the body
+collider's contributions (summed at step 5a). So a gear-up belly or wing strike **already produces a
+rotational reaction** — the collider's moment flows through the same $H_2$ filters as the gear's and
+decays to zero when unloaded (P1). Functionally this is the *shared* channel (OQ-BC-3 Alternative 2);
+what is missing is **attribution** — the two sources are summed before the filter and cannot be
+inspected separately.
+
+*Proposed design (Alternative 1 — separated moment **and** force channels).* Keep the gear and collider
+contact reactions **separate** for the rotation-deviation channels while still summing them for the EOM.
+Both the **moment channels** (the $H_2$ low-pass on $M/I$ per axis) and the pitch **force channel** (the
+$G(s)$ on the destanced vertical load) are duplicated per source — gear-driven and collider-driven — and
+summed into the attitude exactly as the single combined channels are today. Each pair shares its
+parameters: the airframe rotational-mode $\omega_n,\zeta$ for the moment filters, and the same stance
+$\tau$ and $G(s)$ coefficients for the force channel.
+
+*Why this is safe (the key invariant).* Every operator in both channels is **linear** in the contact
+load — the $H_2$ moment filters, and for the force channel the stance low-pass, the $a_\text{arrest}$
+difference, the $\cos\gamma/V$ and $\Phi(V)$ scalings (common aircraft-state factors, not per-source),
+and the $G(s)$ realization. Linear operators superpose, so with matched parameters
+$$L(\text{gear}) + L(\text{bc}) = L(\text{gear}+\text{bc})$$
+for **both** channels — e.g. $H_2(M_\text{gear}/I)+H_2(M_\text{bc}/I)=H_2\!\big((M_\text{gear}+M_\text{bc})/I\big)$
+for the moment, and $\operatorname{LP}(f_\text{gear})+\operatorname{LP}(f_\text{bc})=\operatorname{LP}(f_\text{gear}+f_\text{bc})$
+for the stance destancing. The sum of the two separated channels is therefore **mathematically
+identical** to today's single combined channel — exact modulo float rounding and any filter **clip
+saturation** (the filters are `FilterSS2Clip`; if a clip engages, the split can differ, which the
+equivalence test below detects directly). The separation only re-buckets the same total into two
+inspectable parts.
+
+*$\omega_n,\zeta$ source.* The rotation filter's natural frequency and damping are a property of the
+**airframe rotational mode**, not of which force produced the moment, so the collider channel reuses
+the gear's parameters: $\omega_n=$ `dtheta_wn_{axis}_ratio`$\times(g/V_\text{stall})$, $\zeta=$
+`dtheta_zeta_nd` (config ratios scaled by the flight-path frequency, in `Aircraft::initialize`). The
+inertia tensor enters only as the $M/I$ forcing. *(The earlier "$\omega_n,\zeta$ from the inertia
+tensor" phrasing was imprecise — inertia alone cannot set a frequency.)* Reusing the gear's parameters
+adds **no body-collider config** (consistent with OQ-BC-5) and is exactly what makes the linearity
+equivalence hold.
+
+*Decided mechanics (OQ-BC-6/7 → Alternative 2 + Alternative 2).* The collider's rotation filters live
+as a **parallel set in `Aircraft`** — `_bc_dtheta_{pitch,roll,yaw}_filter` plus a collider
+force-channel $G(s)$/stance state, mirroring the gear's — keeping the attitude machinery in one place
+and reusing the proven filter/serialization patterns (OQ-BC-6 → Alt 2). **Both** channels are
+attributed: the collider gets its own force channel as well as its own moment channels (OQ-BC-7 →
+Alt 2). *(Correction: an earlier draft claimed the force channel "does not separate by linearity"
+because of the stance destancing — that was wrong. The stance low-pass is linear and superposes, so the
+force-channel separation is behavior-preserving exactly like the moment channels, per the invariant
+above.)*
+
+*Regression protection.* (1) **Characterize first** — the existing gear $\Delta\theta$ tests
+(`LandingGear_DthetaState_NonzeroAfterContact`, `LandingGear_ForceChannel_DecaysAfterTransient`,
+`LandingGear_GearContact_DoesNotAccelerate`, …) capture current behavior and must stay green.
+(2) **Equivalence test** — assert the separated-channel sum (moment **and** force) equals the
+pre-refactor combined $\Delta\theta$ to float tolerance on a belly-strike snapshot; by the linearity
+invariant this holds exactly except where a `FilterSS2Clip` saturates, which this test flags directly.
+(3) **Golden trajectory** — a body-collider belly-landing scenario run before and after the refactor,
+with attitude and trajectory unchanged within tolerance. Because **both** channels separate linearly,
+the entire §5c refactor is **provably non-breaking** in the unclipped regime, and the equivalence test
+is the explicit guard for the clip regime. Depends on §5a/§5b (in place); OQ-BC-6/7 resolved. Not yet
+implemented.
 
 **§5d — Tangential scrape friction (decided, OQ-BC-4 → Alternative 1 + viscous term).** Penetrating
 corners get a tangential force combining regularized Coulomb friction with a velocity-proportional
@@ -481,6 +535,33 @@ All open questions are resolved (resolution notes below).
 | --- | --- | --- |
 | _(none open)_ | — | — |
 
+### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
+
+**Resolution (Alternative 2 — parallel filter set in `Aircraft`).** The body-collider rotation filters
+live in `Aircraft` as a parallel set mirroring the gear's — `_bc_dtheta_{pitch,roll,yaw}_filter`
+(`FilterSS2Clip` per axis) plus a collider force-channel $G(s)$/stance state — reusing the gear's
+$\omega_n,\zeta$ (config ratios $\times g/V_\text{stall}$, `dtheta_zeta_nd`) and serialization patterns,
+and driven by the **body-collider** contact moment/force separated from the gear's at step 5a.
+**Rationale (user):** keep the delicate attitude integration in one place and reuse the validated gear
+machinery; the collider's contribution is still a separate, attributable term. **Consequence:** the
+body collider itself stays stateless (its rotational state lives in `Aircraft`), a deliberate departure
+from the OQ-BC-3 "self-contained" wording, accepted for the lower refactor risk. Not yet implemented.
+
+### OQ-BC-7 — §5c Force / Descent-Arrest Channel Attribution *(Resolved)*
+
+**Resolution (Alternative 2 — the collider gets its own force channel; behavior-preserving).** Both
+rotation channels are attributed per source: the collider gets its own force channel (a second
+$G(s)$ + stance filter on the **collider** vertical load) alongside its own moment channels, and the
+gear channels are driven by the **gear** load/moment only. **Correction:** the OQ-BC-7 problem statement
+originally asserted the force channel "does not separate by linearity" because the stance destancing
+couples the sources — **that was wrong.** The stance low-pass is linear and superposes
+($\operatorname{LP}(f_\text{gear})+\operatorname{LP}(f_\text{bc})=\operatorname{LP}(f_\text{gear}+f_\text{bc})$),
+and the remaining force-channel operators ($a_\text{arrest}$, the $\cos\gamma/V$ and $\Phi(V)$
+aircraft-state scalings, and $G(s)$) are linear or common-factor, so the separated force channels sum
+**exactly** to the combined one — behavior-preserving like the moment channels, modulo float rounding
+and `FilterSS2Clip` saturation (which the §5c equivalence test guards). **Rationale (user):** full
+attribution of both channels, now established to carry no behavior penalty. Not yet implemented.
+
 ### OQ-BC-5 — §5a Velocity-Arrest Coefficient Parameterization *(Resolved)*
 
 **Resolution (single non-dimensional user knob — coefficient of restitution $e$ alone).** The body
@@ -538,16 +619,23 @@ requires extending `applyTerrainHardConstraint` to carry a restitution coefficie
 
 ### OQ-BC-3 — Gear-Style Rotational Reaction $\Delta\theta$ *(Resolved)*
 
-**Resolution (Alternative 1 — dedicated body-collider $\Delta\theta$ channel).** The body collider
-gains its own rotation-deviation state driven by the collision contact moment through the §2a
-low-pass $H_2$ on $M^W/I$ (properties P1–P4), summed into the kinematic attitude **separately** from
-the gear's $\Delta\theta$ so the gear and body-strike contributions stay independently inspectable.
-**Rationale (user):** keep the collider a self-contained subsystem with attributable dynamics.
-**Consequences:** the collider becomes **stateful** — it acquires a serialized per-axis filter state
-(the Serialized State table and the proto message are to be extended when implemented), `reset()`
-clears it, and the §2a filter parameterization (per-axis $\omega_n,\zeta$ from the inertia tensor) is
-configured at `initialize`. This is the labeled nice-to-have; it depends on §5a/§5b (a
-well-behaved contact force/moment to drive the channel) and is not yet begun.
+**Resolution (Alternative 1 — dedicated, *attributed* body-collider $\Delta\theta$ channel).** The
+gear and body-collider rotational contributions are separated so each is independently inspectable,
+driven by their own contact moment through the §2a low-pass $H_2$ on $M/I$ (properties P1–P4) and
+summed into the kinematic attitude. **Rationale (user):** establish the formality of a self-contained,
+attributable rotational source rather than the shared sum. **Design status (refined after
+implementation review):** the body-collider force/moment **already** flow through the *shared*,
+ungated gear $\Delta\theta$ block today, so the rotational reaction already functions (the OQ-BC-3
+Alternative 2 form) — Alternative 1 separates **both** the moment **and** force channels for
+attribution, which is behavior-preserving by the **linearity** of the $H_2$ moment filters, the stance
+low-pass, and the $G(s)$ force channel (all share the same airframe rotational-mode $\omega_n,\zeta$ —
+config ratios `dtheta_*_ratio`$\times(g/V_\text{stall})$ and `dtheta_zeta_nd`; the inertia tensor
+enters only as the $M/I$ forcing — the earlier "$\omega_n,\zeta$ from the inertia tensor" phrasing was
+imprecise). The supporting mechanics are resolved: filters live as a **parallel set in `Aircraft`**
+(**OQ-BC-6** → Alt 2) and **both** channels are attributed (**OQ-BC-7** → Alt 2; the earlier claim that
+the force channel "does not separate by linearity" was wrong — the stance low-pass superposes). The
+full design and the regression-protection strategy are in §5c. This is the labeled nice-to-have; it
+depends on §5a/§5b (in place) and is not yet begun.
 
 ### OQ-BC-4 — Tangential Scrape Friction *(Resolved)*
 
@@ -588,7 +676,9 @@ contact/friction exemption to the smooth-dynamics standard. Implementation depen
 | --- | --- | --- |
 | `Aircraft_BodyCollider_HardConstraintReleasesLatch` | Penetrate then separate by > 0.05 m | `_body_in_hard_contact` clears on genuine separation |
 | `Aircraft_BodyCollider_NoRelaunch` *(§5b — decided, not yet implemented)* | Gear-up touchdown on the collider | Restitution-consistent hard constraint arrests vertical velocity without rebound above $e_\text{config}$; kinematic attitude not excited |
-| `Aircraft_BodyCollider_WingStrikeRotates` *(§5c — decided, not yet implemented)* | Wing-low contact | Body rolls toward level via the collider's dedicated $\Delta\theta$; deviation decays to zero after separation (P1) |
+| `Aircraft_BodyCollider_WingStrikeRotates` *(§5c — not yet implemented)* | Wing-low contact | Body rolls toward level via the collider's dedicated $\Delta\theta$; deviation decays to zero after separation (P1) |
+| `Aircraft_BodyCollider_DthetaSeparation_EqualsCombined` *(§5c regression — not yet implemented)* | Belly-strike snapshot, gear + collider both loaded | Sum of the separated gear + collider **moment and force** channel $\Delta\theta$ equals the pre-refactor combined $\Delta\theta$ to float tolerance (the linearity invariant; flags any `FilterSS2Clip` saturation) |
+| `Aircraft_BodyCollider_BellyLanding_GoldenTrajectory` *(§5c regression — not yet implemented)* | Belly-landing scenario, before vs after the §5c refactor | Attitude and trajectory unchanged within tolerance; all existing gear $\Delta\theta$ tests stay green |
 
 ### Scenario Tests
 
