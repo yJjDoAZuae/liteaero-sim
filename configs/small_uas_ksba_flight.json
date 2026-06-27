@@ -174,9 +174,7 @@
                     0.0,
                     0.0,
                     0.04
-                ],
-                "stiffness_npm": 8000.0,
-                "damping_nspm": 400.0
+                ]
             },
             {
                 "name": "wing",
@@ -189,9 +187,7 @@
                     0.05,
                     0.0,
                     0.02
-                ],
-                "stiffness_npm": 6000.0,
-                "damping_nspm": 346.0
+                ]
             },
             {
                 "name": "horizontal_tail",
@@ -204,9 +200,7 @@
                     -0.5,
                     0.0,
                     0.01
-                ],
-                "stiffness_npm": 4000.0,
-                "damping_nspm": 283.0
+                ]
             }
         ]
     },
