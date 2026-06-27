@@ -1031,6 +1031,58 @@ TEST(AircraftTest, JsonSerialization_ContainsGearFilterStateKeys) {
         << "serializeJson() must include prev_dtheta_roll state";
 }
 
+TEST(AircraftTest, BodyColliderImpact_RotationState_RoundTrips) {
+    // §5c (OQ-BC-6/7): a body-collider belly impact drives the dedicated collider
+    // rotation channel (its force/stance state), which must serialize and round-trip
+    // through both JSON and proto so a restored aircraft continues identically.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addBodyCollider(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 5.0;
+    cfg["initial_state"]["velocity_north_mps"] = 0.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+
+    auto ac1 = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac1->initialize(cfg, 0.02f);
+    ac1->setTerrain(&terrain);
+    ac1->reset();
+
+    const liteaero::simulation::AircraftCommand cmd;
+    constexpr float kDt = 0.02f;
+    // Fall to impact and a few steps past it so the collider force channel is loaded.
+    for (int i = 1; i <= 60; ++i)
+        ac1->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+
+    // The collider force-channel state must be non-zero (the channel was exercised).
+    const nlohmann::json j = ac1->serializeJson();
+    ASSERT_TRUE(j.contains("bc_force_x"));
+    ASSERT_TRUE(j.contains("bc_fz_stance_filter"));
+    ASSERT_TRUE(j.contains("bc_dtheta_pitch_filter"));
+    const float bc_fx0 = j.at("bc_force_x").at(0).get<float>();
+    const float bc_fx1 = j.at("bc_force_x").at(1).get<float>();
+    EXPECT_GT(std::abs(bc_fx0) + std::abs(bc_fx1), 0.f)
+        << "collider force-channel state must be non-zero after impact";
+
+    // The §5c collider rotation state must survive both JSON and proto round-trips:
+    // deserialize, re-serialize, and the collider channel state must be unchanged.
+    liteaero::simulation::Aircraft ac_json(std::make_unique<StubPropulsion>(0.0f));
+    ac_json.deserializeJson(j);
+    const nlohmann::json jj = ac_json.serializeJson();
+    EXPECT_EQ(jj.at("bc_force_x"),          j.at("bc_force_x"));
+    EXPECT_EQ(jj.at("bc_fz_stance_filter"), j.at("bc_fz_stance_filter"));
+    EXPECT_EQ(jj.at("bc_dtheta_pitch_filter"), j.at("bc_dtheta_pitch_filter"));
+    EXPECT_EQ(jj.at("bc_dtheta_roll_filter"),  j.at("bc_dtheta_roll_filter"));
+    EXPECT_EQ(jj.at("bc_dtheta_yaw_filter"),   j.at("bc_dtheta_yaw_filter"));
+
+    liteaero::simulation::Aircraft ac_proto(std::make_unique<StubPropulsion>(0.0f));
+    ac_proto.deserializeProto(ac1->serializeProto());
+    const nlohmann::json jp = ac_proto.serializeJson();
+    EXPECT_NEAR(jp.at("bc_force_x").at(0).get<float>(), bc_fx0, 1e-6f);
+    EXPECT_NEAR(jp.at("bc_force_x").at(1).get<float>(), bc_fx1, 1e-6f);
+}
+
 TEST(AircraftTest, LandingGear_DthetaState_NonzeroAfterContact) {
     // The Δθ force channel (G(s) on the destanced/faded gear vertical load) and the
     // moment channel (H₂ on M/I) are both driven during gear contact. After a few

@@ -32,13 +32,8 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-5 | done | Replace the Kelvin–Voigt penalty in `BodyCollider::step` with the velocity-arrest force $F=\max(0,\,c\,\delta\dot\delta)$, $c=$ `_b_corner_nspm`$/h_z$ (no spring); BodyCollider tests migrated to the velocity-arrest semantics (no static force, scales with $\delta\dot\delta$, no suction, mass-scaling) | IP-BC-2, IP-BC-3, IP-BC-4 | [body_collider.md §5a](../design/body_collider.md) |
 | IP-BC-6 | done | Add collider-level `friction_coulomb_nd` ($\mu$) and `friction_viscous_nd` ($k_\text{visc}$) to `BodyColliderParams` JSON + proto + parse/serialize (default 0 → frictionless). Viscous coefficient derived as $k_\text{visc}\cdot$`b_corner` (mass-scaled, OQ-BC-5) | — | [body_collider.md §5d](../design/body_collider.md) |
 | IP-BC-7 | done | Apply the tangential force $-\mu F_\text{pen}\hat{\mathbf v}_{t,\text{reg}} - k_\text{visc} b_\text{corner}\mathbf v_t$ at penetrating corners in `BodyCollider::step`, Coulomb direction regularized by `kSlipRegMps` | IP-BC-5, IP-BC-6 | [body_collider.md §5d](../design/body_collider.md) |
-| IP-BC-8 | todo | Add a parallel body-collider rotation-filter set in `Aircraft` (OQ-BC-6 → Alt 2): `_bc_dtheta_{pitch,roll,yaw}_filter` (`FilterSS2Clip` per axis) + a collider force-channel $G(s)$/stance state, serialized and `reset`-cleared, reusing the gear's $\omega_n,\zeta$ (config ratios $\times g/V_\text{stall}$, `dtheta_zeta_nd`) and stance $\tau$/$G(s)$ coefficients | — | [body_collider.md §5c, OQ-BC-6](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md) |
-| IP-BC-9 | blocked (IP-BC-8) | Separate the gear and body-collider contact force/moment at step 5a and drive their $\Delta\theta$ **moment and force** channels independently (OQ-BC-7 → Alt 2), summed into the attitude. **Characterize first** (existing gear $\Delta\theta$ tests stay green), then the equivalence test (separated sum == pre-refactor combined $\Delta\theta$ to float tolerance — the linearity invariant) and a belly-landing golden trajectory unchanged | IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
-
-> **IP-BC-9 blocked reason:** depends on the IP-BC-8 parallel filter state. The separation itself is
-> behavior-preserving by the linearity of the $H_2$ moment filters, the stance low-pass, and the $G(s)$
-> force channel (all sharing the gear's parameters) — the equivalence test is the guard, and the only
-> deviation would be `FilterSS2Clip` saturation.
+| IP-BC-8 | done | Added the parallel body-collider rotation-filter set in `Aircraft` (OQ-BC-6 → Alt 2): `_bc_dtheta_{pitch,roll,yaw}_filter` + collider force-channel `_bc_force_x`/`_bc_fz_stance_filter`, configured identically to the gear set, reset-cleared, and serialized (JSON + 10 new proto fields) | — | [body_collider.md §5c, OQ-BC-6](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md) |
+| IP-BC-9 | done | Separated gear/collider force+moment at step 5a; the §5c Δθ block now sums per-source channels (force via a `forceChannel` lambda, moment per axis), behavior-preserving by linearity. Regression net: all existing gear-only and bc-only tests pass unchanged; `BodyColliderImpact_RotationState_RoundTrips` verifies the new collider rotation state round-trips through JSON + proto | IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
 
 ---
 
@@ -72,7 +67,12 @@ tests.)
 - **JSON config dead-key strip.** `stiffness_npm`/`damping_nspm` are now ignored on load, but they
   still appear in `configs/*.json`, `test/data/aircraft/*.json`, `python/assets/aircraft_configs/*.json`,
   and `python/tools/gen_test_assets.py`. Strip them (rule 7) — non-breaking.
-- **Design-doc as-built reconciliation.** §5a/§5b are now implemented, so [body_collider.md](../design/body_collider.md)
+- **Pre-existing gap discovered (not §5c).** `Aircraft::_body_in_hard_contact` (the body-contact
+  weight-on-wheels latch, set in `Aircraft::step`) is **not serialized** (JSON or proto), so a
+  belly-settled aircraft loses the latch on round-trip and re-saturates α on the next step. Surfaced by
+  the §5c serialization test (which was refocused to test only the collider rotation state). A 2-line
+  fix (serialize the bool in JSON + a proto bool field); separate task, needs explicit instruction.
+- **Design-doc as-built reconciliation.** §5a/§5b/§5d are now implemented, so [body_collider.md](../design/body_collider.md)
   needs a `/design update`: the §2 "current Kelvin–Voigt model" section, the Class Hierarchy, Interface,
   Serialization, and proto blocks describe the pre-§5a code and must be refreshed; §5a/§5b move from
   "decided, not yet implemented" to as-built.

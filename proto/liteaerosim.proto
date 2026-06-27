@@ -262,6 +262,17 @@ message AircraftState {
     float          stall_speed_mps         = 58;
     float          settle_axbar            = 59;  // low-pass state of ā_x
     float          prev_aero_drag_n        = 60;
+    // §5c body-collider rotation-deviation filter states (OQ-BC-6 parallel set).
+    float          bc_dtheta_pitch_filter_x0 = 61;
+    float          bc_dtheta_pitch_filter_x1 = 62;
+    float          bc_dtheta_roll_filter_x0  = 63;
+    float          bc_dtheta_roll_filter_x1  = 64;
+    float          bc_dtheta_yaw_filter_x0   = 65;
+    float          bc_dtheta_yaw_filter_x1   = 66;
+    float          bc_fz_stance_filter_x0    = 67;
+    float          bc_fz_stance_filter_x1    = 68;
+    float          bc_force_x0               = 69;
+    float          bc_force_x1               = 70;
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

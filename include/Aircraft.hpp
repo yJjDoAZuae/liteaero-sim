@@ -143,6 +143,17 @@ private:
     // Destancing low-pass for the gear vertical load (removes the steady gravity-balancing
     // support so the force channel is zero in steady roll). General 1st-order LP. OQ-LG-19.
     liteaero::control::FilterSS2Clip _fz_stance_filter;
+    // §5c body-collider rotation-deviation channels (body_collider.md §5c, OQ-BC-6 → parallel set
+    // in Aircraft). Identical to the gear channels above (same ωn/ζ, stance τ, G(s)) but driven by
+    // the BODY-COLLIDER contact moment/force only; the gear channels are driven by the gear only,
+    // and the two are summed. By the linearity of the filters this is exactly equivalent to the
+    // former single combined channel (the §5c equivalence invariant). The collider force-channel
+    // reuses the gear's _force_phi/gamma/h/j coefficients with its own 2-state _bc_force_x.
+    liteaero::control::FilterSS2Clip _bc_dtheta_pitch_filter;
+    liteaero::control::FilterSS2Clip _bc_dtheta_roll_filter;
+    liteaero::control::FilterSS2Clip _bc_dtheta_yaw_filter;
+    liteaero::control::FilterSS2Clip _bc_fz_stance_filter;
+    liteaero::control::Mat21         _bc_force_x = liteaero::control::Mat21::Zero();
     float  _prev_dtheta_roll      = 0.f;  // Δθ_roll from previous step (for rate computation)
     float  _prev_dtheta_yaw       = 0.f;  // Δθ_yaw from previous step (for rate computation)
     // H₂ physical rotational-mode frequencies/damping (config; OQ-LG-17 numeric values set at

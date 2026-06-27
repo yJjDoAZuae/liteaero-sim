@@ -222,6 +222,18 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
         liteaero::control::tf2ss(num_z, den_z, _force_phi, _force_gamma, _force_h, _force_j);
         _force_x.setZero();
     }
+    // §5c body-collider rotation-deviation channels: identical configuration to the gear channels
+    // above (same ωn/ζ, stance τ, and G(s) coefficients reused via _bc_force_x), driven by the
+    // body-collider contact reaction only (OQ-BC-6 → parallel set in Aircraft).
+    _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_pitch_filter.resetToInput(0.f);
+    _bc_dtheta_roll_filter .resetToInput(0.f);
+    _bc_dtheta_yaw_filter  .resetToInput(0.f);
+    _bc_fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
+    _bc_fz_stance_filter.resetToInput(0.f);
+    _bc_force_x.setZero();
 
     // 5. Load factor allocator (references _liftCurve — must be emplaced after step 3)
     const auto& lfa_sec = config.at("load_factor_allocator");
@@ -308,6 +320,11 @@ void Aircraft::reset() {
     _dtheta_yaw_filter  .resetToInput(0.f);
     _fz_stance_filter   .resetToInput(0.f);
     _force_x.setZero();
+    _bc_dtheta_pitch_filter.resetToInput(0.f);
+    _bc_dtheta_roll_filter .resetToInput(0.f);
+    _bc_dtheta_yaw_filter  .resetToInput(0.f);
+    _bc_fz_stance_filter   .resetToInput(0.f);
+    _bc_force_x.setZero();
     _prev_dtheta_roll  = 0.f;
     _prev_dtheta_yaw   = 0.f;
     _v_filt_ned.setZero();
@@ -384,8 +401,17 @@ void Aircraft::step(double time_sec,
             0.0f,    // brake right demand
             _outer_dt_s);
     }
+    // §5c (OQ-BC-6/7): capture the gear-only and body-collider contact reactions separately so the
+    // rotation-deviation channels can be attributed per source. The EOM below uses the combined
+    // contact_forces; only the §5c Δθ channels read these split components.
+    const Eigen::Vector3f gear_force_body  = contact_forces.force_body_n;
+    const Eigen::Vector3f gear_moment_body = contact_forces.moment_body_nm;
+    Eigen::Vector3f bc_force_body  = Eigen::Vector3f::Zero();
+    Eigen::Vector3f bc_moment_body = Eigen::Vector3f::Zero();
     if (_has_body_collider && _terrain != nullptr) {
         const auto bc = _body_collider.step(_state.snapshot(), *_terrain);
+        bc_force_body  = bc.force_body_n;
+        bc_moment_body = bc.moment_body_nm;
         contact_forces.force_body_n   += bc.force_body_n;
         contact_forces.moment_body_nm += bc.moment_body_nm;
         contact_forces.weight_on_wheels |= bc.weight_on_wheels;
@@ -478,46 +504,57 @@ void Aircraft::step(double time_sec,
     float delta_rr_filt_rps  = 0.f;
     float delta_ay_filt_mps2 = 0.f;
     {
-        // --- Force channel (pitch): destanced gear vertical load → faded FPA rate → G(s). ---
-        // Gear contribution to NED-down acceleration (gear up → negative).
-        const float fz_ned    = (R_nb_mat * contact_forces.force_body_n).z();
-        const float fz_stance = _fz_stance_filter.step(fz_ned);      // steady support estimate
-        const float a_arrest  = (fz_ned - fz_stance) / _inertia.mass_kg;  // arrest transient only
-
+        // Common aircraft-state factors for the force channel — shared by the gear and body-collider
+        // sub-channels (so their separate force channels sum to the combined one by linearity, §5c).
         const Eigen::Vector3f& vel_ned = _state.velocity_NED_mps();
         const float v_horiz = vel_ned.head<2>().norm();
         const float V_inertial = vel_ned.norm();
         const float V_safe = std::max(V_inertial, 1.0f);
         const float gamma  = std::atan2(-vel_ned.z(), std::max(v_horiz, 1e-3f));
-        const float gamma_dot_arrest = -a_arrest * std::cos(gamma) / V_safe;
-
-        // C² dynamic-pressure authority fade Φ(V) (OQ-LG-19, upgraded to the OQ-LG-21
-        // smootherstep so both fades share one C² factor): removes the 1/V singularity by
+        const float cos_gamma = std::cos(gamma);
+        // C² dynamic-pressure authority fade Φ(V) (OQ-LG-19/21): removes the 1/V singularity by
         // emulating aero/FBW authority decay on rollout/takeoff.
         const float phi = phiAuthority(V_inertial, _dtheta_vref_mps);
-        const float u_force = gamma_dot_arrest * phi;
 
-        // G(s) inline two-state update: y = h·x + j·u; x = phi·x + gamma·u.
-        const float dtheta_force = (_force_h * _force_x)(0, 0) + _force_j(0, 0) * u_force;
-        _force_x = _force_phi * _force_x + _force_gamma * u_force;
+        // --- Force channel (pitch), §5c per source (OQ-BC-7 → Alt 2): destanced vertical load →
+        //     faded FPA rate → G(s). The gear and body-collider channels share the same stance τ and
+        //     G(s) coefficients, so by linearity their sum equals the former combined channel. ---
+        auto forceChannel = [&](const Eigen::Vector3f& src_force_body,
+                                liteaero::control::FilterSS2Clip& stance,
+                                liteaero::control::Mat21& fx) -> float {
+            const float fz_ned    = (R_nb_mat * src_force_body).z();
+            const float fz_stance = stance.step(fz_ned);
+            const float a_arrest  = (fz_ned - fz_stance) / _inertia.mass_kg;
+            const float u_force   = (-a_arrest * cos_gamma / V_safe) * phi;
+            const float y = (_force_h * fx)(0, 0) + _force_j(0, 0) * u_force;  // y = h·x + j·u
+            fx = _force_phi * fx + _force_gamma * u_force;                     // x = phi·x + gamma·u
+            return y;
+        };
+        const float dtheta_force =
+            forceChannel(gear_force_body, _fz_stance_filter,    _force_x)
+          + forceChannel(bc_force_body,   _bc_fz_stance_filter, _bc_force_x);
 
-        // --- Moment channels: H₂ low-pass on M/I, scaled by 1/ωn² (static deflection = M/(I ωn²)). ---
-        const Eigen::Vector3f& M_body = contact_forces.moment_body_nm;
+        // --- Moment channels (pitch/roll/yaw), §5c per source: H₂ low-pass on M/I, scaled by 1/ωn².
+        //     Gear and body-collider filters share ωn/ζ, so the per-axis sum equals the former
+        //     combined channel by linearity. ---
         const float inv_wn2_pitch = 1.0f / (_dtheta_wn_pitch_rad_s * _dtheta_wn_pitch_rad_s);
         const float inv_wn2_roll  = 1.0f / (_dtheta_wn_roll_rad_s  * _dtheta_wn_roll_rad_s);
         const float inv_wn2_yaw   = 1.0f / (_dtheta_wn_yaw_rad_s   * _dtheta_wn_yaw_rad_s);
         const float dtheta_moment_pitch =
-            _dtheta_pitch_filter.step(M_body.y() / _inertia.Iyy_kgm2) * inv_wn2_pitch;
+            (_dtheta_pitch_filter   .step(gear_moment_body.y() / _inertia.Iyy_kgm2)
+           + _bc_dtheta_pitch_filter.step(bc_moment_body.y()   / _inertia.Iyy_kgm2)) * inv_wn2_pitch;
         const float dtheta_roll =
-            _dtheta_roll_filter.step(M_body.x() / _inertia.Ixx_kgm2) * inv_wn2_roll;
+            (_dtheta_roll_filter   .step(gear_moment_body.x() / _inertia.Ixx_kgm2)
+           + _bc_dtheta_roll_filter.step(bc_moment_body.x()   / _inertia.Ixx_kgm2)) * inv_wn2_roll;
         const float dtheta_yaw =
-            _dtheta_yaw_filter.step(M_body.z() / _inertia.Izz_kgm2) * inv_wn2_yaw;
+            (_dtheta_yaw_filter   .step(gear_moment_body.z() / _inertia.Izz_kgm2)
+           + _bc_dtheta_yaw_filter.step(bc_moment_body.z()   / _inertia.Izz_kgm2)) * inv_wn2_yaw;
 
         dtheta_pitch = dtheta_force + dtheta_moment_pitch;
 
-        // Roll: rate of change of deviation → roll rate contribution for commitAttitude.
+        // Roll: rate of change of (total) deviation → roll rate contribution for commitAttitude.
         delta_rr_filt_rps  = (dtheta_roll - _prev_dtheta_roll) / _outer_dt_s;
-        // Yaw: rate of change of deviation × velocity → lateral specific force.
+        // Yaw: rate of change of (total) deviation × velocity → lateral specific force.
         delta_ay_filt_mps2 = (dtheta_yaw  - _prev_dtheta_yaw)  / _outer_dt_s * V_safe;
 
         _prev_dtheta_roll = dtheta_roll;
@@ -686,6 +723,11 @@ nlohmann::json Aircraft::serializeJson() const {
     j["dtheta_yaw_filter"]    = _dtheta_yaw_filter.serializeJson();
     j["fz_stance_filter"]     = _fz_stance_filter.serializeJson();
     j["force_x"]              = nlohmann::json::array({_force_x(0, 0), _force_x(1, 0)});
+    j["bc_dtheta_pitch_filter"] = _bc_dtheta_pitch_filter.serializeJson();
+    j["bc_dtheta_roll_filter"]  = _bc_dtheta_roll_filter.serializeJson();
+    j["bc_dtheta_yaw_filter"]   = _bc_dtheta_yaw_filter.serializeJson();
+    j["bc_fz_stance_filter"]    = _bc_fz_stance_filter.serializeJson();
+    j["bc_force_x"]             = nlohmann::json::array({_bc_force_x(0, 0), _bc_force_x(1, 0)});
     j["prev_dtheta_roll"]     = _prev_dtheta_roll;
     j["prev_dtheta_yaw"]      = _prev_dtheta_yaw;
     j["att_filt_tau_s"]       = _att_filt_tau_s;
@@ -768,7 +810,17 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     if (j.contains("dtheta_roll_filter"))  _dtheta_roll_filter.deserializeJson(j.at("dtheta_roll_filter"));
     if (j.contains("dtheta_yaw_filter"))   _dtheta_yaw_filter.deserializeJson(j.at("dtheta_yaw_filter"));
     if (j.contains("fz_stance_filter"))    _fz_stance_filter.deserializeJson(j.at("fz_stance_filter"));
-    // Rebuild the force-channel G(s) state space from restored params, then restore its 2-state.
+    // §5c body-collider rotation-deviation filters: same config as the gear set, restore state.
+    _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
+    if (j.contains("bc_dtheta_pitch_filter")) _bc_dtheta_pitch_filter.deserializeJson(j.at("bc_dtheta_pitch_filter"));
+    if (j.contains("bc_dtheta_roll_filter"))  _bc_dtheta_roll_filter.deserializeJson(j.at("bc_dtheta_roll_filter"));
+    if (j.contains("bc_dtheta_yaw_filter"))   _bc_dtheta_yaw_filter.deserializeJson(j.at("bc_dtheta_yaw_filter"));
+    if (j.contains("bc_fz_stance_filter"))    _bc_fz_stance_filter.deserializeJson(j.at("bc_fz_stance_filter"));
+    // Rebuild the force-channel G(s) state space from restored params, then restore both 2-states
+    // (gear _force_x and the §5c collider _bc_force_x, which share the same G(s) coefficients).
     {
         const float wn = _dtheta_wn_pitch_rad_s, z = _dtheta_zeta_nd;
         liteaero::control::Vec3 num_s, den_s, num_z, den_z;
@@ -780,6 +832,11 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
         if (j.contains("force_x") && j.at("force_x").size() >= 2) {
             _force_x(0, 0) = j.at("force_x").at(0).get<float>();
             _force_x(1, 0) = j.at("force_x").at(1).get<float>();
+        }
+        _bc_force_x.setZero();
+        if (j.contains("bc_force_x") && j.at("bc_force_x").size() >= 2) {
+            _bc_force_x(0, 0) = j.at("bc_force_x").at(0).get<float>();
+            _bc_force_x(1, 0) = j.at("bc_force_x").at(1).get<float>();
         }
     }
     _prev_dtheta_roll  = j.value("prev_dtheta_roll",  0.f);
@@ -862,6 +919,17 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_force_x1(_force_x(1, 0));
     proto.set_fz_stance_filter_x0(_fz_stance_filter.x()(0, 0));
     proto.set_fz_stance_filter_x1(_fz_stance_filter.x()(1, 0));
+    // §5c body-collider rotation-deviation filter states.
+    proto.set_bc_dtheta_pitch_filter_x0(_bc_dtheta_pitch_filter.x()(0, 0));
+    proto.set_bc_dtheta_pitch_filter_x1(_bc_dtheta_pitch_filter.x()(1, 0));
+    proto.set_bc_dtheta_roll_filter_x0(_bc_dtheta_roll_filter.x()(0, 0));
+    proto.set_bc_dtheta_roll_filter_x1(_bc_dtheta_roll_filter.x()(1, 0));
+    proto.set_bc_dtheta_yaw_filter_x0(_bc_dtheta_yaw_filter.x()(0, 0));
+    proto.set_bc_dtheta_yaw_filter_x1(_bc_dtheta_yaw_filter.x()(1, 0));
+    proto.set_bc_fz_stance_filter_x0(_bc_fz_stance_filter.x()(0, 0));
+    proto.set_bc_fz_stance_filter_x1(_bc_fz_stance_filter.x()(1, 0));
+    proto.set_bc_force_x0(_bc_force_x(0, 0));
+    proto.set_bc_force_x1(_bc_force_x(1, 0));
     proto.set_dtheta_wn_pitch_rad_s(_dtheta_wn_pitch_rad_s);
     proto.set_dtheta_wn_roll_rad_s(_dtheta_wn_roll_rad_s);
     proto.set_dtheta_wn_yaw_rad_s(_dtheta_wn_yaw_rad_s);
@@ -946,6 +1014,11 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
     _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
     _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
+    // §5c body-collider rotation-deviation filters: same config as the gear set.
+    _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     {
         Mat21 x;
         x(0,0) = proto.nz_relax_filter_x0();
@@ -963,8 +1036,20 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
         x(0,0) = proto.fz_stance_filter_x0();
         x(1,0) = proto.fz_stance_filter_x1();
         _fz_stance_filter.resetState(x);
+        x(0,0) = proto.bc_dtheta_pitch_filter_x0();
+        x(1,0) = proto.bc_dtheta_pitch_filter_x1();
+        _bc_dtheta_pitch_filter.resetState(x);
+        x(0,0) = proto.bc_dtheta_roll_filter_x0();
+        x(1,0) = proto.bc_dtheta_roll_filter_x1();
+        _bc_dtheta_roll_filter.resetState(x);
+        x(0,0) = proto.bc_dtheta_yaw_filter_x0();
+        x(1,0) = proto.bc_dtheta_yaw_filter_x1();
+        _bc_dtheta_yaw_filter.resetState(x);
+        x(0,0) = proto.bc_fz_stance_filter_x0();
+        x(1,0) = proto.bc_fz_stance_filter_x1();
+        _bc_fz_stance_filter.resetState(x);
     }
-    // Rebuild force-channel G(s) from restored params, then restore its 2-state.
+    // Rebuild force-channel G(s) from restored params, then restore both 2-states (gear + §5c collider).
     {
         const float wn = _dtheta_wn_pitch_rad_s, z = _dtheta_zeta_nd;
         liteaero::control::Vec3 num_s, den_s, num_z, den_z;
@@ -974,6 +1059,8 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
         liteaero::control::tf2ss(num_z, den_z, _force_phi, _force_gamma, _force_h, _force_j);
         _force_x(0, 0) = proto.force_x0();
         _force_x(1, 0) = proto.force_x1();
+        _bc_force_x(0, 0) = proto.bc_force_x0();
+        _bc_force_x(1, 0) = proto.bc_force_x1();
     }
     _nz_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_wn_rad_s, _nz_zeta_nd, 0.f);
     _ny_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s, _ny_zeta_nd, 0.f);
