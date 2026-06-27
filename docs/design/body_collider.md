@@ -3,10 +3,10 @@
 The body collider is a body-axis oriented-bounding-box (OBB) backstop that keeps the airframe
 from penetrating terrain in attitudes and crash cases the landing gear does not cover (inverted,
 deep nose-down, wing-low, gear-up). It is owned by `Aircraft` and called inside `Aircraft::step()`
-both before integration (a one-step-lagged penalty force, summed with the gear reaction) and after
-integration (a non-penetration hard constraint). Its design target is *protection against ground
-penetration*, not a compliant suspension — the desired contact behavior is an inelastic arrest, not
-an elastic rebound.
+both before integration (a one-step-lagged, dissipative velocity-arrest contact force, summed with the
+gear reaction) and after integration (a restitution-consistent non-penetration hard constraint). Its
+design target is *protection against ground penetration*, not a compliant suspension — the contact is
+an inelastic arrest, not an elastic rebound.
 
 ---
 
@@ -42,12 +42,17 @@ flowchart LR
 classDiagram
     class BodyCollider {
         -vector~CollisionVolumeParams~ _volumes
+        -float _restitution_nd
+        -float _b_corner_nspm
+        -float _friction_coulomb_nd
+        -float _friction_viscous_nd
         -float _max_reach_m
-        +initialize(json) void
+        +initialize(json, mass_kg, dt_s) void
         +reset() void
         +step(snap, terrain) ContactForces
         +maxCornerPenetration_m(snap, terrain) float
         +minCornerClearance_m(snap, terrain) float
+        +restitution_nd() float
         +serializeJson() json
         +serializeProto() bytes
     }
@@ -55,8 +60,6 @@ classDiagram
         +string name
         +Vector3f half_extents_body_m
         +Vector3f center_offset_body_m
-        +float stiffness_npm
-        +float damping_nspm
     }
     class ContactForces {
         +Vector3f force_body_n
@@ -67,17 +70,22 @@ classDiagram
     BodyCollider ..> ContactForces : returns
 ```
 
-`BodyCollider` is presently **stateless** — `reset()` is a no-op and serialization round-trips
-configuration only. (The decided §5c rotational-reaction design (OQ-BC-3, Alternative 1) adds a
-serialized per-axis $\Delta\theta$ filter state and makes `reset()` clear it; not yet implemented.)
+`CollisionVolumeParams` is **geometry only** (the §5a velocity-arrest damping is a single
+collider-level quantity derived from airframe mass and step, not a per-volume parameter — OQ-BC-5).
+`BodyCollider` holds collider-level scalars (`restitution_nd`, the derived arrest damping, and the
+§5d friction coefficients) but no mid-step force/moment state — `reset()` is a no-op and `step()` is
+`const`. The §5c rotational-reaction state lives in `Aircraft` (OQ-BC-6 → Alt 2), not in
+`BodyCollider`.
 
 ---
 
 ## Physical Models
 
-The first three sections (§1–§3) describe the **as-built** model. §4 documents how the model is
-coupled into `Aircraft`. §5 collects the **proposed improvements** that are not yet implemented and
-points at the Open Questions that gate them.
+§1 describes the collision geometry, §2 the normal contact, §3 the terrain hard-constraint coupling,
+and §4 the `Aircraft` integration. §5 details the contact dynamics — the inelastic velocity-arrest
+normal force (§5a), the restitution-consistent constraint (§5b), the dedicated rotational reaction
+(§5c), and the scrape friction (§5d) — all **implemented**; §2/§3 give the overview and §5 the full
+models and stability analysis.
 
 ### 1. Collision Geometry — OBB Corner Sampling
 
@@ -95,65 +103,52 @@ $h_\text{ac} - h_\text{terrain} > r_\text{max}$, where $r_\text{max}=\max_v(\lVe
 \lVert\mathbf{h}_v\rVert)$ is the bounding-sphere reach of the worst volume over all orientations
 (recomputed on `initialize`/`deserialize`).
 
-### 2. Normal Penalty Contact (current Kelvin–Voigt model)
+### 2. Normal Contact — Dissipation-Dominated Velocity-Arrest
 
-For each penetrating corner the model forms a linear spring–damper (Kelvin–Voigt) penalty force
-along the upward terrain normal:
+For each penetrating corner the collider applies a purely **dissipative** velocity-arrest force along
+the upward terrain normal — no spring, hence no static restoring force and no elastic rebound (an
+inelastic backstop, not a rubber bounce):
 
-$$F_\text{pen} = \max\!\bigl(0,\; k\,\delta_\text{eff} + b\,\dot\delta\bigr),
+$$F_\text{pen} = \max\!\bigl(0,\; c\,\delta_\text{eff}\,\dot\delta\bigr),
+\qquad c = b_\text{corner}/h_z,
 \qquad \delta_\text{eff} = \min(\delta,\,2 h_z),
 \qquad \dot\delta = \bigl(R_{NB}\,(\mathbf{v}_B + \boldsymbol\omega\times\mathbf{p}_k)\bigr)_z,$$
 
-with stiffness $k=$ `stiffness_npm`, damping $b=$ `damping_nspm`, and $\dot\delta$ the corner's
-sinking rate (positive down). The penetration is capped at twice the volume's vertical half-extent
-to bound the spring force during deep embedding. The force is applied upward in NED, rotated to
-body, and accumulated with its moment about the CG; any penetrating corner sets
-`weight_on_wheels`:
+where $\dot\delta$ is the corner's sink rate (positive down) and $b_\text{corner}$ is the per-corner
+arrest damping **derived in `initialize`** from the airframe mass and step (§5a, OQ-BC-5):
+$b_\text{corner}=m/(n_\text{corners}\,N_\text{arr}\,dt)$ with a fixed $N_\text{arr}=3$, so the worst-case
+aggregate over all corners sits at $1/N_\text{arr}<1$ on every airframe. The penetration is capped at
+twice the volume half-depth. The $\max(0,\cdot)$ floor forbids adhesion and does no work on rebound —
+the force is produced only while a corner is sinking. The force is rotated to body and accumulated with
+its moment about the CG (any penetrating corner sets `weight_on_wheels`):
 
-$$\mathbf{F}_B = R_{BN}\,[0,0,-F_\text{pen}]^\top,\qquad
-\mathbf{M}_B \mathrel{+}= \mathbf{p}_k\times\mathbf{F}_B.$$
+$$\mathbf{F}_B = R_{BN}\,[0,0,-F_\text{pen}]^\top + \mathbf{F}_t,\qquad
+\mathbf{M}_B \mathrel{+}= \mathbf{p}_k\times\mathbf{F}_B,$$
 
-The $\max(0,\cdot)$ floor rectifies the contact so it never pulls the airframe down (no adhesion),
-and the damping term acts on both sink and rise while in contact.
-
-**Diagnosis — why it bounces (the defect this design must fix).** A rectified linear
-spring–damper is an *elastic* contact. Treating a penetrating corner as a 1-DOF impact against the
-supported mass $m$, the contact damping ratio is $\zeta = b/\bigl(2\sqrt{k\,m}\bigr)$ and the
-coefficient of restitution is $e = \exp\!\bigl(-\zeta\pi/\sqrt{1-\zeta^2}\bigr)$ (near-elastic for
-$\zeta\ll1$, inelastic only as $\zeta\to1$). Because the configured damping $b=500\ \mathrm{N\,s/m}$
-is a **fixed dimensional constant** independent of airframe mass, the realized restitution swings
-wildly across the fleet for the *same* configuration:
-
-| Fixture | $m$ (kg) | $\zeta = b/2\sqrt{km}$ | Restitution $e$ | Behavior |
-| --- | --- | --- | --- | --- |
-| `small_uas` | 5 | 1.12 | ≈ 0 | over-damped (inelastic) |
-| `general_aviation` | 1045 | 0.077 | ≈ 0.78 | strongly elastic — rubber bounce |
-| `jet_trainer` | 5500 | 0.034 | ≈ 0.90 | almost fully elastic |
-
-This is the same failure class the landing-gear effort fixed by **non-dimensionalizing every knob**
-against the airframe's own physical scale (the `dtheta_vref_mps = 24` global-default defect): a
-dimensional default that is correct for one airframe is silently wrong by an order of magnitude on
-another. The header comment calls this force "inelastic," but for any airframe heavier than a few
-hundred kilograms it is not. Fixing it is the subject of §5a (resolved — OQ-BC-1 → velocity-arrest).
+where $\mathbf{F}_t$ is the §5d scrape friction (Coulomb + viscous) at the corner. The full model, the
+parameter derivation, and the stability analysis (stable for all reasonable restitution $e\in[0,1)$)
+are in §5a; the §5b hard constraint owns static non-penetration and restitution. This replaced an
+elastic Kelvin–Voigt penalty spring whose fixed dimensional damping gave airframe-dependent restitution
+(0 on a 5 kg UAS to ≈0.9 on a 5500 kg trainer) — the rubber-bounce defect; see §5a "why not a spring".
 
 ### 3. Terrain Hard-Constraint Coupling
 
-The penalty force is a soft backstop; true non-penetration is enforced separately by the
-post-integration **terrain hard constraint** (`Aircraft::step()` step 12). After RK4 integration the
-collider reports `minCornerClearance_m` (signed: negative means the deepest corner is below
-terrain). If any corner penetrates, `Aircraft` projects the pose up by that depth via
-`KinematicState::applyTerrainHardConstraint(pen)` — which zeros the downward velocity component —
-re-runs the collider on the penetrated pre-correction pose to capture the impact force/moment for
-monitoring, and latches `_body_in_hard_contact`. The latch is released only on genuine separation
-(`clearance > 0.05 m` hysteresis), so `weight_on_wheels` reporting stays accurate across the
-penalty spring momentarily reading $\delta=0$ after a correction.
+The velocity-arrest force is a soft backstop; true non-penetration is enforced separately by the
+post-integration **terrain hard constraint** (`Aircraft::step()` step 12), which is the **primary**
+inelastic mechanism (§5b). After RK4 integration the collider reports `minCornerClearance_m` (signed:
+negative means the deepest corner is below terrain). If any corner penetrates, `Aircraft` projects the
+pose up by that depth via `KinematicState::applyTerrainHardConstraint(pen, restitution_nd)` — which
+applies the restitution-consistent velocity correction $v_\text{normal}\mapsto -e\,v_\text{normal}$
+(removing $(1+e)\,v_\text{normal}$; $e=$ `restitution_nd`, default 0 → fully inelastic) — re-runs the
+collider on the penetrated pre-correction pose to capture the impact force/moment for monitoring, and
+latches `_body_in_hard_contact`. The latch is released only on genuine separation (`clearance > 0.05 m`
+hysteresis), so `weight_on_wheels` reporting stays accurate across the velocity-arrest force
+momentarily reading zero after a correction.
 
-The collider therefore participates in two distinct mechanisms with different roles: a compliant
-penalty force (§2) and a stiff geometric projection (this section). How these share the work is the
-**resolved** design of §5b (OQ-BC-2, Alternative 2): the projection becomes the primary,
-restitution-consistent mechanism (removing $(1+e)$ of the normal approach velocity, $e\approx0$,
-rather than hard-zeroing it), while the penalty force is demoted to in-contact damping and the §5c
-moment.
+The collider therefore participates in two mechanisms (§5b, OQ-BC-2): the geometric projection above is
+the primary, restitution-consistent inelastic backstop (the single user knob `restitution_nd`, §5a),
+and the §2 velocity-arrest force supplies in-contact damping and the contact moment that drives the §5c
+rotational reaction.
 
 ### 4. Integration with `Aircraft`
 
@@ -162,19 +157,16 @@ force and moment are summed into the same `ContactForces` accumulator as the lan
 (`contact_forces.force_body_n += bc.force_body_n`, etc.), then carried into the wind-frame EOM by
 the shared contact path described in [aircraft.md](aircraft.md) step 10.
 
-### 5. Proposed Improvements (Not Yet Implemented)
+### 5. Contact Dynamics
 
-> **Status (mixed).** §5a (velocity-arrest normal contact), §5b (restitution-consistent constraint),
-> and §5d (Coulomb + viscous scrape friction) are **implemented and tested** (OQ-BC-1/2/4/5 resolved).
-> §5c (the dedicated rotational channel) is **fully decided but not yet implemented** — all of
-> OQ-BC-3/6/7 are resolved: separate, attributed gear and body-collider moment **and** force channels
-> (parallel filters in `Aircraft`), behavior-preserving by the $H_2$/`LP`/$G(s)$ linearity invariant,
-> with the regression protection specified below. The rotational reaction itself already functions today
-> via the shared gear $\Delta\theta$ block (see §5c). Implementation is tracked in
-> [body_collider_dynamics.md](../implementation/body_collider_dynamics.md).
+> **Status: implemented and tested.** All four items are implemented (OQ-BC-1…7 resolved): §5a
+> velocity-arrest normal contact, §5b restitution-consistent hard constraint, §5c dedicated
+> rotational-reaction $\Delta\theta$ channel (parallel filters in `Aircraft`, behavior-preserving by the
+> $H_2$/`LP`/$G(s)$ linearity invariant), and §5d Coulomb + viscous scrape friction. The implementation
+> plan and its tests are in [body_collider_dynamics.md](../implementation/body_collider_dynamics.md).
 
-**§5a — Inelastic normal contact: dissipation-dominated velocity-arrest (decided, OQ-BC-1 →
-Alternative 3).** Replace the elastic Kelvin–Voigt penalty with a purely **dissipative** normal force
+**§5a — Inelastic normal contact: dissipation-dominated velocity-arrest (implemented, OQ-BC-1 →
+Alternative 3).** A purely **dissipative** normal force
 that opposes the corner sink rate, so penetration is decelerated and arrested with **no stored elastic
 energy to return** — coefficient of restitution $e=0$ by construction. Per penetrating corner, with
 $\delta\ge0$ the penetration and $\dot\delta$ the sink rate (positive = deeper), the force is
@@ -298,7 +290,7 @@ parameterization, and the §5b constraint owning static position. When §5a is i
 should be promoted to a numerical-analysis document in [`docs/algorithms/`](../algorithms/) per the
 `/algo` convention.
 
-**§5b — Penalty / hard-constraint role split (decided, OQ-BC-2 → Alternative 2).** The
+**§5b — Penalty / hard-constraint role split (implemented, OQ-BC-2 → Alternative 2).** The
 post-integration hard constraint (§3) is the **primary** non-penetration mechanism and is made
 *restitution-consistent*: instead of hard-zeroing the corner normal velocity it removes $(1+e)$ of
 the normal approach component (i.e. $v_\text{normal}\mapsto -e\,v_\text{normal}$) with the **single
@@ -311,8 +303,8 @@ limit cycles, and the constraint's velocity correction is a discrete analogue; t
 requirement (Test Strategy `Aircraft_BodyCollider_NoRelaunch`) is that the restitution-consistent
 projection does not excite the kinematic attitude.
 
-**§5c — Gear-style rotational reaction $\Delta\theta$ (decided nice-to-have, OQ-BC-3/6/7 resolved; not
-yet implemented).** The goal is a rotational reaction to a body strike (a wing-low
+**§5c — Gear-style rotational reaction $\Delta\theta$ (implemented, OQ-BC-3/6/7 resolved).** The goal
+is a rotational reaction to a body strike (a wing-low
 or tail-first contact pitches/rolls the airframe *about* the contact, via the §2a low-pass on $M/I$
 with properties P1–P4), with the gear and body-collider contributions **independently attributable**.
 
@@ -325,7 +317,7 @@ decays to zero when unloaded (P1). Functionally this is the *shared* channel (OQ
 what is missing is **attribution** — the two sources are summed before the filter and cannot be
 inspected separately.
 
-*Proposed design (Alternative 1 — separated moment **and** force channels).* Keep the gear and collider
+*Design (Alternative 1 — separated moment **and** force channels).* Keep the gear and collider
 contact reactions **separate** for the rotation-deviation channels while still summing them for the EOM.
 Both the **moment channels** (the $H_2$ low-pass on $M/I$ per axis) and the pitch **force channel** (the
 $G(s)$ on the destanced vertical load) are duplicated per source — gear-driven and collider-driven — and
@@ -374,10 +366,11 @@ invariant this holds exactly except where a `FilterSS2Clip` saturates, which thi
 (3) **Golden trajectory** — a body-collider belly-landing scenario run before and after the refactor,
 with attitude and trajectory unchanged within tolerance. Because **both** channels separate linearly,
 the entire §5c refactor is **provably non-breaking** in the unclipped regime, and the equivalence test
-is the explicit guard for the clip regime. Depends on §5a/§5b (in place); OQ-BC-6/7 resolved. Not yet
-implemented.
+is the explicit guard for the clip regime. **Implemented** as a parallel `_bc_dtheta_*` filter set in
+`Aircraft` (the gear filters now read gear-only force/moment); the existing gear-only and bc-only tests
+pass unchanged, confirming the linearity equivalence.
 
-**§5d — Tangential scrape friction (decided, OQ-BC-4 → Alternative 1 + viscous term).** Penetrating
+**§5d — Tangential scrape friction (implemented, OQ-BC-4 → Alternative 1 + viscous term).** Penetrating
 corners get a tangential force combining regularized Coulomb friction with a velocity-proportional
 momentum-transfer (plowing) term:
 
@@ -390,8 +383,9 @@ non-dimensional viscous coefficient (scaled to the airframe so it is mass-indepe
 momentum the airframe loses plowing into terrain — the Coulomb cap alone under-represents that sink.
 Both terms act only while a corner penetrates. The smooth-dynamics standard exempts contact/friction
 physics from the $C^1$ requirement (see [general.md](../guidelines/general.md#smooth-dynamics)), so
-the stick–slip discontinuity is acceptable here. Depends on §5a (a stable $F_\text{pen}$ to scale
-the Coulomb term); not yet implemented.
+the stick–slip discontinuity is acceptable here. The viscous coefficient is derived as
+$k_\text{visc}\cdot b_\text{corner}$ (mass-scaled, so it is tuning-free like the normal arrest), and
+both knobs default to 0 (frictionless until configured).
 
 ---
 
@@ -430,17 +424,17 @@ be non-null (`_has_body_collider && _terrain != nullptr`) for either mechanism t
 ```cpp
 // include/collision/BodyCollider.hpp — namespace liteaero::simulation
 
-struct CollisionVolumeParams {
+struct CollisionVolumeParams {        // geometry only (OQ-BC-5)
     std::string     name;
     Eigen::Vector3f half_extents_body_m  = {0.5f, 0.3f, 0.2f};
     Eigen::Vector3f center_offset_body_m = Eigen::Vector3f::Zero();
-    float           stiffness_npm        = 10000.f;
-    float           damping_nspm         = 500.f;
 };
 
 class BodyCollider {
 public:
-    void initialize(const nlohmann::json& config);
+    // mass_kg and dt_s derive the §5a velocity-arrest damping; defaults are a test
+    // convenience — Aircraft passes the real airframe mass and outer step.
+    void initialize(const nlohmann::json& config, float mass_kg = 1.0f, float dt_s = 0.01f);
     void reset() {}
 
     ContactForces step(const liteaero::nav::KinematicStateSnapshot& snap,
@@ -453,6 +447,8 @@ public:
     [[nodiscard]] float minCornerClearance_m(
         const liteaero::nav::KinematicStateSnapshot& snap,
         const liteaero::terrain::Terrain& terrain) const;          // signed
+
+    [[nodiscard]] float restitution_nd() const;                    // §5b coefficient (consumed by Aircraft)
 
     [[nodiscard]] nlohmann::json       serializeJson() const;
     void                               deserializeJson(const nlohmann::json& j);
@@ -467,43 +463,38 @@ public:
 
 ### Serialized State
 
-The collider is currently stateless: there is **no** mid-step state that changes between `reset()`
-and a step. Serialization round-trips configuration only (the volume list). The decided §5c
-rotational-reaction design (OQ-BC-3, Alternative 1) makes the collider stateful — a per-axis
-$\Delta\theta$ second-order filter state will be added to the table below and to the proto message
-when §5c is implemented. It is not yet implemented, so no state field exists today.
+The collider has **no mid-step force/moment state** (`step()` is `const`); the §5c rotation-deviation
+filters live in `Aircraft` (OQ-BC-6 → Alt 2), not here. `BodyCollider` serialization round-trips the
+volume geometry plus the collider-level contact scalars below — the single user knob `restitution_nd`,
+the §5d friction coefficients, and the **derived** arrest damping (serialized so a restore reproduces
+behavior without re-supplying mass/`dt`).
 
 | Field | Type | Unit | Description |
 | --- | --- | --- | --- |
-| _(none)_ | — | — | Stateless; configuration-only serialization. |
+| `restitution_nd` | float | — | §5b coefficient of restitution, $[0,1)$, default 0 (the only user-facing contact knob) |
+| `arrest_damping_corner_nspm` | float | N·s/m | §5a per-corner velocity-arrest damping, derived in `initialize` from mass/`dt` |
+| `friction_coulomb_nd` | float | — | §5d Coulomb coefficient $\mu$, default 0 |
+| `friction_viscous_nd` | float | — | §5d viscous (plowing) factor on `b_corner`, default 0 |
 
-Configuration (not serialized state) per volume: `name`, `half_extents_body_m`,
-`center_offset_body_m`, `stiffness_npm`, `damping_nspm`. The volume count here is below the
-ten-field threshold that would warrant a standalone schema document; it is specified inline.
-
-> **Decided config change (§5a/§5b, OQ-BC-5 — not yet implemented).** Per-volume `stiffness_npm` and
-> `damping_nspm` are removed; `CollisionVolumeParams` reduces to geometry (`name`,
-> `half_extents_body_m`, `center_offset_body_m`). A single collider-level `restitution_nd` (the §5b
-> coefficient of restitution, default $0$, range $[0,1)$) is added to `BodyColliderParams`, and §5d adds
-> collider-level `friction_coulomb_nd` and `friction_viscous_nd`. The §5a velocity-arrest damping is
-> derived in `initialize` from the airframe mass and step `dt` (now supplied by `Aircraft`), not stored.
-> The as-built `CollisionVolumeParams` / proto blocks above and below reflect the current code and will
-> change when the plan lands.
+Per-volume configuration is geometry only: `name`, `half_extents_body_m`, `center_offset_body_m`. The
+field count is below the ten-field threshold for a standalone schema document; it is specified inline.
 
 ### Proto Message
 
 ```proto
-message CollisionVolumeParams {
+message CollisionVolumeParams {        // geometry only (§5a / OQ-BC-5)
     string   name                 = 1;
     Vector3f half_extents_body_m  = 2;
     Vector3f center_offset_body_m = 3;
-    float    stiffness_npm        = 4;
-    float    damping_nspm         = 5;
 }
 
 message BodyColliderParams {
-    int32                          schema_version = 1;
-    repeated CollisionVolumeParams volumes        = 2;
+    int32                          schema_version             = 1;
+    repeated CollisionVolumeParams volumes                    = 2;
+    float                          restitution_nd             = 3;  // §5b
+    float                          arrest_damping_corner_nspm = 4;  // §5a derived
+    float                          friction_coulomb_nd        = 5;  // §5d mu
+    float                          friction_viscous_nd        = 6;  // §5d k_visc
 }
 ```
 
@@ -519,11 +510,11 @@ message BodyColliderParams {
 | `minCornerClearance_m` (step 12) | $8 \times N_\text{vol}$ |
 
 For a typical 3-volume airframe (fuselage, wings, tail) that is $\le 24$ corner evaluations for the
-penalty pass plus 24 for the clearance pass, each a $3\times3$ rotation and a scalar compare. Memory
-footprint is the volume list (five scalars + a name per volume) and one cached `_max_reach_m`. At a
-nominal outer step this is negligible relative to the LFA solve and aero model. The decided §5c
-design adds a per-axis second-order filter step (a handful of multiply-adds); §5d adds a tangential
-force per penetrating corner.
+arrest pass (each adds the §5d tangential force) plus 24 for the clearance pass, each a $3\times3$
+rotation and a scalar compare. Memory footprint is the volume geometry list, the four collider-level
+scalars, and one cached `_max_reach_m`. The §5c rotation-deviation filters (a parallel per-axis
+second-order set plus a force-channel 2-state) live in `Aircraft`, costing a handful of multiply-adds
+per step. At a nominal outer step all of this is negligible relative to the LFA solve and aero model.
 
 ---
 
@@ -545,7 +536,7 @@ and driven by the **body-collider** contact moment/force separated from the gear
 **Rationale (user):** keep the delicate attitude integration in one place and reuse the validated gear
 machinery; the collider's contribution is still a separate, attributable term. **Consequence:** the
 body collider itself stays stateless (its rotational state lives in `Aircraft`), a deliberate departure
-from the OQ-BC-3 "self-contained" wording, accepted for the lower refactor risk. Not yet implemented.
+from the OQ-BC-3 "self-contained" wording, accepted for the lower refactor risk. Implemented.
 
 ### OQ-BC-7 — §5c Force / Descent-Arrest Channel Attribution *(Resolved)*
 
@@ -560,7 +551,7 @@ and the remaining force-channel operators ($a_\text{arrest}$, the $\cos\gamma/V$
 aircraft-state scalings, and $G(s)$) are linear or common-factor, so the separated force channels sum
 **exactly** to the combined one — behavior-preserving like the moment channels, modulo float rounding
 and `FilterSS2Clip` saturation (which the §5c equivalence test guards). **Rationale (user):** full
-attribution of both channels, now established to carry no behavior penalty. Not yet implemented.
+attribution of both channels, now established to carry no behavior penalty. Implemented.
 
 ### OQ-BC-5 — §5a Velocity-Arrest Coefficient Parameterization *(Resolved)*
 
@@ -600,7 +591,7 @@ projection; no re-excitation of the gear/attitude loop. **Caveats / prerequisite
 implementation:** the stability bound applies to the aggregate corner damping with a conservative
 effective mass; the §5c moment filter must be parameterized as in the gear; the §5b constraint must hold
 static belly-rest position with no normal spring; and the §5a stability analysis should be promoted to a
-`docs/algorithms/` numerical-analysis document when implemented. Not yet implemented.
+`docs/algorithms/` numerical-analysis document. Implemented.
 
 ### OQ-BC-2 — Penalty / Hard-Constraint Role Split *(Resolved)*
 
@@ -615,7 +606,7 @@ penalty, and concentrate restitution in one explicit parameter. **Caveat:** the 
 projection still acts on the kinematic, near-zero-inertia attitude, so it must be shown not to excite
 it — the acceptance test `Aircraft_BodyCollider_NoRelaunch` in the Test Strategy. Implementation
 requires extending `applyTerrainHardConstraint` to carry a restitution coefficient, remains gated on
-§5a (the normal-force law that supplies the residual damping/moment), and is not yet begun.
+§5a (the normal-force law that supplies the residual damping/moment). Implemented.
 
 ### OQ-BC-3 — Gear-Style Rotational Reaction $\Delta\theta$ *(Resolved)*
 
@@ -635,7 +626,7 @@ imprecise). The supporting mechanics are resolved: filters live as a **parallel 
 (**OQ-BC-6** → Alt 2) and **both** channels are attributed (**OQ-BC-7** → Alt 2; the earlier claim that
 the force channel "does not separate by linearity" was wrong — the stance low-pass superposes). The
 full design and the regression-protection strategy are in §5c. This is the labeled nice-to-have; it
-depends on §5a/§5b (in place) and is not yet begun.
+depends on §5a/§5b (in place). Implemented.
 
 ### OQ-BC-4 — Tangential Scrape Friction *(Resolved)*
 
@@ -652,7 +643,7 @@ by $c_t$ rather than capping at the Coulomb friction alone. Both coefficients ar
 — $\mu$ from the surface-friction parameterization shared with the gear, $c_t$ scaled to the airframe
 so it is mass-independent. The stick–slip and contact-onset discontinuities are acceptable under the
 contact/friction exemption to the smooth-dynamics standard. Implementation depends on §5a
-(a stable normal force $F_\text{pen}$ to scale the Coulomb term) and is not yet begun.
+(a stable normal force $F_\text{pen}$ to scale the Coulomb term). Implemented.
 
 ---
 
@@ -667,18 +658,17 @@ contact/friction exemption to the smooth-dynamics standard. Implementation depen
 | `BodyCollider_DeepEmbed_ForceCapped` | Penetration $\gg 2 h_z$ | Force uses $\delta_\text{eff}=2h_z$, not raw $\delta$ |
 | `BodyCollider_RisingCorner_NoSuction` | Penetrating corner with upward velocity | $F_\text{pen} \ge 0$ (floor holds, no downward pull) |
 | `BodyCollider_InvertedAttitude_Protected` | Inverted pose, top volume penetrating | Nonzero contact force in the correct direction |
-| `BodyCollider_InelasticContact_RestitutionNearZero` *(§5a — decided, not yet implemented)* | Vertical drop of each fixture mass onto flat terrain | Rebound speed / impact speed $\le e_\text{config}$ for all fixtures (airframe-independent) |
-| `BodyCollider_Scrape_DeceleratesSlide` *(§5d — decided, not yet implemented)* | Penetrating corner sliding tangentially | Tangential force opposes $\mathbf{v}_t$; slide decelerates (Coulomb + viscous $c_t$ terms both present) |
+| `BodyColliderTest.{ForcePresentOnlyWhenSinking, NoForce_WhenRising_NoSuction, ForceScalesWithPenetrationAndSinkRate, ArrestDampingScalesWithMass}` *(§5a)* | Penetrating corner, varying sink rate / penetration / mass | $F=\max(0,c\,\delta\dot\delta)$: zero static, $\propto\delta\dot\delta$, no suction on rebound, scales with airframe mass |
+| `BodyColliderTest.{NoFriction_ByDefault_NoTangentialForce, ViscousFriction_OpposesSteadyScrape, CoulombFriction_AddsUnderNormalLoad, FrictionRoundTrips}` *(§5d)* | Penetrating corner sliding tangentially | Frictionless by default; viscous plowing decelerates a steady scrape; Coulomb adds under normal load |
 
 ### Integration Tests
 
 | Test | Input | Pass criterion |
 | --- | --- | --- |
 | `Aircraft_BodyCollider_HardConstraintReleasesLatch` | Penetrate then separate by > 0.05 m | `_body_in_hard_contact` clears on genuine separation |
-| `Aircraft_BodyCollider_NoRelaunch` *(§5b — decided, not yet implemented)* | Gear-up touchdown on the collider | Restitution-consistent hard constraint arrests vertical velocity without rebound above $e_\text{config}$; kinematic attitude not excited |
-| `Aircraft_BodyCollider_WingStrikeRotates` *(§5c — not yet implemented)* | Wing-low contact | Body rolls toward level via the collider's dedicated $\Delta\theta$; deviation decays to zero after separation (P1) |
-| `Aircraft_BodyCollider_DthetaSeparation_EqualsCombined` *(§5c regression — not yet implemented)* | Belly-strike snapshot, gear + collider both loaded | Sum of the separated gear + collider **moment and force** channel $\Delta\theta$ equals the pre-refactor combined $\Delta\theta$ to float tolerance (the linearity invariant; flags any `FilterSS2Clip` saturation) |
-| `Aircraft_BodyCollider_BellyLanding_GoldenTrajectory` *(§5c regression — not yet implemented)* | Belly-landing scenario, before vs after the §5c refactor | Attitude and trajectory unchanged within tolerance; all existing gear $\Delta\theta$ tests stay green |
+| `KinematicStateTest.TerrainHardConstraint_{RestitutionReflectsDownwardVelocity, ZeroRestitutionFullyArrests}` + `AircraftTest.BodyColliderOnly_{Landing_StaysNearTerrain, GlideToImpact_ArrestsDescentAndReportsForce}` *(§5b)* | Restitution correction; gear-up belly landing | $v_\text{normal}\mapsto -e\,v_\text{normal}$; belly landing arrests without bounce and stays near terrain |
+| `AircraftTest.BodyColliderImpact_RotationState_RoundTrips` *(§5c)* | Belly impact, then JSON + proto round-trip | The dedicated collider rotation state (`bc_force_x`, `bc_*_filter`) is non-zero after impact and round-trips exactly |
+| §5c regression — the **existing gear-only and bc-only Δθ tests** (`LandingGear_DthetaState_NonzeroAfterContact`, `LandingGear_ForceChannel_DecaysAfterTransient`, the `BodyColliderOnly_*` scenarios, …) *(§5c)* | Single-source contact scenarios | All pass **unchanged** after the per-source split — the linearity-equivalence guarantee in practice (a dedicated combined-vs-separated equivalence test and a belly-landing golden-trajectory test remain optional additions) |
 
 ### Scenario Tests
 

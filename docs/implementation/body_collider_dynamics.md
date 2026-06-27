@@ -64,18 +64,18 @@ tests.)
 
 **Remaining after §5a/§5b code (not blocking, follow-ups):**
 
-- **JSON config dead-key strip.** `stiffness_npm`/`damping_nspm` are now ignored on load, but they
-  still appear in `configs/*.json`, `test/data/aircraft/*.json`, `python/assets/aircraft_configs/*.json`,
-  and `python/tools/gen_test_assets.py`. Strip them (rule 7) — non-breaking.
+- **JSON config dead-key strip — done.** `stiffness_npm`/`damping_nspm` removed from all 9
+  `configs/*.json` body-collider volumes (validated). `test/data/aircraft/*.json` and
+  `python/assets/` carry no such keys; `gen_test_assets.py` writes no body-collider section.
 - **Pre-existing gap discovered (not §5c).** `Aircraft::_body_in_hard_contact` (the body-contact
   weight-on-wheels latch, set in `Aircraft::step`) is **not serialized** (JSON or proto), so a
   belly-settled aircraft loses the latch on round-trip and re-saturates α on the next step. Surfaced by
   the §5c serialization test (which was refocused to test only the collider rotation state). A 2-line
   fix (serialize the bool in JSON + a proto bool field); separate task, needs explicit instruction.
-- **Design-doc as-built reconciliation.** §5a/§5b/§5d are now implemented, so [body_collider.md](../design/body_collider.md)
-  needs a `/design update`: the §2 "current Kelvin–Voigt model" section, the Class Hierarchy, Interface,
-  Serialization, and proto blocks describe the pre-§5a code and must be refreshed; §5a/§5b move from
-  "decided, not yet implemented" to as-built.
+- **Design-doc as-built reconciliation — done.** [body_collider.md](../design/body_collider.md) updated:
+  §2 now describes the velocity-arrest contact (was Kelvin–Voigt), §3 the restitution-consistent
+  constraint, the Class Hierarchy / Interface / Serialization / proto blocks match the current code, the
+  §5 section and OQ resolutions are relabeled "implemented", and the Test Strategy cites the actual tests.
 
 **Pre-existing unrelated failures:** `LandingGear.BearingDragCoeffs_NonzeroWhenSpindownConfigured` and
 `LandingGear.DifferentialBrake_ProducesYawMoment` fail independently of this plan (brake/spindown logic).
