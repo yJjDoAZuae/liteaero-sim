@@ -11,7 +11,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | Plan file | Scope | Status |
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Consolidated landing-gear plan: wheel dynamics (OQ-LG-5/6), gear→aircraft force-&-moment coupling (OQ-LG-9–23), and pending debt (OQ-LG-24 effectiveness weight, OQ-LG-15 diagnostic cleanup). SD-1 smoothness reconciliations excluded (undecided — OQ-LG-25) | Active |
-| [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a/§5b/§5c/§5d all implemented and tested (velocity-arrest contact, restitution-consistent constraint, dedicated $\Delta\theta$ rotational channel, Coulomb + viscous friction). Follow-ups: JSON config cleanup, design-doc as-built reconciliation, `_body_in_hard_contact` serialization | Active |
+| [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a/§5b/§5c/§5d all implemented and tested. Open: IP-BC-10 (fix `_has_*` deserialize gap that drops gear/collider on restore), IP-BC-11 (WoW detection, blocked on OQ-BC-8) | Active |
 
 ---
 

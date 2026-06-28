@@ -479,6 +479,18 @@ behavior without re-supplying mass/`dt`).
 Per-volume configuration is geometry only: `name`, `half_extents_body_m`, `center_offset_body_m`. The
 field count is below the ten-field threshold for a standalone schema document; it is specified inline.
 
+> **Serialization defect (Aircraft-level — found during the §5c round-trip test, fix pending).**
+> `Aircraft::deserializeJson`/`deserializeProto` **read** `_has_landing_gear`/`_has_body_collider` to
+> gate restoring each subsystem's serialized block, but **never set those flags** (they are set only in
+> `initialize`). A fresh-constructed aircraft (flags default `false`) therefore **silently drops both
+> its landing gear and body collider on deserialize** — the `landing_gear_state` / `body_collider_config`
+> blocks are skipped and the subsystems are inactive in subsequent steps. This (not the reporting-only
+> `_body_in_hard_contact`) is the actual cause of the continued-step divergence the §5c serialization
+> test first hit. **Fix:** set `_has_landing_gear = j.contains("landing_gear_state")` and
+> `_has_body_collider = j.contains("body_collider_config")` (and the proto equivalents) before restoring.
+> It affects landing gear equally, so it should be tracked as an `Aircraft` serialization fix, not a
+> body-collider-only one.
+
 ### Proto Message
 
 ```proto
@@ -520,11 +532,61 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-All open questions are resolved (resolution notes below).
+One design question is open (OQ-BC-8); the rest are resolved (resolution notes below).
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| _(none open)_ | — | — |
+| OQ-BC-8 | Weight-on-wheels detection: latched `_body_in_hard_contact` flag vs a stateless geometric (clearance-based) test | WoW-reporting cleanup; a separate `_has_*` deserialize defect is a bug to fix outright (see Serialization) |
+
+### OQ-BC-8 — Weight-on-Wheels Detection: Latched Flag vs Stateless Geometric *(open)*
+
+**Problem.** The §5a velocity-arrest normal force is **zero at static rest** (it opposes only an active
+sink rate), so a belly-resting aircraft produces no contact force, and weight-on-wheels (WoW) detected
+from the instantaneous force/penetration reads *false* for a settled belly even though the aircraft is
+on the ground. To patch this, `Aircraft` carries a latched flag `_body_in_hard_contact` (set when the
+post-integration hard constraint fires, released on `> 0.05 m` separation) that forces the reported
+`weight_on_wheels` true. Investigation found: **(a)** the latch is **reporting-only** — it modifies the
+stored `_contact_forces.weight_on_wheels` (read externally via `contactForces()`), but the control loop
+(the §5b apportionment gate and the settle fade) reads the *local* per-step geometric WoW, **not** the
+latch. So it is **not** the OQ-LG-22 failure (a latch that fed a synthetic full-weight force into the
+apportionment loop and capped go-arounds — that misuse of this same flag was already removed for the
+gear). **(b)** It is, however, the same *hidden-latched-state* smell: it adds a hysteresis state with no
+functional use beyond reporting, and serialized state that is easy to forget (the gear's OQ-LG-22
+lesson: prefer stateless detection over remembered state).
+
+**Alternatives:**
+
+1. **Stateless geometric WoW (recommended).** Report WoW from geometry every step:
+   `weight_on_wheels = (minCornerClearance_m < margin)` — true when any corner is at or below terrain
+   within a small margin (the hard constraint holds the deepest corner at clearance $\approx 0$ at rest,
+   so this reads true for a settled belly and false airborne). Eliminates `_body_in_hard_contact` and
+   its hysteresis/serialization entirely.
+   - **Benefits:** correct at static rest; no latched state to serialize or drift; aligns with the
+     OQ-LG-22 "no hidden latched state" lesson; removes the flag rather than persisting it.
+   - **Drawbacks:** if the same geometric WoW also replaces the **control-loop** gate (currently the
+     pre-integration per-step penetration, which *also* flickers for belly-only contact), that is a
+     behavior change to characterize; the clearance is computed post-integration, so feeding the control
+     loop incurs a one-step lag.
+   - **Prerequisites:** decide whether the geometric WoW feeds reporting only or also the control-loop
+     gate; a characterization test.
+
+2. **Keep the latch, serialize it.** Persist `_body_in_hard_contact` in JSON + proto.
+   - **Benefits:** minimal change.
+   - **Drawbacks:** keeps the hidden-state smell; the latch stays reporting-only with no functional
+     benefit over the geometric test; does not address the control-loop flicker for belly-only contact.
+   - **Prerequisites:** add the bool to the serialized state.
+
+3. **Force-only WoW (drop the latch, no substitute).** Report WoW purely from the instantaneous contact
+   force.
+   - **Benefits:** simplest; no state.
+   - **Drawbacks:** a settled belly reads WoW *false* (no static force) — wrong; regresses reporting.
+   - **Prerequisites:** none.
+
+**Recommendation.** Alternative 1 (stateless geometric WoW) for the reported flag; whether it also
+replaces the control-loop gate is a follow-on, characterized decision. It removes the latch and its
+serialization concern rather than persisting hidden state — the gear lesson applied to its spirit. Note
+this is **separate** from the `_has_landing_gear`/`_has_body_collider` deserialize defect (a plain bug,
+see the Serialization note), which must be fixed regardless of how OQ-BC-8 resolves.
 
 ### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
 
