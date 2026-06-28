@@ -479,17 +479,23 @@ behavior without re-supplying mass/`dt`).
 Per-volume configuration is geometry only: `name`, `half_extents_body_m`, `center_offset_body_m`. The
 field count is below the ten-field threshold for a standalone schema document; it is specified inline.
 
-> **Serialization defect (Aircraft-level — found during the §5c round-trip test, fix pending).**
-> `Aircraft::deserializeJson`/`deserializeProto` **read** `_has_landing_gear`/`_has_body_collider` to
-> gate restoring each subsystem's serialized block, but **never set those flags** (they are set only in
-> `initialize`). A fresh-constructed aircraft (flags default `false`) therefore **silently drops both
-> its landing gear and body collider on deserialize** — the `landing_gear_state` / `body_collider_config`
-> blocks are skipped and the subsystems are inactive in subsequent steps. This (not the reporting-only
-> `_body_in_hard_contact`) is the actual cause of the continued-step divergence the §5c serialization
-> test first hit. **Fix:** set `_has_landing_gear = j.contains("landing_gear_state")` and
-> `_has_body_collider = j.contains("body_collider_config")` (and the proto equivalents) before restoring.
-> It affects landing gear equally, so it should be tracked as an `Aircraft` serialization fix, not a
-> body-collider-only one.
+> **Aircraft serialization gaps (found during the §5c round-trip test — fixed, IP-BC-10).** A
+> deserialize-then-continue-step test (`Aircraft_BodyCollider_RoundTrip_PreservesSubsystem`) exposed a
+> *cluster* of pre-existing `Aircraft` serialization gaps, none body-collider-specific:
+> - **`_wa_q_lo_pa`/`_wa_q_hi_pa`** (the OQ-LG-24/26 w_a authority band edges) were not serialized and
+>   default to `0`. A degenerate `(0,0)` band makes `w_a = 1` at any `q > 0`, so a restored aircraft
+>   applies full load-factor authority at low `q` and α saturates to the box limit — **the actual cause
+>   of the continued-step divergence** (not the reporting-only `_body_in_hard_contact`, which was a red
+>   herring). Fixed: serialize both edges (JSON + proto).
+> - **`_has_landing_gear`/`_has_body_collider`** were read to gate restoring each subsystem block but
+>   never set (set only in `initialize`), so a fresh-constructed aircraft **silently dropped both its
+>   gear and collider** on deserialize. Fixed: set from block presence (JSON) / `has_*()` (proto).
+> - **Proto omitted the subsystems entirely** — `AircraftState` had no `landing_gear`/`body_collider`
+>   field (violating the JSON/proto symmetry rule). Fixed: added fields 71/72 and serialize/deserialize.
+> - **`_outer_dt_s`** was not serialized (defaulted to `0.02`, coincidentally matching; latent). Fixed:
+>   reconstructed as `_cmd_filter_dt_s · _cmd_filter_substeps`.
+> - **`_body_in_hard_contact`** now serialized too (correct round-trip of the reported WoW); interim
+>   pending the OQ-BC-8 latch-vs-stateless decision.
 
 ### Proto Message
 

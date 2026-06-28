@@ -748,6 +748,8 @@ nlohmann::json Aircraft::serializeJson() const {
     j["dtheta_wn_yaw_rad_s"]   = _dtheta_wn_yaw_rad_s;
     j["dtheta_zeta_nd"]        = _dtheta_zeta_nd;
     j["dtheta_vref_mps"]       = _dtheta_vref_mps;
+    j["wa_q_lo_pa"]            = _wa_q_lo_pa;   // OQ-LG-24/26 w_a band edges (derived, but not
+    j["wa_q_hi_pa"]            = _wa_q_hi_pa;   // reconstructable without the speed-ratio knobs)
     j["nz_relax_wn_rad_s"]     = _nz_relax_wn_rad_s;
     j["nz_relax_zeta_nd"]      = _nz_relax_zeta_nd;
     j["dtheta_stance_tau_s"]   = _dtheta_stance_tau_s;   // derived (= 1/nz_relax_wn_rad_s)
@@ -762,6 +764,7 @@ nlohmann::json Aircraft::serializeJson() const {
     if (_propulsion)      j["propulsion"]         = _propulsion->serializeJson();
     if (_has_landing_gear)  j["landing_gear_state"]   = _landing_gear.serializeJson();
     if (_has_body_collider) j["body_collider_config"]  = _body_collider.serializeJson();
+    j["body_in_hard_contact"] = _body_in_hard_contact;
     return j;
 }
 
@@ -786,6 +789,9 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _initial_state.deserializeJson(j.at("initial_state"));
     _cmd_filter_substeps = j.at("cmd_filter_substeps").get<int>();
     _cmd_filter_dt_s     = j.at("cmd_filter_dt_s").get<float>();
+    // Reconstruct the outer step (not serialized directly) — used by the LFA dt and the
+    // Δθ rate terms; without it a restored aircraft runs at dt = 0 (IP-BC-10).
+    _outer_dt_s          = _cmd_filter_dt_s * static_cast<float>(_cmd_filter_substeps);
     _nz_wn_rad_s         = j.at("nz_wn_rad_s").get<float>();
     _nz_zeta_nd          = j.at("nz_zeta_nd").get<float>();
     _ny_wn_rad_s         = j.at("ny_wn_rad_s").get<float>();
@@ -797,6 +803,8 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _dtheta_wn_yaw_rad_s   = j.value("dtheta_wn_yaw_rad_s",   _dtheta_wn_yaw_rad_s);
     _dtheta_zeta_nd        = j.value("dtheta_zeta_nd",        _dtheta_zeta_nd);
     _dtheta_vref_mps       = j.value("dtheta_vref_mps",       _dtheta_vref_mps);
+    _wa_q_lo_pa            = j.value("wa_q_lo_pa",            _wa_q_lo_pa);
+    _wa_q_hi_pa            = j.value("wa_q_hi_pa",            _wa_q_hi_pa);
     _nz_relax_wn_rad_s     = j.value("nz_relax_wn_rad_s",     _nz_relax_wn_rad_s);
     _nz_relax_zeta_nd      = j.value("nz_relax_zeta_nd",      _nz_relax_zeta_nd);
     _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
@@ -867,12 +875,14 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     if (_propulsion) {
         _propulsion->deserializeJson(j.at("propulsion"));
     }
-    if (_has_landing_gear && j.contains("landing_gear_state")) {
-        _landing_gear.deserializeJson(j.at("landing_gear_state"));
-    }
-    if (_has_body_collider && j.contains("body_collider_config")) {
-        _body_collider.deserializeJson(j.at("body_collider_config"));
-    }
+    // Restore subsystem presence from the serialized blocks (IP-BC-10): a
+    // fresh-constructed aircraft defaults these flags to false, so they must be set
+    // here or the gear/collider are silently dropped on deserialize.
+    _has_landing_gear  = j.contains("landing_gear_state");
+    _has_body_collider = j.contains("body_collider_config");
+    if (_has_landing_gear)  _landing_gear.deserializeJson(j.at("landing_gear_state"));
+    if (_has_body_collider) _body_collider.deserializeJson(j.at("body_collider_config"));
+    _body_in_hard_contact = j.value("body_in_hard_contact", false);
 }
 
 // Helper: parse bytes into a proto sub-message of type T.
@@ -935,6 +945,8 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_dtheta_wn_yaw_rad_s(_dtheta_wn_yaw_rad_s);
     proto.set_dtheta_zeta_nd(_dtheta_zeta_nd);
     proto.set_dtheta_vref_mps(_dtheta_vref_mps);
+    proto.set_wa_q_lo_pa(_wa_q_lo_pa);
+    proto.set_wa_q_hi_pa(_wa_q_hi_pa);
     proto.set_dtheta_stance_tau_s(_dtheta_stance_tau_s);
     proto.set_nz_relax_wn_rad_s(_nz_relax_wn_rad_s);
     proto.set_nz_relax_zeta_nd(_nz_relax_zeta_nd);
@@ -961,6 +973,10 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     if (_aeroPerf)  *proto.mutable_aero_performance()  = parseSubMessage<las_proto::AeroPerformanceParams>(_aeroPerf->serializeProto());
     *proto.mutable_airframe() = parseSubMessage<las_proto::AirframePerformanceParams>(_airframe.serializeProto());
     *proto.mutable_inertia()  = parseSubMessage<las_proto::InertiaParams>(_inertia.serializeProto());
+    // Optional contact subsystems (IP-BC-10): serialize when present.
+    if (_has_landing_gear)  *proto.mutable_landing_gear()  = parseSubMessage<las_proto::LandingGearState>(_landing_gear.serializeProto());
+    if (_has_body_collider) *proto.mutable_body_collider() = parseSubMessage<las_proto::BodyColliderParams>(_body_collider.serializeProto());
+    proto.set_body_in_hard_contact(_body_in_hard_contact);
 
     if (_propulsion) {
         if (auto* jet = dynamic_cast<PropulsionJet*>(_propulsion.get()))
@@ -991,10 +1007,18 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _allocator.emplace(*_liftCurve, 1.0f, -0.1f);
     _allocator->deserializeProto(serializeSubMessage(proto.allocator()));
 
+    // Optional contact subsystems (IP-BC-10): restore presence + state from the proto.
+    _has_landing_gear  = proto.has_landing_gear();
+    _has_body_collider = proto.has_body_collider();
+    if (_has_landing_gear)  _landing_gear.deserializeProto(serializeSubMessage(proto.landing_gear()));
+    if (_has_body_collider) _body_collider.deserializeProto(serializeSubMessage(proto.body_collider()));
+    _body_in_hard_contact = proto.body_in_hard_contact();
+
     _state.deserializeProto(serializeSubMessage(proto.kinematic_state()));
     _initial_state.deserializeProto(serializeSubMessage(proto.initial_state()));
     _cmd_filter_substeps = proto.cmd_filter_substeps();
     _cmd_filter_dt_s     = proto.cmd_filter_dt_s();
+    _outer_dt_s          = _cmd_filter_dt_s * static_cast<float>(_cmd_filter_substeps);  // IP-BC-10
     _nz_wn_rad_s         = proto.nz_wn_rad_s();
     _nz_zeta_nd          = proto.nz_zeta_nd();
     _ny_wn_rad_s         = proto.ny_wn_rad_s();
@@ -1006,6 +1030,8 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _dtheta_wn_yaw_rad_s   = proto.dtheta_wn_yaw_rad_s();
     _dtheta_zeta_nd        = proto.dtheta_zeta_nd();
     _dtheta_vref_mps       = proto.dtheta_vref_mps();
+    _wa_q_lo_pa            = proto.wa_q_lo_pa();
+    _wa_q_hi_pa            = proto.wa_q_hi_pa();
     _nz_relax_wn_rad_s     = proto.nz_relax_wn_rad_s();
     _nz_relax_zeta_nd      = proto.nz_relax_zeta_nd();
     _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;

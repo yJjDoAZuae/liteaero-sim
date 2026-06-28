@@ -273,6 +273,13 @@ message AircraftState {
     float          bc_fz_stance_filter_x1    = 68;
     float          bc_force_x0               = 69;
     float          bc_force_x1               = 70;
+    // Optional contact subsystems (IP-BC-10): serialized when present so a proto
+    // round-trip preserves the landing gear and body collider (JSON/proto symmetry).
+    LandingGearState   landing_gear  = 71;
+    BodyColliderParams body_collider = 72;
+    bool               body_in_hard_contact = 73;  // body-contact WoW latch (see OQ-BC-8)
+    float              wa_q_lo_pa            = 74;  // OQ-LG-24/26 w_a band edges (derived state)
+    float              wa_q_hi_pa            = 75;
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

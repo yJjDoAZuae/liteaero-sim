@@ -34,7 +34,7 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-7 | done | Apply the tangential force $-\mu F_\text{pen}\hat{\mathbf v}_{t,\text{reg}} - k_\text{visc} b_\text{corner}\mathbf v_t$ at penetrating corners in `BodyCollider::step`, Coulomb direction regularized by `kSlipRegMps` | IP-BC-5, IP-BC-6 | [body_collider.md §5d](../design/body_collider.md) |
 | IP-BC-8 | done | Added the parallel body-collider rotation-filter set in `Aircraft` (OQ-BC-6 → Alt 2): `_bc_dtheta_{pitch,roll,yaw}_filter` + collider force-channel `_bc_force_x`/`_bc_fz_stance_filter`, configured identically to the gear set, reset-cleared, and serialized (JSON + 10 new proto fields) | — | [body_collider.md §5c, OQ-BC-6](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md) |
 | IP-BC-9 | done | Separated gear/collider force+moment at step 5a; the §5c Δθ block now sums per-source channels (force via a `forceChannel` lambda, moment per axis), behavior-preserving by linearity. Regression net: all existing gear-only and bc-only tests pass unchanged; `BodyColliderImpact_RotationState_RoundTrips` verifies the new collider rotation state round-trips through JSON + proto | IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
-| IP-BC-10 | todo | **Bug fix (Aircraft-level):** `deserializeJson`/`deserializeProto` set `_has_landing_gear`/`_has_body_collider` from serialized-block presence before restoring, so a deserialized aircraft keeps its gear/collider; add a deserialize-then-step regression (continued step matches the original) | — | [body_collider.md Serialization](../design/body_collider.md) |
+| IP-BC-10 | done | **Bug fix (Aircraft-level serialization cluster):** fixed `_has_landing_gear`/`_has_body_collider` not restored (JSON + added proto subsystem fields 71/72), the **w_a band edges** `_wa_q_lo_pa`/`_wa_q_hi_pa` not serialized (the actual α-saturation cause), `_outer_dt_s` (reconstructed), and `_body_in_hard_contact`. Regression: `BodyColliderRoundTrip_PreservesSubsystem_ContinuedStepMatches` (deserialize-then-step matches the original through JSON + proto) | — | [body_collider.md Serialization](../design/body_collider.md) |
 | IP-BC-11 | blocked (OQ-BC-8) | Replace the reporting-only `_body_in_hard_contact` latch with a stateless geometric WoW (`minCornerClearance_m < margin`) per the OQ-BC-8 resolution; characterization test if it also feeds the control-loop gate | — | [body_collider.md OQ-BC-8](../design/body_collider.md) |
 
 > **IP-BC-11 blocked reason:** OQ-BC-8 (latched vs stateless-geometric WoW, and whether the geometric
@@ -72,15 +72,12 @@ tests.)
 - **JSON config dead-key strip — done.** `stiffness_npm`/`damping_nspm` removed from all 9
   `configs/*.json` body-collider volumes (validated). `test/data/aircraft/*.json` and
   `python/assets/` carry no such keys; `gen_test_assets.py` writes no body-collider section.
-- **Serialization defect discovered (Aircraft-level, fix pending) — IP-BC-10.** `Aircraft::deserializeJson`/
-  `deserializeProto` read `_has_landing_gear`/`_has_body_collider` to gate restoring each subsystem but
-  **never set those flags** (set only in `initialize`), so a fresh-constructed aircraft **silently drops
-  its landing gear and body collider on deserialize**. This — not the reporting-only
-  `_body_in_hard_contact` (my earlier attribution was wrong) — is the actual cause of the continued-step
-  divergence the §5c round-trip test first hit. Fix: set the `_has_*` flags from block presence
-  (`j.contains("landing_gear_state")` / `"body_collider_config"`, and proto equivalents) before
-  restoring; add a deserialize-then-step regression. Affects landing gear equally. (Design write-up:
-  [body_collider.md Serialization note](../design/body_collider.md).)
+- **Aircraft serialization cluster — fixed (IP-BC-10).** The deserialize-then-step regression exposed
+  several pre-existing `Aircraft` serialization gaps (none body-collider-specific): the **w_a band edges**
+  (`_wa_q_lo_pa`/`_wa_q_hi_pa`, the actual α-saturation cause), `_has_landing_gear`/`_has_body_collider`
+  not restored (gear/collider silently dropped), the **proto omitting both subsystems** entirely,
+  `_outer_dt_s` (latent), and `_body_in_hard_contact`. All fixed; `_body_in_hard_contact` (reporting-only)
+  was a red herring. (Design write-up: [body_collider.md Serialization note](../design/body_collider.md).)
 - **WoW detection design — OQ-BC-8 (open) → IP-BC-11.** `_body_in_hard_contact` is a reporting-only
   latch (it does **not** feed the control loop — that was the OQ-LG-22 misuse, already removed for the
   gear). Recommended replacement: a stateless geometric WoW (`minCornerClearance_m < margin`) that

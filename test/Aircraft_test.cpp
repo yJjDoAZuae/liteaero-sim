@@ -1083,6 +1083,53 @@ TEST(AircraftTest, BodyColliderImpact_RotationState_RoundTrips) {
     EXPECT_NEAR(jp.at("bc_force_x").at(1).get<float>(), bc_fx1, 1e-6f);
 }
 
+TEST(AircraftTest, BodyColliderRoundTrip_PreservesSubsystem_ContinuedStepMatches) {
+    // IP-BC-10: a deserialized aircraft must keep its body collider (and gear). The
+    // deserialize must restore the `_has_body_collider` flag (JSON) and serialize the
+    // subsystem at all (proto). Otherwise the restored aircraft falls freely and α
+    // saturates — verified here by a continued-step comparison against the original.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+    auto cfg = addBodyCollider(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 5.0;
+    cfg["initial_state"]["velocity_north_mps"] = 0.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+
+    auto ac1 = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac1->initialize(cfg, 0.02f);
+    ac1->setTerrain(&terrain);
+    ac1->reset();
+
+    const liteaero::simulation::AircraftCommand cmd;
+    constexpr float kDt = 0.02f;
+    for (int i = 1; i <= 60; ++i)
+        ac1->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+
+    liteaero::simulation::Aircraft ac_json(std::make_unique<StubPropulsion>(0.0f));
+    ac_json.deserializeJson(ac1->serializeJson());
+    ac_json.setTerrain(&terrain);
+
+    liteaero::simulation::Aircraft ac_proto(std::make_unique<StubPropulsion>(0.0f));
+    ac_proto.deserializeProto(ac1->serializeProto());
+    ac_proto.setTerrain(&terrain);
+
+    const double t_next = 61 * static_cast<double>(kDt);
+    ac1->step(t_next, cmd, Eigen::Vector3f::Zero(), 1.225f);
+    ac_json.step(t_next, cmd, Eigen::Vector3f::Zero(), 1.225f);
+    ac_proto.step(t_next, cmd, Eigen::Vector3f::Zero(), 1.225f);
+
+    // The restored aircraft must still be held near terrain (collider active), matching
+    // the original's continued step — not falling freely with α at the box limit.
+    EXPECT_NEAR(ac_json.state().alpha(),  ac1->state().alpha(),  1e-4f);
+    EXPECT_NEAR(ac_proto.state().alpha(), ac1->state().alpha(),  1e-4f);
+    EXPECT_NEAR(ac_json.state().velocity_NED_mps().z(),
+                ac1->state().velocity_NED_mps().z(), 1e-3f);
+    EXPECT_NEAR(ac_proto.state().velocity_NED_mps().z(),
+                ac1->state().velocity_NED_mps().z(), 1e-3f);
+}
+
 TEST(AircraftTest, LandingGear_DthetaState_NonzeroAfterContact) {
     // The Δθ force channel (G(s) on the destanced/faded gear vertical load) and the
     // moment channel (H₂ on M/I) are both driven during gear contact. After a few
