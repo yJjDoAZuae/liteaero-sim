@@ -763,6 +763,99 @@ TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
         << last_v_down_mps << " m/s";
 }
 
+TEST(AircraftTest, BodyColliderOnly_Landing_DoesNotOscillateAfterContact) {
+    // Regression for the body-collider post-contact limit cycle: after the belly first
+    // reaches the surface the attitude and weight-on-wheels state must SETTLE, not enter a
+    // sustained high-frequency oscillation at (or near) the integration rate. A physical
+    // inelastic belly contact splits momentum smoothly through the moment arm; it does not
+    // make instantaneous, alternating attitude corrections every step.
+    //
+    // The earlier BodyColliderOnly_Landing test only checked endpoints (max AGL, final
+    // v_down) and so completely missed this — it is a dynamics defect visible only in the
+    // time history of pitch and WoW. This test records both and fails on chatter.
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+
+    auto cfg = addBodyCollider(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = 5.0;
+    cfg["initial_state"]["velocity_north_mps"] = 55.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 2.0;
+
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+    ac->setTerrain(&terrain);
+    ac->reset();
+
+    const liteaero::simulation::AircraftCommand cmd;  // n_z=1, throttle=0
+
+    constexpr float kDt          = 0.02f;
+    constexpr float kBodyHalfZ_m = 0.3f;
+    constexpr int   kSteps       = static_cast<int>(14.0f / kDt);  // 14 s
+
+    std::vector<float> pitch_rad;
+    std::vector<unsigned char> wow;
+    pitch_rad.reserve(kSteps);
+    wow.reserve(kSteps);
+
+    int contact_step = -1;
+    for (int i = 1; i <= kSteps; ++i) {
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+        pitch_rad.push_back(ac->state().pitch());
+        wow.push_back(ac->weightOnWheels() ? 1u : 0u);
+        if (contact_step < 0 && ac->agl_m() <= kBodyHalfZ_m + 0.15f) {
+            contact_step = i - 1;  // index into the recorded vectors
+        }
+    }
+    ASSERT_GE(contact_step, 0) << "body collider must bring the aircraft to the surface";
+
+    // --- Metric 1: pitch-rate sign reversals after contact -------------------------------
+    // A settling trajectory changes pitch direction only a handful of times (sink, small
+    // nose-down, converge). An integration-frequency limit cycle reverses almost every step.
+    // Count reversals of the per-step pitch increment, ignoring increments below a small
+    // deadband so float noise near steady state is not counted.
+    constexpr float kPitchDeadband_rad = 5e-5f;  // ~0.003 deg/step
+    int   pitch_reversals = 0;
+    float prev_signed_incr = 0.f;
+    float late_pitch_min =  std::numeric_limits<float>::max();
+    float late_pitch_max = -std::numeric_limits<float>::max();
+    const int late_start = contact_step + static_cast<int>(2.0f / kDt);  // 2 s after contact
+    for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < pitch_rad.size(); ++i) {
+        const float incr = pitch_rad[i] - pitch_rad[i - 1];
+        if (std::abs(incr) >= kPitchDeadband_rad) {
+            if (prev_signed_incr != 0.f && (incr > 0.f) != (prev_signed_incr > 0.f)) {
+                ++pitch_reversals;
+            }
+            prev_signed_incr = incr;
+        }
+        if (static_cast<int>(i) >= late_start) {
+            late_pitch_min = std::min(late_pitch_min, pitch_rad[i]);
+            late_pitch_max = std::max(late_pitch_max, pitch_rad[i]);
+        }
+    }
+    const float late_pitch_p2p_deg =
+        (late_pitch_max - late_pitch_min) * 180.0f / 3.14159265f;
+
+    // --- Metric 2: weight-on-wheels transitions after contact ----------------------------
+    int wow_transitions = 0;
+    for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < wow.size(); ++i) {
+        if (wow[i] != wow[i - 1]) ++wow_transitions;
+    }
+
+    const int steps_after_contact = static_cast<int>(pitch_rad.size()) - contact_step - 1;
+
+    // Physical settling: very few direction changes and a near-constant late-window pitch.
+    EXPECT_LE(pitch_reversals, 25)
+        << "pitch oscillates after contact: " << pitch_reversals << " sign reversals over "
+        << steps_after_contact << " post-contact steps (integration-frequency limit cycle)";
+    EXPECT_LE(wow_transitions, 8)
+        << "weight-on-wheels chatters after contact: " << wow_transitions
+        << " transitions over " << steps_after_contact << " post-contact steps";
+    EXPECT_LE(late_pitch_p2p_deg, 1.0f)
+        << "pitch does not settle: late-window peak-to-peak " << late_pitch_p2p_deg << " deg";
+}
+
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {
     // No landing gear — body collider is the only contact model.
     // Aircraft starts at 5 m AGL, stationary.  At zero airspeed q_inf = 0 so

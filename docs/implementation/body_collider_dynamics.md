@@ -35,10 +35,14 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-8 | done | Added the parallel body-collider rotation-filter set in `Aircraft` (OQ-BC-6 → Alt 2): `_bc_dtheta_{pitch,roll,yaw}_filter` + collider force-channel `_bc_force_x`/`_bc_fz_stance_filter`, configured identically to the gear set, reset-cleared, and serialized (JSON + 10 new proto fields) | — | [body_collider.md §5c, OQ-BC-6](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md) |
 | IP-BC-9 | done | Separated gear/collider force+moment at step 5a; the §5c Δθ block now sums per-source channels (force via a `forceChannel` lambda, moment per axis), behavior-preserving by linearity. Regression net: all existing gear-only and bc-only tests pass unchanged; `BodyColliderImpact_RotationState_RoundTrips` verifies the new collider rotation state round-trips through JSON + proto | IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
 | IP-BC-10 | done | **Bug fix (Aircraft-level serialization cluster):** fixed `_has_landing_gear`/`_has_body_collider` not restored (JSON + added proto subsystem fields 71/72), the **w_a band edges** `_wa_q_lo_pa`/`_wa_q_hi_pa` not serialized (the actual α-saturation cause), `_outer_dt_s` (reconstructed), and `_body_in_hard_contact`. Regression: `BodyColliderRoundTrip_PreservesSubsystem_ContinuedStepMatches` (deserialize-then-step matches the original through JSON + proto) | — | [body_collider.md Serialization](../design/body_collider.md) |
-| IP-BC-11 | blocked (OQ-BC-8) | Replace the reporting-only `_body_in_hard_contact` latch with a stateless geometric WoW (`minCornerClearance_m < margin`) per the OQ-BC-8 resolution; characterization test if it also feeds the control-loop gate | — | [body_collider.md OQ-BC-8](../design/body_collider.md) |
+| IP-BC-11 | blocked (OQ-BC-8) | Replace the chattering per-step penetration WoW with a stateless geometric WoW (`minCornerClearance_m < margin`) for **both** reporting and the **control-loop gate** (the settle/apportionment), removing the `_body_in_hard_contact` latch. The post-contact limit-cycle regression `BodyColliderOnly_Landing_DoesNotOscillateAfterContact` is the guard (already written; fails on baseline, passes with the geometric WoW) | — | [body_collider.md OQ-BC-8](../design/body_collider.md) |
 
 > **IP-BC-11 blocked reason:** OQ-BC-8 (latched vs stateless-geometric WoW, and whether the geometric
 > test feeds the control-loop gate or reporting only) is an open design decision. Resolve OQ-BC-8 first.
+> **Severity update:** the control-loop gate is no longer optional — the chattering per-step WoW gates
+> the OQ-LG-23 settle term and produces a non-physical integration-frequency pitch limit cycle after
+> belly contact (581 pitch reversals over 584 post-contact steps; see the OQ-BC-8 "Update" note). The
+> geometric WoW on the control-loop gate eliminates it. The failing regression is already in the suite.
 
 ---
 

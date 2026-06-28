@@ -560,6 +560,35 @@ gear). **(b)** It is, however, the same *hidden-latched-state* smell: it adds a 
 functional use beyond reporting, and serialized state that is easy to forget (the gear's OQ-LG-22
 lesson: prefer stateless detection over remembered state).
 
+**Update — the control-loop flicker is an active defect, not a cosmetic follow-on.** A post-contact
+time-history regression (`BodyColliderOnly_Landing_DoesNotOscillateAfterContact`, a belly landing at
+55 m/s) exposed a non-physical **integration-frequency limit cycle**: after first contact the pitch
+attitude reverses direction almost every step (**581 reversals over 584 post-contact steps**, 5.8°
+peak-to-peak even in the settled window). Bisection by selectively disabling each contribution
+localized the driver unambiguously:
+
+- It is **not** the §5c Δθ rotational channel (zeroing the body-collider Δθ contribution changed
+  nothing) and **not** a velocity-direction effect (the flight-path angle is steady at ≈ −0.0036 rad).
+- The pitch equals $\alpha_\text{body}$, and $\alpha$ tracks `n_z_shaped`, which **slams between 1.0 and
+  0.0 every step**. The term forcing it to zero is the OQ-LG-23 axial-acceleration **settle term**,
+  whose gate is $\varphi_g = \text{WoW}\cdot s_\text{unload}$. The *control-loop* WoW (the local
+  per-step penetration flag, **not** the reporting latch) **chatters every step**: the §5b hard
+  constraint projects the penetrating pose back to the surface, so the next step's pre-integration pose
+  is clear (WoW false) before gravity re-penetrates it (WoW true). Because the belly landing is
+  decelerating hard, the settle increment is clipped to ≈ −1.0 whenever WoW is true, so the gate
+  toggling on/off drives commanded lift — and hence $\alpha$ and pitch — fully on/off at the
+  integration rate.
+- Replacing the control-loop WoW with the **stateless geometric clearance-margin** test
+  (`minCornerClearance_m < margin`, Alternative 1) makes the regression **pass outright** (reversals
+  and peak-to-peak both within physical settling bounds): a belly resting within the margin reports
+  WoW *continuously* true, so the settle gate stops toggling.
+
+The mechanism is the body-collider analog of the gear settle/WoW coupling: the gear strut is a stateful
+spring-damper that stays loaded continuously on the ground, so its WoW does not chatter; the body
+collider has no persistent contact state and the hard constraint removes the penetration each step, so
+a **per-step** WoW necessarily flickers. The resolution therefore must replace the **control-loop**
+gate (not merely the reported flag) with a stateless, hysteresis-free geometric WoW.
+
 **Alternatives:**
 
 1. **Stateless geometric WoW (recommended).** Report WoW from geometry every step:
