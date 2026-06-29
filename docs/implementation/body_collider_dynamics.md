@@ -37,12 +37,21 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-10 | done | **Bug fix (Aircraft-level serialization cluster):** fixed `_has_landing_gear`/`_has_body_collider` not restored (JSON + added proto subsystem fields 71/72), the **w_a band edges** `_wa_q_lo_pa`/`_wa_q_hi_pa` not serialized (the actual α-saturation cause), `_outer_dt_s` (reconstructed), and `_body_in_hard_contact`. Regression: `BodyColliderRoundTrip_PreservesSubsystem_ContinuedStepMatches` (deserialize-then-step matches the original through JSON + proto) | — | [body_collider.md Serialization](../design/body_collider.md) |
 | IP-BC-11 | blocked (OQ-BC-8) | Replace the chattering per-step penetration WoW with a stateless geometric WoW (`minCornerClearance_m < margin`) for **both** reporting and the **control-loop gate** (the settle/apportionment), removing the `_body_in_hard_contact` latch. The post-contact limit-cycle regression `BodyColliderOnly_Landing_DoesNotOscillateAfterContact` is the guard (already written; fails on baseline, passes with the geometric WoW) | — | [body_collider.md OQ-BC-8](../design/body_collider.md) |
 
-> **IP-BC-11 blocked reason:** OQ-BC-8 (latched vs stateless-geometric WoW, and whether the geometric
-> test feeds the control-loop gate or reporting only) is an open design decision. Resolve OQ-BC-8 first.
-> **Severity update:** the control-loop gate is no longer optional — the chattering per-step WoW gates
-> the OQ-LG-23 settle term and produces a non-physical integration-frequency pitch limit cycle after
-> belly contact (581 pitch reversals over 584 post-contact steps; see the OQ-BC-8 "Update" note). The
-> geometric WoW on the control-loop gate eliminates it. The failing regression is already in the suite.
+| IP-BC-12 | blocked (OQ-BC-9) | Resolve the envelope-wide post-impact limit cycle: decouple body-collider contact from the FBW rollout lift-shaping loop (settle + n_z apportionment), paired with aero-lift suppression while body-collider contact is the active contact, per the OQ-BC-9 resolution. Guard: the four-case impact envelope suite (`BodyColliderOnly_Landing_DoesNotOscillate`, `_SteepDiveImpact`, `_VerticalMaxSpeedImpact`, `_InvertedImpact`) plus the gear regressions | — | [body_collider.md OQ-BC-9](../design/body_collider.md) |
+
+> **IP-BC-11 blocked reason:** OQ-BC-8 (latched vs stateless-geometric WoW) is an open design decision.
+> Resolve OQ-BC-8 first. **The geometric WoW is necessary but NOT sufficient** — it fixes only the shallow
+> belly case (see IP-BC-12 / OQ-BC-9).
+>
+> **IP-BC-12 blocked reason (the real defect):** the body-collider post-impact behavior is a non-physical
+> limit cycle across most of the impact envelope — shallow (581 pitch reversals / 584 steps, 5.8° p2p),
+> steep −53° (56 reversals, 44° p2p), and inverted (480 reversals, 41° p2p); only the Vne-vertical case is
+> clean (its near-normal velocity is fully arrested by the inelastic constraint, leaving negligible
+> **tangential** airspeed → post-impact q below the aero band → lift loop dormant). Root cause: the FBW
+> load-factor lift-shaping loop (OQ-LG-23
+> settle term + n_z apportionment) is driven by body-collider contact and fights the backstop. No single
+> localized fix resolves the envelope (see the OQ-BC-9 evidence table). The four failing envelope
+> regressions are already in the suite (3 fail today: shallow/steep/inverted; vertical passes).
 
 ---
 

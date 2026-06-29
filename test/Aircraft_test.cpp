@@ -591,6 +591,108 @@ static nlohmann::json addBodyCollider(nlohmann::json config) {
     return config;
 }
 
+// Post-contact dynamics metrics for body-collider impact scenarios. A crash backstop must,
+// at ANY impact angle/speed: stay finite, arrest the descent, not sink through terrain, and
+// settle without a high-frequency attitude/WoW limit cycle.
+struct BodyImpactMetrics {
+    bool  reached_contact     = false;
+    int   pitch_reversals     = 0;   // direction changes of pitch after contact (limit-cycle proxy)
+    int   wow_transitions     = 0;   // weight-on-wheels toggles after contact
+    float late_pitch_p2p_deg  = 0.f; // peak-to-peak pitch in the settled window
+    float final_v_down_mps    = 0.f; // settled NED-down velocity (descent arrest)
+    float min_agl_m           = 0.f; // deepest CG-AGL excursion (transient tunneling proxy)
+    float final_agl_m         = 0.f; // settled CG altitude above terrain (non-penetration)
+    float roll_at_contact_deg = 0.f; // |roll| at first contact (for the inverted case)
+    bool  all_finite          = true;
+    int   steps_after_contact = 0;
+};
+
+// Runs a gear-less body-collider impact from the given entry velocity/altitude and returns the
+// post-contact metrics. Terrain is flat at 0 m. n_z=1, no thrust (StubPropulsion 0). An optional
+// wind-frame roll-rate command (held for roll_until_s, then released) lets a scenario roll the
+// airframe — e.g. to an inverted attitude — before it descends into terrain.
+static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_mps,
+                                               float altitude_m, float sim_time_s,
+                                               float contact_agl_thresh_m,
+                                               float roll_rate_rps = 0.f,
+                                               float roll_until_s  = 0.f) {
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+
+    auto cfg = addBodyCollider(makeConfig());
+    cfg["initial_state"]["altitude_m"]         = altitude_m;
+    cfg["initial_state"]["velocity_north_mps"] = v_north_mps;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = v_down_mps;
+
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    constexpr float kDt = 0.02f;
+    ac->initialize(cfg, kDt);
+    ac->setTerrain(&terrain);
+    ac->reset();
+
+    liteaero::simulation::AircraftCommand cmd;  // n_z=1, throttle=0
+    const int kSteps = static_cast<int>(sim_time_s / kDt);
+
+    std::vector<float> pitch_rad;
+    std::vector<unsigned char> wow;
+    pitch_rad.reserve(kSteps);
+    wow.reserve(kSteps);
+
+    BodyImpactMetrics m;
+    m.min_agl_m = std::numeric_limits<float>::max();
+    int contact_step = -1;
+
+    for (int i = 1; i <= kSteps; ++i) {
+        const float t = i * kDt;
+        cmd.rollRate_Wind_rps = (t <= roll_until_s) ? roll_rate_rps : 0.f;
+        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
+        const float pitch = ac->state().pitch();
+        const Eigen::Vector3f& v = ac->state().velocity_NED_mps();
+        const float agl = ac->agl_m();
+        if (!std::isfinite(pitch) || !std::isfinite(agl) ||
+            !std::isfinite(v.x()) || !std::isfinite(v.y()) || !std::isfinite(v.z())) {
+            m.all_finite = false;
+        }
+        pitch_rad.push_back(pitch);
+        wow.push_back(ac->weightOnWheels() ? 1u : 0u);
+        m.min_agl_m = std::min(m.min_agl_m, agl);
+        if (contact_step < 0 && agl <= contact_agl_thresh_m) {
+            contact_step = i - 1;
+            m.roll_at_contact_deg = std::abs(ac->state().roll()) * 180.0f / 3.14159265f;
+        }
+    }
+
+    m.final_v_down_mps = ac->state().velocity_NED_mps().z();
+    m.final_agl_m      = ac->agl_m();
+    if (contact_step < 0) return m;  // never reached terrain
+    m.reached_contact      = true;
+    m.steps_after_contact  = static_cast<int>(pitch_rad.size()) - contact_step - 1;
+
+    constexpr float kPitchDeadband_rad = 5e-5f;
+    float prev_signed_incr = 0.f;
+    float late_min =  std::numeric_limits<float>::max();
+    float late_max = -std::numeric_limits<float>::max();
+    const int late_start = contact_step + static_cast<int>(2.0f / kDt);
+    for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < pitch_rad.size(); ++i) {
+        const float incr = pitch_rad[i] - pitch_rad[i - 1];
+        if (std::abs(incr) >= kPitchDeadband_rad) {
+            if (prev_signed_incr != 0.f && (incr > 0.f) != (prev_signed_incr > 0.f))
+                ++m.pitch_reversals;
+            prev_signed_incr = incr;
+        }
+        if (static_cast<int>(i) >= late_start) {
+            late_min = std::min(late_min, pitch_rad[i]);
+            late_max = std::max(late_max, pitch_rad[i]);
+        }
+        if (wow[i] != wow[i - 1]) ++m.wow_transitions;
+    }
+    if (late_max >= late_min)
+        m.late_pitch_p2p_deg = (late_max - late_min) * 180.0f / 3.14159265f;
+    return m;
+}
+
 }  // namespace
 
 TEST(AircraftTest, LandingGear_Airborne_ZeroContact) {
@@ -764,96 +866,108 @@ TEST(AircraftTest, BodyColliderOnly_Landing_StaysNearTerrain) {
 }
 
 TEST(AircraftTest, BodyColliderOnly_Landing_DoesNotOscillateAfterContact) {
-    // Regression for the body-collider post-contact limit cycle: after the belly first
-    // reaches the surface the attitude and weight-on-wheels state must SETTLE, not enter a
-    // sustained high-frequency oscillation at (or near) the integration rate. A physical
-    // inelastic belly contact splits momentum smoothly through the moment arm; it does not
-    // make instantaneous, alternating attitude corrections every step.
+    // Regression for the body-collider post-contact limit cycle: after the belly first reaches
+    // the surface the attitude and weight-on-wheels state must SETTLE, not enter a sustained
+    // high-frequency oscillation at (or near) the integration rate. The earlier
+    // BodyColliderOnly_Landing test only checked endpoints (max AGL, final v_down) and so
+    // completely missed this — it is a dynamics defect visible only in the time history.
     //
-    // The earlier BodyColliderOnly_Landing test only checked endpoints (max AGL, final
-    // v_down) and so completely missed this — it is a dynamics defect visible only in the
-    // time history of pitch and WoW. This test records both and fails on chatter.
-    using namespace liteaero::terrain;
-    FlatTerrain terrain{0.0f};
+    // Shallow approach: 55 m/s forward, 2 m/s sink (FPA ≈ −2°).
+    const BodyImpactMetrics m = runBodyColliderImpact(
+        /*v_north*/ 55.0f, /*v_down*/ 2.0f, /*altitude*/ 5.0f, /*sim_time*/ 14.0f,
+        /*contact_agl_thresh*/ 0.3f + 0.15f);
 
-    auto cfg = addBodyCollider(makeConfig());
-    cfg["initial_state"]["altitude_m"]         = 5.0;
-    cfg["initial_state"]["velocity_north_mps"] = 55.0;
-    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
-    cfg["initial_state"]["velocity_down_mps"]  = 2.0;
+    ASSERT_TRUE(m.reached_contact) << "body collider must bring the aircraft to the surface";
+    EXPECT_TRUE(m.all_finite) << "state must remain finite";
+    EXPECT_LE(m.pitch_reversals, 25)
+        << "pitch oscillates after contact: " << m.pitch_reversals << " sign reversals over "
+        << m.steps_after_contact << " post-contact steps (integration-frequency limit cycle)";
+    EXPECT_LE(m.wow_transitions, 8)
+        << "weight-on-wheels chatters after contact: " << m.wow_transitions << " transitions";
+    EXPECT_LE(m.late_pitch_p2p_deg, 1.0f)
+        << "pitch does not settle: late-window peak-to-peak " << m.late_pitch_p2p_deg << " deg";
+}
 
-    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
-        std::make_unique<StubPropulsion>(0.0f));
-    ac->initialize(cfg, 0.02f);
-    ac->setTerrain(&terrain);
-    ac->reset();
+TEST(AircraftTest, BodyColliderOnly_SteepDiveImpact_ArrestsWithoutOscillation) {
+    // Steep, high-energy impact — the regime the body collider exists for (the gear does not
+    // cover it). 30 m/s forward, 40 m/s sink: speed 50 m/s, flight-path angle ≈ −53°. The
+    // backstop must arrest the descent, hold the airframe out of the terrain, and settle
+    // without a high-frequency attitude/WoW limit cycle.
+    const BodyImpactMetrics m = runBodyColliderImpact(
+        /*v_north*/ 30.0f, /*v_down*/ 40.0f, /*altitude*/ 5.0f, /*sim_time*/ 12.0f,
+        /*contact_agl_thresh*/ 1.3f);
 
-    const liteaero::simulation::AircraftCommand cmd;  // n_z=1, throttle=0
+    ASSERT_TRUE(m.reached_contact) << "steep dive must reach the surface";
+    EXPECT_TRUE(m.all_finite) << "state must remain finite through a steep impact";
+    // Descent arrested — not still plunging through terrain.
+    EXPECT_GT(m.final_v_down_mps, -0.5f);
+    EXPECT_LT(m.final_v_down_mps, 1.0f)
+        << "steep impact not arrested; final v_down " << m.final_v_down_mps << " m/s";
+    // Non-penetration: CG settles at/above terrain (transient one-step tunneling allowed).
+    EXPECT_GT(m.final_agl_m, -0.10f)
+        << "airframe sank through terrain; final AGL " << m.final_agl_m << " m";
+    // No integration-frequency limit cycle.
+    EXPECT_LE(m.pitch_reversals, 30)
+        << "pitch oscillates after steep impact: " << m.pitch_reversals << " reversals over "
+        << m.steps_after_contact << " steps";
+    EXPECT_LE(m.late_pitch_p2p_deg, 2.0f)
+        << "pitch does not settle after steep impact: p2p " << m.late_pitch_p2p_deg << " deg";
+}
 
-    constexpr float kDt          = 0.02f;
-    constexpr float kBodyHalfZ_m = 0.3f;
-    constexpr int   kSteps       = static_cast<int>(14.0f / kDt);  // 14 s
+TEST(AircraftTest, BodyColliderOnly_VerticalMaxSpeedImpact_ArrestsAndBounded) {
+    // Maximum-speed near-vertical impact: 2 m/s forward, 82 m/s sink (≈ tas_max 82.3 m/s),
+    // flight-path angle ≈ −88.6°. The hard constraint must catch even a Vne vertical descent
+    // in a single step without going unstable or letting the airframe pass through terrain.
+    // (At 82 m/s the airframe travels ~1.6 m per 0.02 s step, so up to ~one-step tunneling is
+    // expected before the constraint catches it; the SETTLED pose must be non-penetrating.)
+    const BodyImpactMetrics m = runBodyColliderImpact(
+        /*v_north*/ 2.0f, /*v_down*/ 82.0f, /*altitude*/ 30.0f, /*sim_time*/ 10.0f,
+        /*contact_agl_thresh*/ 1.3f);
 
-    std::vector<float> pitch_rad;
-    std::vector<unsigned char> wow;
-    pitch_rad.reserve(kSteps);
-    wow.reserve(kSteps);
+    ASSERT_TRUE(m.reached_contact) << "vertical impact must reach the surface";
+    EXPECT_TRUE(m.all_finite) << "state must remain finite through a Vne vertical impact";
+    // Descent fully arrested by the inelastic constraint.
+    EXPECT_GT(m.final_v_down_mps, -0.5f);
+    EXPECT_LT(m.final_v_down_mps, 1.0f)
+        << "vertical impact not arrested; final v_down " << m.final_v_down_mps << " m/s";
+    // Settled non-penetration (transient tunneling up to ~v*dt is allowed; settled pose is not).
+    EXPECT_GT(m.final_agl_m, -0.10f)
+        << "airframe sank through terrain; final AGL " << m.final_agl_m << " m";
+    EXPECT_GT(m.min_agl_m, -2.5f)
+        << "transient penetration exceeded one-step tunneling bound; min AGL " << m.min_agl_m << " m";
+    // No integration-frequency limit cycle even at max speed.
+    EXPECT_LE(m.pitch_reversals, 30)
+        << "pitch oscillates after vertical impact: " << m.pitch_reversals << " reversals over "
+        << m.steps_after_contact << " steps";
+}
 
-    int contact_step = -1;
-    for (int i = 1; i <= kSteps; ++i) {
-        ac->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
-        pitch_rad.push_back(ac->state().pitch());
-        wow.push_back(ac->weightOnWheels() ? 1u : 0u);
-        if (contact_step < 0 && ac->agl_m() <= kBodyHalfZ_m + 0.15f) {
-            contact_step = i - 1;  // index into the recorded vectors
-        }
-    }
-    ASSERT_GE(contact_step, 0) << "body collider must bring the aircraft to the surface";
+TEST(AircraftTest, BodyColliderOnly_InvertedImpact_ArrestsWithoutOscillation) {
+    // Inverted (belly-up) impact — a crash attitude the gear cannot cover and the body collider
+    // must. The airframe is rolled to ~180° about the velocity vector (1.0 rad/s held ~π s) while
+    // descending, so it reaches terrain canopy-down; the box's upper corners are now the lowest,
+    // and the collider (which samples all eight corners) must arrest the descent and settle
+    // without a limit cycle just as in the upright cases.
+    const BodyImpactMetrics m = runBodyColliderImpact(
+        /*v_north*/ 35.0f, /*v_down*/ 3.0f, /*altitude*/ 45.0f, /*sim_time*/ 16.0f,
+        /*contact_agl_thresh*/ 1.0f, /*roll_rate_rps*/ 1.0f, /*roll_until_s*/ 3.15f);
 
-    // --- Metric 1: pitch-rate sign reversals after contact -------------------------------
-    // A settling trajectory changes pitch direction only a handful of times (sink, small
-    // nose-down, converge). An integration-frequency limit cycle reverses almost every step.
-    // Count reversals of the per-step pitch increment, ignoring increments below a small
-    // deadband so float noise near steady state is not counted.
-    constexpr float kPitchDeadband_rad = 5e-5f;  // ~0.003 deg/step
-    int   pitch_reversals = 0;
-    float prev_signed_incr = 0.f;
-    float late_pitch_min =  std::numeric_limits<float>::max();
-    float late_pitch_max = -std::numeric_limits<float>::max();
-    const int late_start = contact_step + static_cast<int>(2.0f / kDt);  // 2 s after contact
-    for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < pitch_rad.size(); ++i) {
-        const float incr = pitch_rad[i] - pitch_rad[i - 1];
-        if (std::abs(incr) >= kPitchDeadband_rad) {
-            if (prev_signed_incr != 0.f && (incr > 0.f) != (prev_signed_incr > 0.f)) {
-                ++pitch_reversals;
-            }
-            prev_signed_incr = incr;
-        }
-        if (static_cast<int>(i) >= late_start) {
-            late_pitch_min = std::min(late_pitch_min, pitch_rad[i]);
-            late_pitch_max = std::max(late_pitch_max, pitch_rad[i]);
-        }
-    }
-    const float late_pitch_p2p_deg =
-        (late_pitch_max - late_pitch_min) * 180.0f / 3.14159265f;
-
-    // --- Metric 2: weight-on-wheels transitions after contact ----------------------------
-    int wow_transitions = 0;
-    for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < wow.size(); ++i) {
-        if (wow[i] != wow[i - 1]) ++wow_transitions;
-    }
-
-    const int steps_after_contact = static_cast<int>(pitch_rad.size()) - contact_step - 1;
-
-    // Physical settling: very few direction changes and a near-constant late-window pitch.
-    EXPECT_LE(pitch_reversals, 25)
-        << "pitch oscillates after contact: " << pitch_reversals << " sign reversals over "
-        << steps_after_contact << " post-contact steps (integration-frequency limit cycle)";
-    EXPECT_LE(wow_transitions, 8)
-        << "weight-on-wheels chatters after contact: " << wow_transitions
-        << " transitions over " << steps_after_contact << " post-contact steps";
-    EXPECT_LE(late_pitch_p2p_deg, 1.0f)
-        << "pitch does not settle: late-window peak-to-peak " << late_pitch_p2p_deg << " deg";
+    ASSERT_TRUE(m.reached_contact) << "inverted descent must reach the surface";
+    EXPECT_GT(m.roll_at_contact_deg, 150.0f)
+        << "airframe was not inverted at contact; |roll| = " << m.roll_at_contact_deg << " deg";
+    EXPECT_TRUE(m.all_finite) << "state must remain finite through an inverted impact";
+    // Descent arrested.
+    EXPECT_GT(m.final_v_down_mps, -0.5f);
+    EXPECT_LT(m.final_v_down_mps, 1.0f)
+        << "inverted impact not arrested; final v_down " << m.final_v_down_mps << " m/s";
+    // Non-penetration.
+    EXPECT_GT(m.final_agl_m, -0.10f)
+        << "inverted airframe sank through terrain; final AGL " << m.final_agl_m << " m";
+    // No integration-frequency limit cycle.
+    EXPECT_LE(m.pitch_reversals, 30)
+        << "pitch oscillates after inverted impact: " << m.pitch_reversals << " reversals over "
+        << m.steps_after_contact << " steps";
+    EXPECT_LE(m.late_pitch_p2p_deg, 2.0f)
+        << "pitch does not settle after inverted impact: p2p " << m.late_pitch_p2p_deg << " deg";
 }
 
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {

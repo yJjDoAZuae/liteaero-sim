@@ -538,11 +538,12 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-One design question is open (OQ-BC-8); the rest are resolved (resolution notes below).
+Two design questions are open (OQ-BC-8, OQ-BC-9); the rest are resolved (resolution notes below).
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
 | OQ-BC-8 | Weight-on-wheels detection: latched `_body_in_hard_contact` flag vs a stateless geometric (clearance-based) test | WoW-reporting cleanup; a separate `_has_*` deserialize defect is a bug to fix outright (see Serialization) |
+| OQ-BC-9 | Envelope-wide post-impact limit cycle: the FBW load-factor lift-shaping loop (n_z apportionment + settle term) couples to body-collider contact and oscillates in shallow, steep, and inverted impacts. The geometric WoW (OQ-BC-8) fixes only the shallow case | A correct crash backstop across the full impact envelope (high-FPA, Vne-vertical, inverted) |
 
 ### OQ-BC-8 — Weight-on-Wheels Detection: Latched Flag vs Stateless Geometric *(open)*
 
@@ -621,7 +622,99 @@ gate (not merely the reported flag) with a stateless, hysteresis-free geometric 
 replaces the control-loop gate is a follow-on, characterized decision. It removes the latch and its
 serialization concern rather than persisting hidden state — the gear lesson applied to its spirit. Note
 this is **separate** from the `_has_landing_gear`/`_has_body_collider` deserialize defect (a plain bug,
-see the Serialization note), which must be fixed regardless of how OQ-BC-8 resolves.
+see the Serialization note), which must be fixed regardless of how OQ-BC-8 resolves. **The geometric WoW
+is necessary but NOT sufficient for the full impact envelope — see OQ-BC-9.**
+
+### OQ-BC-9 — Envelope-Wide Post-Impact Limit Cycle: FBW Lift-Shaping ↔ Body-Collider Coupling *(open)*
+
+**Problem.** A body collider is a *crash backstop* — its reason to exist is the steep, vertical, and
+inverted attitudes the landing gear does not cover. Adding impact tests across that envelope (a flat-terrain
+gear-less fixture, mass 1045 kg, fuselage box half-extents $[1.0, 0.5, 0.3]$ m, $dt=0.02$ s) shows the
+post-contact behavior is **non-physical in most of the envelope**:
+
+| Impact case | Entry | Result |
+| --- | --- | --- |
+| Shallow belly | 55 m/s, −2° FPA | **581 pitch reversals / 584 steps**, 5.8° p2p (per-step limit cycle) |
+| Steep dive | 50 m/s, −53° FPA | **56 reversals**, 44° p2p |
+| Vertical (Vne) | 82 m/s, −88.6° FPA | clean — arrests, no oscillation |
+| Inverted | rolled ~168°, skidding | **480 reversals**, 41° p2p |
+
+Bisection (selectively disabling each term) localized the driver to the **FBW load-factor lift-shaping
+control loop** — specifically the OQ-LG-23 axial-acceleration *settle term* and, secondarily, the n_z
+*apportionment* (`nz_relax`) — which the body-collider contact drives through `weight_on_wheels` and the
+contact reaction. The settle term is clipped to $\pm 1$ g and gated by WoW; when body-collider contact
+toggles WoW (or the contact force pulses), the gate toggles the commanded load factor between full lift
+and zero lift **every step**, swinging $\alpha$ (hence pitch) at the integration rate.
+
+The pure-vertical case is clean for a specific reason — and it is the **post-impact** airspeed that
+matters, not the entry airspeed. The Vne-vertical descent enters at high speed (82 m/s, $q\approx 4100$
+Pa), but that velocity is almost entirely **normal** to the terrain, so the inelastic hard constraint (§5b)
+arrests it to $\approx 0$ in a single step. What survives is only the small **tangential** (horizontal)
+component (here $\approx 5.5$ m/s, $q\approx 19$ Pa), which sits **below** the aero-authority band, so
+$w_a(q)\to 0$ and the lift-shaping loop is dormant — the airframe simply rests, nose-down, without
+oscillating. The shallow, steep, and inverted cases instead retain large **tangential** speed after the
+normal arrest (≈55, ≈30, ≈20 m/s), so post-impact $q$ stays high, $w_a(q)\approx 1$, and the lift-shaping
+loop stays active and oscillates. This confirms the loop — driven by surviving tangential airspeed — is the
+oscillator, not the contact mechanics.
+
+Crucially, **no single localized fix resolves the envelope.** Empirically: the stateless geometric WoW
+(OQ-BC-8) fixes the shallow case but leaves steep (still 41+ reversals) and inverted (602 reversals)
+oscillating; zeroing the settle term reduces amplitude (inverted 41°→7° p2p) but not the per-step
+reversals; doing both still leaves steep and inverted oscillating. The inverted case has an additional
+root: commanding $n_z=+1$ while inverted directs the wing's lift **toward the ground**, so the FBW
+actively flies the airframe into the terrain while the backstop holds it out — a per-step force-fight the
+contact model cannot win. The settle/apportionment logic is **gear-rollout shaping** (it assumes an
+upright airframe decelerating on its wheels); driving it from body-collider contact in a crash attitude is
+a category error.
+
+**Alternatives:**
+
+1. **Decouple body-collider contact from the FBW lift-shaping loop (recommended primary).** The body
+   collider becomes a pure *mechanical* backstop (velocity-arrest force §5a + hard constraint §5b + §5c
+   $\Delta\theta$); it no longer feeds the n_z apportionment (`nz_relax`), the settle term, or the WoW
+   gate that drives them. Only the **landing gear** drives the rollout lift-shaping. (Geometric WoW from
+   OQ-BC-8 remains for *reporting*.)
+   - **Benefits:** removes the coupling at its source; matches the OQ-LG-22 spirit (contact must not
+     over-drive the FBW); a belly/crash contact is not a gear rollout and should not invoke rollout
+     shaping; leaves all gear-equipped behavior unchanged (the gear still feeds the loop).
+   - **Drawbacks:** does **not** by itself resolve the inverted "lift commanded into the ground" fight —
+     likely needs pairing with a lift suppression while body-collider contact is the active contact (a
+     lighter, scoped form of Alt 3). Must verify the full envelope plus the existing gear regressions.
+   - **Prerequisites:** separate the gear-only contact reaction from the combined reaction in the step-5b
+     apportionment and step-5c gates; full-envelope + gear regression suite as the guard.
+
+2. **Stronger non-chattering WoW (hysteretic latch, wide margin) and keep feeding the loop.** Hold WoW
+   true through the per-step bounce so the gate stops toggling.
+   - **Benefits:** minimal change to the loop.
+   - **Drawbacks:** empirically insufficient — a stable WoW does not fix steep or inverted (the lift fight
+     persists); margin tuning is fragile; retains the category error of rollout shaping in a crash.
+   - **Prerequisites:** a hysteresis state (the very latched state OQ-BC-8 seeks to remove).
+
+3. **Suppress aerodynamic lift while the body collider is the active contact (crash mode).** Clamp the
+   commanded/produced lift toward zero when body-collider contact (not gear) is active, so the wing stops
+   fighting the backstop.
+   - **Benefits:** directly ends the lift-vs-backstop force-fight, including the inverted case.
+   - **Drawbacks:** a mode switch needing a clean "crash contact" definition; must not regress go-around
+     or gear behavior; overlaps the existing `F_z_aero` lift clamp (which is driven by the oscillating
+     `n_z_shaped`, so it must key off contact state, not the shaped command).
+   - **Prerequisites:** define the crash-contact predicate; envelope + gear regressions.
+
+4. **Full 6DOF rigid-body contact.** Replace the kinematic, velocity-slaved attitude + lift-shaping model
+   with rigid-body dynamics for contact, so an inelastic impact at a moment arm splits into translational
+   and rotational momentum naturally and the attitude is not control-loop-slaved.
+   - **Benefits:** physically correct across the entire envelope; no lift-loop coupling because attitude
+     is dynamic; matches the intuitive "moment-arm-mediated momentum split."
+   - **Drawbacks:** a major architectural change — the entire `Aircraft` model is load-factor/kinematic;
+     scope far exceeds a crash backstop.
+   - **Prerequisites:** a separate rigid-body dynamics design effort.
+
+**Recommendation.** Alternative 1 as the primary structural fix (decouple body-collider contact from the
+rollout lift-shaping loop), paired with a scoped Alternative 3 (suppress aero lift while body-collider
+contact is the active contact) to resolve the inverted lift-into-ground fight; OQ-BC-8's geometric WoW
+remains for reporting. The four-case envelope suite (shallow / steep / Vne-vertical / inverted) plus the
+gear regressions is the acceptance guard. Alternative 4 is the physically ideal end-state but is a separate
+architecture decision, not this subsystem's fix. **This OQ supersedes the scope of OQ-BC-8's control-loop
+aspect: resolving OQ-BC-8 alone does not make the body collider correct across the impact envelope.**
 
 ### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
 
