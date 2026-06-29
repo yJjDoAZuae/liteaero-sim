@@ -538,14 +538,32 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-Two design questions are open (OQ-BC-8, OQ-BC-9); the rest are resolved (resolution notes below).
+All design questions are resolved (resolution notes below). OQ-BC-8 and OQ-BC-9 were the last open ones,
+both resolved to Alternative 1.
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| OQ-BC-8 | Weight-on-wheels detection: latched `_body_in_hard_contact` flag vs a stateless geometric (clearance-based) test | WoW-reporting cleanup; a separate `_has_*` deserialize defect is a bug to fix outright (see Serialization) |
-| OQ-BC-9 | Envelope-wide post-impact limit cycle: the FBW load-factor lift-shaping loop (n_z apportionment + settle term) couples to body-collider contact and oscillates in shallow, steep, and inverted impacts. The geometric WoW (OQ-BC-8) fixes only the shallow case | A correct crash backstop across the full impact envelope (high-FPA, Vne-vertical, inverted) |
+| OQ-BC-8 | *(Resolved — Alt 1)* Weight-on-wheels for **reporting**: a hysteretic geometric latch (engage at contact, release at clearance $>\delta_\text{off}=V_\text{stall}\Delta t$ — a *derived* band, $V_\text{stall}$ provisional). Reporting-only after OQ-BC-9. Implemented as IP-BC-11 | — |
+| OQ-BC-9 | *(Resolved — Alt 1)* Envelope-wide post-impact limit cycle: the FBW lift-shaping loop coupled to body-collider contact oscillated in shallow/steep/inverted impacts. Resolved by decoupling body-collider contact from the lift-shaping loop (IP-BC-12) | — |
 
-### OQ-BC-8 — Weight-on-Wheels Detection: Latched Flag vs Stateless Geometric *(open)*
+### OQ-BC-8 — Weight-on-Wheels Detection (Reporting) *(Resolved — Alternative 1)*
+
+**Resolution (Alternative 1 — hysteretic geometric WoW with a derived band).** The reported
+`weight_on_wheels` is a hysteresis latch on the geometric corner clearance `minCornerClearance_m`:
+**engage** (`true`) the step the deepest corner reaches terrain (clearance $\le \delta_\text{on}$, with
+$\delta_\text{on}=0$ — exactly on contact), and **release** (`false`) only after the airframe has climbed
+clear (clearance $> \delta_\text{off}$). The band is **derived, not magic**:
+$\delta_\text{off}=V_\text{stall}\,\Delta t$ — the per-step travel at the airframe's stall speed (see
+*Threshold derivation* below); it replaces the old magic $0.05$ m release margin. After OQ-BC-9's
+decoupling the latch is **reporting-only** (it no longer feeds any control gate), so it persists as the one
+serialized bool `_body_in_hard_contact` (already serialized, IP-BC-10) with no control-path cost.
+
+*Provisional reference speed.* $V_\text{stall}$ is adopted **for now**; the physically correct
+characteristic speed is the airframe's **post-impact** speed, not its pre-impact / stall speed, so the
+$V_\text{stall}$ choice is to be re-evaluated against the envelope test results and revised if needed. The
+engage edge $\delta_\text{on}=0$ is fixed. Implemented as IP-BC-11.
+
+<details><summary>Problem, alternatives, and rationale (retained)</summary>
 
 **Problem.** The §5a velocity-arrest normal force is **zero at static rest** (it opposes only an active
 sink rate), so a belly-resting aircraft produces no contact force, and weight-on-wheels (WoW) detected
@@ -580,54 +598,113 @@ localized the driver unambiguously:
   toggling on/off drives commanded lift — and hence $\alpha$ and pitch — fully on/off at the
   integration rate.
 - Replacing the control-loop WoW with the **stateless geometric clearance-margin** test
-  (`minCornerClearance_m < margin`, Alternative 1) makes the regression **pass outright** (reversals
-  and peak-to-peak both within physical settling bounds): a belly resting within the margin reports
-  WoW *continuously* true, so the settle gate stops toggling.
+  (`minCornerClearance_m < margin`, Alternative 1) makes **this shallow regression** pass: a belly
+  resting within the margin reports WoW *continuously* true, so the settle gate stops toggling.
 
 The mechanism is the body-collider analog of the gear settle/WoW coupling: the gear strut is a stateful
 spring-damper that stays loaded continuously on the ground, so its WoW does not chatter; the body
 collider has no persistent contact state and the hard constraint removes the penetration each step, so
-a **per-step** WoW necessarily flickers. The resolution therefore must replace the **control-loop**
-gate (not merely the reported flag) with a stateless, hysteresis-free geometric WoW.
+a **per-step** WoW necessarily flickers.
+
+**Scope correction (see OQ-BC-9).** The stateless geometric WoW fixes **only the shallow belly case**.
+Across the wider impact envelope (steep dive, inverted) it is **insufficient**: the per-step vertical
+bounce exceeds the clearance margin so even the geometric WoW chatters, and a deeper coupling (the FBW
+lift-shaping loop fed by body-collider contact) drives the oscillation regardless of how WoW is detected.
+That envelope-wide defect is **OQ-BC-9**, resolved by **decoupling** body-collider contact from the
+lift-shaping loop entirely. With OQ-BC-9 resolved, the body-collider WoW no longer feeds the control loop
+at all, so **OQ-BC-8 reduces to its original scope: WoW for *reporting* only** — there is no control-loop
+behavior at stake, only how cleanly the reported flag tracks genuine contact.
+
+Because the flag is now reporting-only, the OQ-LG-22 "no hidden latched state" objection — which was about
+a latch *driving control* — **no longer applies**. That removes the main argument against hysteresis. And a
+stateless single-threshold test (`clearance < margin`) **flickers by construction**: when the clearance
+hovers near the threshold it toggles every step. A **hysteretic** (engage/release-band) latch is exactly
+what debounces that, so for clean reporting the hysteresis is a *feature*, not a smell — provided the band
+edges are **derived**, not magic.
 
 **Alternatives:**
 
-1. **Stateless geometric WoW (recommended).** Report WoW from geometry every step:
-   `weight_on_wheels = (minCornerClearance_m < margin)` — true when any corner is at or below terrain
-   within a small margin (the hard constraint holds the deepest corner at clearance $\approx 0$ at rest,
-   so this reads true for a settled belly and false airborne). Eliminates `_body_in_hard_contact` and
-   its hysteresis/serialization entirely.
-   - **Benefits:** correct at static rest; no latched state to serialize or drift; aligns with the
-     OQ-LG-22 "no hidden latched state" lesson; removes the flag rather than persisting it.
-   - **Drawbacks:** if the same geometric WoW also replaces the **control-loop** gate (currently the
-     pre-integration per-step penetration, which *also* flickers for belly-only contact), that is a
-     behavior change to characterize; the clearance is computed post-integration, so feeding the control
-     loop incurs a one-step lag.
-   - **Prerequisites:** decide whether the geometric WoW feeds reporting only or also the control-loop
-     gate; a characterization test.
+1. **Hysteretic geometric WoW with a derived band (recommended).** A latch on the geometric corner
+   clearance: engage `weight_on_wheels = true` when the deepest corner reaches terrain
+   (`minCornerClearance_m ≤ δ_on`) and release it only after the airframe has clearly climbed away
+   (`minCornerClearance_m > δ_off`), with `δ_off > δ_on` (the hysteresis band). The band edges are derived
+   (see "Threshold derivation" below), not constants. The one latched bool is serialized (already done in
+   IP-BC-10).
+   - **Benefits:** correct at static rest (a settled belly reads true continuously); debounced — no
+     boundary flicker; the latched bool is reporting-only (no control coupling after OQ-BC-9); the band is
+     airframe-/timestep-consistent rather than a magic margin.
+   - **Drawbacks:** retains one bit of serialized state (acceptable — it is now reporting-only and small).
+   - **Prerequisites:** the derived band edges; the latch evaluated on the post-integration pose.
 
-2. **Keep the latch, serialize it.** Persist `_body_in_hard_contact` in JSON + proto.
-   - **Benefits:** minimal change.
-   - **Drawbacks:** keeps the hidden-state smell; the latch stays reporting-only with no functional
-     benefit over the geometric test; does not address the control-loop flicker for belly-only contact.
-   - **Prerequisites:** add the bool to the serialized state.
+2. **Stateless single-threshold geometric WoW.** `weight_on_wheels = (minCornerClearance_m < margin)`
+   every step, no latch.
+   - **Benefits:** no stored state.
+   - **Drawbacks:** **flickers** when the clearance sits near `margin` (no debounce) — the very reporting
+     uncleanliness this OQ is about; still needs a non-magic `margin`. Removing the latch saves only one
+     reporting-only bit.
+   - **Prerequisites:** a derived `margin`.
 
-3. **Force-only WoW (drop the latch, no substitute).** Report WoW purely from the instantaneous contact
-   force.
+3. **Force-only WoW (no geometry).** Report WoW purely from the instantaneous contact force.
    - **Benefits:** simplest; no state.
-   - **Drawbacks:** a settled belly reads WoW *false* (no static force) — wrong; regresses reporting.
+   - **Drawbacks:** a settled belly reads WoW *false* (the §5a force is zero at static rest) — wrong;
+     regresses reporting.
    - **Prerequisites:** none.
 
-**Recommendation.** Alternative 1 (stateless geometric WoW) for the reported flag; whether it also
-replaces the control-loop gate is a follow-on, characterized decision. It removes the latch and its
-serialization concern rather than persisting hidden state — the gear lesson applied to its spirit. Note
-this is **separate** from the `_has_landing_gear`/`_has_body_collider` deserialize defect (a plain bug,
-see the Serialization note), which must be fixed regardless of how OQ-BC-8 resolves. **The geometric WoW
-is necessary but NOT sufficient for the full impact envelope — see OQ-BC-9.**
+</details>
 
-### OQ-BC-9 — Envelope-Wide Post-Impact Limit Cycle: FBW Lift-Shaping ↔ Body-Collider Coupling *(open)*
+**Threshold derivation (no magic value).** The band must be *consistent with aircraft size, speed, and the
+integration timestep* — the natural length scale is the **distance the airframe travels in one integration
+step**, $V\,\Delta t$. Using the airframe's **stall speed** $V_\text{stall}$ as the characteristic speed
+(it is already derived from wing loading $W/S$, so it carries the size dependence, and it is a fixed, finite
+reference — unlike the instantaneous speed, which would collapse the band to zero at rest and re-introduce
+flicker), the release edge is
 
-**Problem.** A body collider is a *crash backstop* — its reason to exist is the steep, vertical, and
+$$\delta_\text{off} = V_\text{stall}\,\Delta t,\qquad \delta_\text{on} = 0\ (\text{corner at/through terrain}),$$
+
+with $V_\text{stall}=\sqrt{2 W /(\rho S\,C_{L_\text{max}})}$ and $\Delta t$ the outer step
+(`_outer_dt_s`). Both `_stall_speed_mps` and `_outer_dt_s` are already members of `Aircraft`. For the GA
+fixture ($V_\text{stall}\approx 24$ m/s, $\Delta t=0.02$ s) this gives $\delta_\text{off}\approx 0.48$ m —
+WoW releases once the lowest corner has climbed about half a metre, well clear of the per-step bounce; for a
+small fast-stepping UAS it scales down proportionally. (The discarded $0.05$ m was both magic *and* ~10×
+too small, which is why the single-threshold test still flickered in the steep/inverted envelope.) The
+engage edge is fixed at $\delta_\text{on}=0$: WoW engages exactly the step a corner reaches terrain.
+
+**Note (separate bug).** The WoW work is **separate** from the
+`_has_landing_gear`/`_has_body_collider` deserialize defect (a plain bug, see the Serialization note), which
+must be fixed regardless.
+
+### OQ-BC-9 — Envelope-Wide Post-Impact Limit Cycle: FBW Lift-Shaping ↔ Body-Collider Coupling *(Resolved — Alternative 1)*
+
+**Resolution (Alternative 1 — decouple body-collider contact from the FBW lift-shaping loop).** The body
+collider is made a pure *mechanical* backstop: velocity-arrest normal force (§5a) + restitution-consistent
+hard constraint (§5b) + the dedicated $\Delta\theta$ rotational reaction (§5c). Its contact reaction and
+weight-on-wheels **no longer feed the FBW load-factor lift-shaping loop** — neither the n_z apportionment
+(`nz_relax`), the OQ-LG-23 settle term, nor the WoW gate that drives them. Only the **landing gear** drives
+the rollout lift-shaping (those terms exist for an upright airframe decelerating on its wheels — gear-rollout
+shaping is a category error for a crash attitude). The implementation must therefore split the **gear-only**
+contact reaction from the combined reaction and gate the step-5b apportionment / settle terms on the
+**gear** WoW alone; the body collider's own WoW (stateless geometric, OQ-BC-8) survives for **reporting**
+only. This removes the oscillator at its source: with the lift-shaping loop no longer fed by body-collider
+contact, the commanded load factor `n_z_shaped` stops slamming between full and zero lift every step.
+
+**Acceptance guard.** The four-case impact-envelope suite — `BodyColliderOnly_Landing_DoesNotOscillate`
+(shallow), `_SteepDiveImpact` (−53°), `_VerticalMaxSpeedImpact` (Vne), `_InvertedImpact` — plus the existing
+landing-gear regressions must all pass. Tracked as IP-BC-12 (now unblocked).
+
+**Inverted case — note for implementation.** Alternative 1 removes the per-step *toggling* of commanded
+lift (the oscillation source) by making `n_z_shaped` steady ($w_a\,n_{z_\text{cmd}}$). For the inverted
+case, a *steady* $n_z = +1$ command still directs the wing's lift toward the ground, which the §5b constraint
+then absorbs as a steady (non-oscillatory) reaction — acceptable for a crash backstop. The inverted
+regression is the gate: **if** Alt 1 alone leaves a residual oscillation there (not merely a steady
+lift-into-ground), the scoped lift-suppression (former Alternative 3 — clamp aero lift toward zero while
+body-collider contact is the active contact) is the documented follow-up. It is **not** pre-adopted here;
+the user selected Alternative 1, and whether the scoped clamp is additionally required is decided
+empirically against the inverted regression during IP-BC-12. (Alternative 4, full 6DOF rigid-body contact,
+remains the physically ideal end-state but is a separate architecture decision, out of scope here.)
+
+<details><summary>Problem analysis and the rejected alternatives (retained as rationale)</summary>
+
+A body collider is a *crash backstop* — its reason to exist is the steep, vertical, and
 inverted attitudes the landing gear does not cover. Adding impact tests across that envelope (a flat-terrain
 gear-less fixture, mass 1045 kg, fuselage box half-extents $[1.0, 0.5, 0.3]$ m, $dt=0.02$ s) shows the
 post-contact behavior is **non-physical in most of the envelope**:
@@ -708,13 +785,11 @@ a category error.
      scope far exceeds a crash backstop.
    - **Prerequisites:** a separate rigid-body dynamics design effort.
 
-**Recommendation.** Alternative 1 as the primary structural fix (decouple body-collider contact from the
-rollout lift-shaping loop), paired with a scoped Alternative 3 (suppress aero lift while body-collider
-contact is the active contact) to resolve the inverted lift-into-ground fight; OQ-BC-8's geometric WoW
-remains for reporting. The four-case envelope suite (shallow / steep / Vne-vertical / inverted) plus the
-gear regressions is the acceptance guard. Alternative 4 is the physically ideal end-state but is a separate
-architecture decision, not this subsystem's fix. **This OQ supersedes the scope of OQ-BC-8's control-loop
-aspect: resolving OQ-BC-8 alone does not make the body collider correct across the impact envelope.**
+*(Original recommendation: Alternative 1 paired with a scoped Alternative 3. The user selected Alternative
+1; the scoped Alternative 3 is retained only as a conditional follow-up gated on the inverted regression —
+see the resolution note above.)*
+
+</details>
 
 ### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
 

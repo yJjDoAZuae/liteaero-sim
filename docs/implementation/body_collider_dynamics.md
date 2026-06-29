@@ -35,23 +35,22 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-8 | done | Added the parallel body-collider rotation-filter set in `Aircraft` (OQ-BC-6 → Alt 2): `_bc_dtheta_{pitch,roll,yaw}_filter` + collider force-channel `_bc_force_x`/`_bc_fz_stance_filter`, configured identically to the gear set, reset-cleared, and serialized (JSON + 10 new proto fields) | — | [body_collider.md §5c, OQ-BC-6](../design/body_collider.md), [landing_gear.md §2a](../design/landing_gear.md) |
 | IP-BC-9 | done | Separated gear/collider force+moment at step 5a; the §5c Δθ block now sums per-source channels (force via a `forceChannel` lambda, moment per axis), behavior-preserving by linearity. Regression net: all existing gear-only and bc-only tests pass unchanged; `BodyColliderImpact_RotationState_RoundTrips` verifies the new collider rotation state round-trips through JSON + proto | IP-BC-8 | [body_collider.md §5c](../design/body_collider.md), [aircraft.md](../design/aircraft.md) |
 | IP-BC-10 | done | **Bug fix (Aircraft-level serialization cluster):** fixed `_has_landing_gear`/`_has_body_collider` not restored (JSON + added proto subsystem fields 71/72), the **w_a band edges** `_wa_q_lo_pa`/`_wa_q_hi_pa` not serialized (the actual α-saturation cause), `_outer_dt_s` (reconstructed), and `_body_in_hard_contact`. Regression: `BodyColliderRoundTrip_PreservesSubsystem_ContinuedStepMatches` (deserialize-then-step matches the original through JSON + proto) | — | [body_collider.md Serialization](../design/body_collider.md) |
-| IP-BC-11 | blocked (OQ-BC-8) | Replace the chattering per-step penetration WoW with a stateless geometric WoW (`minCornerClearance_m < margin`) for **both** reporting and the **control-loop gate** (the settle/apportionment), removing the `_body_in_hard_contact` latch. The post-contact limit-cycle regression `BodyColliderOnly_Landing_DoesNotOscillateAfterContact` is the guard (already written; fails on baseline, passes with the geometric WoW) | — | [body_collider.md OQ-BC-8](../design/body_collider.md) |
+| IP-BC-11 | ready | Make the **reporting** WoW a hysteretic geometric latch on `minCornerClearance_m`: engage at clearance `≤ 0` (on contact), release at clearance `> δ_off`, derived band `δ_off = _stall_speed_mps · _outer_dt_s` (replacing the magic 0.05 m); reporting-only after IP-BC-12's decoupling. (`V_stall` reference is provisional — revisit vs post-impact speed after testing) | IP-BC-12 | [body_collider.md OQ-BC-8](../design/body_collider.md) |
 
-| IP-BC-12 | blocked (OQ-BC-9) | Resolve the envelope-wide post-impact limit cycle: decouple body-collider contact from the FBW rollout lift-shaping loop (settle + n_z apportionment), paired with aero-lift suppression while body-collider contact is the active contact, per the OQ-BC-9 resolution. Guard: the four-case impact envelope suite (`BodyColliderOnly_Landing_DoesNotOscillate`, `_SteepDiveImpact`, `_VerticalMaxSpeedImpact`, `_InvertedImpact`) plus the gear regressions | — | [body_collider.md OQ-BC-9](../design/body_collider.md) |
+| IP-BC-12 | ready | Resolve the envelope-wide post-impact limit cycle (OQ-BC-9 → Alt 1): split the **gear-only** contact reaction from the combined reaction and gate the step-5b n_z apportionment (`nz_relax`) and the OQ-LG-23 settle term on **gear** WoW alone, so body-collider contact no longer feeds the FBW lift-shaping loop. Guard: the four-case impact envelope suite (`BodyColliderOnly_Landing_DoesNotOscillate`, `_SteepDiveImpact`, `_VerticalMaxSpeedImpact`, `_InvertedImpact`) **and** the landing-gear regressions all green. If the inverted regression shows a residual oscillation (not a steady lift-into-ground), add the scoped aero-lift suppression (OQ-BC-9 conditional follow-up) | — | [body_collider.md OQ-BC-9](../design/body_collider.md) |
 
-> **IP-BC-11 blocked reason:** OQ-BC-8 (latched vs stateless-geometric WoW) is an open design decision.
-> Resolve OQ-BC-8 first. **The geometric WoW is necessary but NOT sufficient** — it fixes only the shallow
-> belly case (see IP-BC-12 / OQ-BC-9).
+> **IP-BC-11 reason:** OQ-BC-8 is resolved (Alt 1 — hysteretic geometric latch, derived band). Ordered
+> after IP-BC-12, which removes the control-loop WoW gate, so the latch lands as reporting-only.
 >
-> **IP-BC-12 blocked reason (the real defect):** the body-collider post-impact behavior is a non-physical
+> **IP-BC-12 (the real defect, OQ-BC-9 → Alt 1):** the body-collider post-impact behavior is a non-physical
 > limit cycle across most of the impact envelope — shallow (581 pitch reversals / 584 steps, 5.8° p2p),
 > steep −53° (56 reversals, 44° p2p), and inverted (480 reversals, 41° p2p); only the Vne-vertical case is
 > clean (its near-normal velocity is fully arrested by the inelastic constraint, leaving negligible
 > **tangential** airspeed → post-impact q below the aero band → lift loop dormant). Root cause: the FBW
-> load-factor lift-shaping loop (OQ-LG-23
-> settle term + n_z apportionment) is driven by body-collider contact and fights the backstop. No single
-> localized fix resolves the envelope (see the OQ-BC-9 evidence table). The four failing envelope
-> regressions are already in the suite (3 fail today: shallow/steep/inverted; vertical passes).
+> load-factor lift-shaping loop (OQ-LG-23 settle term + n_z apportionment) is driven by body-collider
+> contact and fights the backstop. Resolution: decouple body-collider contact from that loop (gear-only
+> gating). The four envelope regressions are already in the suite (3 fail today: shallow/steep/inverted;
+> vertical passes) and are the acceptance guard.
 
 ---
 

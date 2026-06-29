@@ -11,7 +11,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | Plan file | Scope | Status |
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Consolidated landing-gear plan: wheel dynamics (OQ-LG-5/6), gear→aircraft force-&-moment coupling (OQ-LG-9–23), and pending debt (OQ-LG-24 effectiveness weight, OQ-LG-15 diagnostic cleanup). SD-1 smoothness reconciliations excluded (undecided — OQ-LG-25) | Active |
-| [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a/§5b/§5c/§5d implemented and tested; IP-BC-10 done (Aircraft serialization-gap cluster). **Open defect:** non-physical post-impact limit cycle across the impact envelope (shallow/steep/inverted oscillate; Vne-vertical clean) — IP-BC-12 blocked on OQ-BC-9 (decouple body-collider contact from the FBW lift-shaping loop). IP-BC-11 (geometric WoW, blocked on OQ-BC-8) fixes only the shallow case | Active |
+| [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a/§5b/§5c/§5d implemented and tested; IP-BC-10 done (Aircraft serialization-gap cluster). **Open defect:** non-physical post-impact limit cycle across the impact envelope (shallow/steep/inverted oscillate; Vne-vertical clean) — IP-BC-12 (ready; OQ-BC-9 → Alt 1, decouple body-collider contact from the FBW lift-shaping loop) then IP-BC-11 (ready; OQ-BC-8 → Alt 1, hysteretic geometric reporting WoW with derived band). Both OQs now resolved | Active |
 
 ---
 
