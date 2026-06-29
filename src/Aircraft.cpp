@@ -401,11 +401,14 @@ void Aircraft::step(double time_sec,
             0.0f,    // brake right demand
             _outer_dt_s);
     }
-    // §5c (OQ-BC-6/7): capture the gear-only and body-collider contact reactions separately so the
-    // rotation-deviation channels can be attributed per source. The EOM below uses the combined
-    // contact_forces; only the §5c Δθ channels read these split components.
+    // §5c (OQ-BC-6/7) and OQ-BC-9 (Alt 1): capture the gear-only contact reaction separately. The
+    // EOM uses the combined reaction (the body collider is a mechanical backstop), but the FBW
+    // lift-shaping loop (§5b n_z apportionment and the OQ-LG-23 settle term) and the §5c Δθ channels
+    // read GEAR-ONLY quantities — body-collider contact must not drive the rollout lift-shaping
+    // (gear-rollout shaping is a category error for a crash attitude, OQ-BC-9).
     const Eigen::Vector3f gear_force_body  = contact_forces.force_body_n;
     const Eigen::Vector3f gear_moment_body = contact_forces.moment_body_nm;
+    const bool gear_on_wheels = contact_forces.weight_on_wheels;
     Eigen::Vector3f bc_force_body  = Eigen::Vector3f::Zero();
     Eigen::Vector3f bc_moment_body = Eigen::Vector3f::Zero();
     if (_has_body_collider && _terrain != nullptr) {
@@ -443,10 +446,11 @@ void Aircraft::step(double time_sec,
     float nz_relax = 0.f;   // H₁ apportionment-relaxation term (gear's filtered load-factor share)
     {
         // (b-i) apportionment relaxation on the ACTUAL gear reaction (OQ-LG-22; retained).
+        //       GEAR-ONLY (OQ-BC-9): body-collider contact does not feed the apportionment.
         float nz_gear_input = 0.f;
-        if (contact_forces.weight_on_wheels) {
+        if (gear_on_wheels) {
             nz_gear_input = std::max(0.f,
-                -contact_forces.force_body_n.z() / (_inertia.mass_kg * kGravity_mps2));
+                -gear_force_body.z() / (_inertia.mass_kg * kGravity_mps2));
         }
         nz_relax = _nz_relax_filter.step(nz_gear_input);
 
@@ -472,7 +476,7 @@ void Aircraft::step(double time_sec,
                                                      : _settle_vland_ratio) * _stall_speed_mps;
         const float half_w   = 0.5f * _settle_vwidth_ratio * _stall_speed_mps;
         const float s_unload = smoothstepEdges(V_ground, v_trans - half_w, v_trans + half_w);
-        const float phi_g    = (contact_forces.weight_on_wheels ? 1.0f : 0.0f) * s_unload;
+        const float phi_g    = (gear_on_wheels ? 1.0f : 0.0f) * s_unload;  // GEAR-ONLY (OQ-BC-9)
         float settle_incr    = _settle_gain_nd * (_settle_axbar / kGravity_mps2) * phi_g;
         settle_incr          = std::clamp(settle_incr, -_settle_clip_nd, _settle_clip_nd);
 
@@ -657,21 +661,22 @@ void Aircraft::step(double time_sec,
         const float clearance = _body_collider.minCornerClearance_m(
             _state.snapshot(), *_terrain);
         const float pen = std::max(0.f, -clearance);   // deepest penetration (>= 0)
-        constexpr float kBodySeparationMargin_m = 0.05f;
         if (pen > 0.f) {
             const auto bc_impact = _body_collider.step(_state.snapshot(), *_terrain);
             _contact_forces.force_body_n   += bc_impact.force_body_n;
             _contact_forces.moment_body_nm += bc_impact.moment_body_nm;
-            _contact_forces.weight_on_wheels = true;
-            _body_in_hard_contact = true;
             // §5b: restitution-consistent constraint (OQ-BC-2). e = 0 fully arrests.
             _state.applyTerrainHardConstraint(pen, _body_collider.restitution_nd());
-        } else if (clearance > kBodySeparationMargin_m) {
-            // The body has genuinely separated from the terrain — release the
-            // hard-contact latch so weight_on_wheels reporting is accurate.
-            _body_in_hard_contact = false;
         }
-        // clearance in [0, margin]: small hysteresis band — hold the flag as-is.
+        // OQ-BC-8 (Alt 1): hysteretic geometric weight-on-wheels for REPORTING. Engage the step a
+        // corner reaches terrain (clearance <= 0); release only after the airframe climbs above the
+        // DERIVED band δ_off = V_stall·Δt (the per-step travel at the airframe's stall speed — not a
+        // magic margin; carries the size dependence through wing loading and the timestep). Holding
+        // through the band debounces the per-step bounce so the reported flag does not flicker.
+        const float wow_release_m = _stall_speed_mps * _outer_dt_s;
+        if (clearance <= 0.f)                  _body_in_hard_contact = true;
+        else if (clearance > wow_release_m)    _body_in_hard_contact = false;
+        // clearance in (0, δ_off]: hold the latch (hysteresis band).
     }
 
     // 12. Commit attitude: q_nw sees the truly final velocity — after RK4 and
