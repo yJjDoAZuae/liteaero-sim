@@ -258,6 +258,23 @@ diagnostic-friendly form of it is a small, justified extension and is squarely *
 - Prefer a structured form (a small struct or a JSON object) over scattered one-off getters, so the
   verbose state is discoverable and can share the serialization representation where practical.
 
+### Terminal diagnostic output — verbose CLI flags
+
+**Project-wide requirement.** Terminal diagnostic output (per-frame traces, pose/state dumps, timing,
+decomposed signals) is a **first-class, opt-in feature selected by a verbose CLI flag**, never an
+always-on print and never a throwaway debug statement.
+
+- Every executable/tool that can emit diagnostics accepts a standard verbose flag (`-v` / `--verbose`).
+  Default output stays clean — startup banner, fatal errors, and essential status only.
+- Verbose mode enables the diagnostic stream; it is implemented as a real, documented code path (a
+  `verbose` flag threaded to the component that prints), not an `#ifdef`, a recompile, or an
+  environment-variable hack. Do not commit ad-hoc `printf`/`std::cout` debug lines — promote them to a
+  verbose path or remove them.
+- The flag appears in the tool's `--help`/usage, and wrapper/launch scripts (e.g. `run_sim.sh`) expose
+  and pass through their own `-v`/`--verbose`.
+- Build and developer scripts follow the same convention (`build.sh -v` → shell trace + verbose
+  compiler output).
+
 ---
 
 ## Architectural Design Patterns

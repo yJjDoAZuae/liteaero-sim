@@ -18,6 +18,8 @@
 //   --device   SDL device index to use with joystick mode (default 0)
 //   --dt       Simulation timestep in seconds (default 0.02)
 //   --port     UDP broadcast port (default 14560)
+//   --verbose  (-v) Enable the per-frame broadcast pose trace (position +
+//              attitude) on stdout; off by default.
 
 #include "Aircraft.hpp"
 #include "broadcaster/UdpSimulationBroadcaster.hpp"
@@ -145,6 +147,7 @@ struct Args {
     int         device_index = 0;
     float       dt_s         = 0.02f;
     uint16_t    port         = 14560;
+    bool        verbose      = false;
 };
 
 static void print_usage(const char* prog)
@@ -153,7 +156,7 @@ static void print_usage(const char* prog)
         << "Usage: " << prog
         << " --config <aircraft-json> --terrain <terrain-config-json>"
            " [--joystick <joystick-json>] [--device <index>]"
-           " [--dt <seconds>] [--port <udp-port>]\n";
+           " [--dt <seconds>] [--port <udp-port>] [--verbose]\n";
 }
 
 static Args parse_args(int argc, char** argv)
@@ -173,6 +176,8 @@ static Args parse_args(int argc, char** argv)
             args.dt_s = std::stof(argv[++i]);
         } else if (flag == "--port" && i + 1 < argc) {
             args.port = static_cast<uint16_t>(std::stoi(argv[++i]));
+        } else if (flag == "--verbose" || flag == "-v") {
+            args.verbose = true;
         } else {
             std::cerr << "Unknown argument: " << flag << "\n";
             print_usage(argv[0]);
@@ -367,8 +372,9 @@ int main(int argc, char** argv)
     }
 
     // --- Construct broadcaster ---
-    UdpSimulationBroadcaster broadcaster(args.port, projector.get());
-    std::cout << "Broadcasting to 127.0.0.1:" << args.port << "\n";
+    UdpSimulationBroadcaster broadcaster(args.port, projector.get(), args.verbose);
+    std::cout << "Broadcasting to 127.0.0.1:" << args.port
+              << (args.verbose ? "  [verbose pose trace enabled]" : "") << "\n";
 
     // --- Configure and start SimRunner ---
     RunnerConfig cfg;

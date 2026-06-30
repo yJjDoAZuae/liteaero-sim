@@ -23,7 +23,8 @@ class UdpSimulationBroadcaster : public ISimulationBroadcaster {
 public:
     explicit UdpSimulationBroadcaster(
         uint16_t port = 14560,
-        const liteaero::projection::IViewerProjector* projector = nullptr);
+        const liteaero::projection::IViewerProjector* projector = nullptr,
+        bool verbose = false);
     ~UdpSimulationBroadcaster() override;
 
     void broadcast(const SimulationFrame& frame) override;
@@ -34,6 +35,7 @@ private:
     intptr_t                                       socket_fd_;
     uint16_t                                       port_;
     const liteaero::projection::IViewerProjector*  projector_;
+    bool                                           verbose_            = false;
     unsigned int                                   broadcast_count_    = 0;
     bool                                           prev_agl_near_zero_ = false;
 };

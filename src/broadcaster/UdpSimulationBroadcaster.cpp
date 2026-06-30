@@ -1,4 +1,5 @@
 #include "broadcaster/UdpSimulationBroadcaster.hpp"
+#include <algorithm>
 #include "projection/IViewerProjector.hpp"
 #include "liteaerosim.pb.h"
 
@@ -30,10 +31,12 @@ namespace liteaero::simulation {
 
 UdpSimulationBroadcaster::UdpSimulationBroadcaster(
     uint16_t port,
-    const liteaero::projection::IViewerProjector* projector)
+    const liteaero::projection::IViewerProjector* projector,
+    bool verbose)
     : socket_fd_(static_cast<intptr_t>(kInvalidSocket))
     , port_(port)
     , projector_(projector)
+    , verbose_(verbose)
 {
 #ifdef _WIN32
     WSADATA wsa{};
@@ -105,21 +108,31 @@ void UdpSimulationBroadcaster::broadcast(const SimulationFrame& frame)
         vp_y = vp.y_m;
     }
 
-    // Diagnostic: print on first 3 broadcasts and whenever AGL is near 0.
+    // Verbose diagnostic (opt-in via --verbose): per-frame pose trace, throttled to
+    // the first few frames, every 25th frame, and any crossing into near-ground AGL.
+    // Lets a developer confirm the broadcast pose (position + attitude) the viewer
+    // receives. Silent unless verbose mode is enabled.
     ++broadcast_count_;
-    const bool first_few = (broadcast_count_ <= 3);
-    const bool agl_near_zero = (frame.agl_m >= 0.f && frame.agl_m < 1.0f);
-    const bool agl_crossed = agl_near_zero && !prev_agl_near_zero_;
-    prev_agl_near_zero_ = agl_near_zero;
-    if (first_few || agl_crossed) {
-        std::printf(
-            "[broadcast #%u] h_wgs84=%.3f  agl=%.3f  viewer_y=%.3f  "
-            "airspeed=%.2f  h_msl=%.3f  %s\n",
-            broadcast_count_,
-            frame.height_wgs84_m, frame.agl_m, vp_y,
-            frame.airspeed_mps, frame.height_msl_m,
-            std::isnan(frame.height_wgs84_m) ? "NaN!" : "");
-        std::fflush(stdout);
+    if (verbose_) {
+        const bool first_few = (broadcast_count_ <= 3);
+        const bool agl_near_zero = (frame.agl_m >= 0.f && frame.agl_m < 1.0f);
+        const bool agl_crossed = agl_near_zero && !prev_agl_near_zero_;
+        prev_agl_near_zero_ = agl_near_zero;
+        if (first_few || agl_crossed || (broadcast_count_ % 25u == 0u)) {
+            // Euler angles from q_nb (body-to-NED, ZYX) + viewer x/z, for pose-tracking checks.
+            const float qw = frame.q_w, qx = frame.q_x, qy = frame.q_y, qz = frame.q_z;
+            const float roll  = std::atan2(2.f*(qw*qx+qy*qz), 1.f-2.f*(qx*qx+qy*qy)) * 57.2958f;
+            const float pitch = std::asin (std::clamp(2.f*(qw*qy-qz*qx), -1.f, 1.f)) * 57.2958f;
+            const float yaw   = std::atan2(2.f*(qw*qz+qx*qy), 1.f-2.f*(qy*qy+qz*qz)) * 57.2958f;
+            std::printf(
+                "[bc #%u] agl=%.2f vY=%.2f vX=%.2f vZ=%.2f as=%.2f  roll=%.1f pitch=%.1f yaw=%.1f  "
+                "q=(%.3f,%.3f,%.3f,%.3f) %s\n",
+                broadcast_count_, frame.agl_m, vp_y,
+                (projector_ ? proto.viewer_x_m() : 0.f), (projector_ ? proto.viewer_z_m() : 0.f),
+                frame.airspeed_mps, roll, pitch, yaw, qw, qx, qy, qz,
+                std::isnan(frame.height_wgs84_m) ? "NaN!" : "");
+            std::fflush(stdout);
+        }
     }
 
     const std::string serialized = proto.SerializeAsString();

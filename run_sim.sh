@@ -5,6 +5,7 @@
 #   ./run_sim.sh               scripted input (no joystick)
 #   ./run_sim.sh --joystick    joystick input via python/gx12_config.json
 #   ./run_sim.sh --device N    joystick device index (default 0, implies --joystick)
+#   ./run_sim.sh --verbose     (-v) enable live_sim's per-frame broadcast pose trace
 #
 # Environment:
 #   GODOT_EXE   override Godot executable (default: godot4 on PATH)
@@ -19,8 +20,8 @@ cd "$SCRIPT_DIR"
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-CONFIG="./configs/small_uas_ksba.json"
-TERRAIN="./data/terrain/small_uas_ksba/terrain_config.json"
+CONFIG="./configs/small_uas_ksba_flight.json"
+TERRAIN="./data/terrain/small_uas_ksba_flight/terrain_config.json"
 JOYSTICK_CONFIG="./python/gx12_config.json"
 LIVE_SIM_EXE="./build/tools/live_sim.exe"
 GODOT_PROJECT="./godot"
@@ -28,15 +29,17 @@ _GODOT_DEFAULT="/c/Program Files/Godot/Godot_v4.6.2-stable_win64.exe"
 
 USE_JOYSTICK=1
 DEVICE_INDEX=0
+VERBOSE=0
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 for arg in "$@"; do
     case "$arg" in
-        --joystick) USE_JOYSTICK=1 ;;
-        --device)   shift; DEVICE_INDEX="$1"; USE_JOYSTICK=1 ;;
-        *) echo "ERROR: unknown argument '$arg'  (valid: --joystick | --device <N>)" >&2; exit 1 ;;
+        --joystick)    USE_JOYSTICK=1 ;;
+        --device)      shift; DEVICE_INDEX="$1"; USE_JOYSTICK=1 ;;
+        -v|--verbose)  VERBOSE=1 ;;
+        *) echo "ERROR: unknown argument '$arg'  (valid: --joystick | --device <N> | --verbose)" >&2; exit 1 ;;
     esac
 done
 
@@ -101,6 +104,7 @@ if [[ $USE_JOYSTICK -eq 1 ]]; then
     fi
     LIVE_SIM_CMD+=(--joystick "$JOYSTICK_CONFIG" --device "$DEVICE_INDEX")
 fi
+[[ $VERBOSE -eq 1 ]] && LIVE_SIM_CMD+=(--verbose)
 
 # ---------------------------------------------------------------------------
 # Launch
