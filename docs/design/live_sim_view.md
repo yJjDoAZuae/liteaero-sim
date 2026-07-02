@@ -184,23 +184,26 @@ would prevent surprises.
 
 ### Issue 7 — Earth curvature treated inconsistently between aircraft position and terrain placement
 
-**Status:** Resolved — LS-T4 created `liteaero::projection::GodotEnuProjector`
-which performs full curvature-aware ECEF → ENU at the configured world origin
-and applies the glTF axis permutation.  LS-T5 extended `SimulationFrameProto`
-with `viewer_x_m / viewer_y_m / viewer_z_m` (fields 14–16); the broadcaster
-invokes the projector once per frame to populate them.  LS-T7 wires the
-projector into `live_sim.cpp` from `terrain_config.json`.  LS-T8 strips the
-flat-Earth math from `SimulationReceiver` (both GDExtension and GDScript) so
-it now reads `viewer_x/y/z_m` directly into `Vehicle.position`.  The aircraft
-and terrain GLB now share the same ECEF-based projection from the same
-origin; visual AGL matches simulation AGL at all horizontal distances.
+**Status: Superseded by Issue 8 — the resolution was incomplete (aircraft-only) and
+regressed terrain rendering when finally deployed.** LS-T4 created
+`liteaero::projection::GodotEnuProjector` (full curvature-aware ECEF → ENU at the
+configured world origin + the glTF axis permutation); LS-T5 added the
+`viewer_x/y/z_m` proto fields populated by the broadcaster; LS-T7 wired the projector
+into `live_sim.cpp` from `terrain_config.json`; LS-T8 stripped the flat-Earth math
+from `SimulationReceiver` so it reads `viewer_x/y/z_m` into `Vehicle.position`.
 
-Terrain GLB tile placement uses **full ECEF→ENU math** in
-[`python/tools/terrain/export_gltf.py`](../../python/tools/terrain/export_gltf.py)
-(`_enu_offset_between` goes through ECEF). Per-vertex up-offsets within each tile
-are likewise computed via ECEF in `triangulate.py:_geodetic_to_enu_vec`. Both are
-curvature-aware: at 25 km horizontal distance the ECEF "up" component drops by
-$d^2/(2R) \approx 49\ \text{m}$ relative to a flat-Earth approximation.
+What LS-T did **not** do is reconcile the terrain *surface* frame. The GLB tile
+*placement* (node translation) does use world-origin ECEF→ENU, but each tile's
+*vertices* are stored in that tile's **own centroid-tangent ENU frame** and the nodes
+carry **translation only — no rotation** (`export_gltf.py`). So the aircraft was made
+consistent with the tile *centroids* but not the tile *surfaces*. The LS-T fix was also
+never validated in the running viewer (the GDExtension `.dll` was never rebuilt), so the
+defect went unseen until the plugin was finally rebuilt — at which point it regressed
+terrain rendering. The "visual AGL matches at all distances" claim below was therefore
+incorrect. See **Issue 8** for the root cause and the corrected design (per-tile node
+rotation). The curvature drop is real — at 25 km the ECEF "up" drops by
+$d^2/(2R) \approx 49\ \text{m}$ relative to flat-Earth — but it must be applied
+consistently to the terrain *surface*, not just the aircraft and the tile centroids.
 
 The aircraft side, by contrast, uses a **flat-Earth tangent-plane approximation**.
 [`SimulationReceiver.cpp:_decode_frame`](../../godot/addons/liteaero_sim/src/SimulationReceiver.cpp)
@@ -243,6 +246,14 @@ This produces a small in-tile curvature error (~13 m at the corner of a 25 km
 tile) but does not contribute the dominant 49 m+ visual mismatch — that comes
 entirely from the aircraft side.
 
+> **Correction (Issue 8).** This original assessment — that the per-tile-centroid
+> frame is a minor effect and the mismatch is "entirely from the aircraft side" — is
+> **wrong**, and it is exactly why the LS-T fix was incomplete. Once the aircraft side
+> is made curvature-aware, the per-tile-centroid *surface* frame (with translation-only
+> node placement, no rotation) becomes the dominant remaining mismatch — the stacked
+> terrain surfaces in Issue 8. The two effects are not separable: both the aircraft
+> *and* the terrain surface must live in the single world-origin ENU frame.
+
 **Required fix:** make `SimulationReceiver` compute the aircraft Godot position via
 the same ECEF→ENU transform used by `export_gltf.py`. The transform is exactly
 `_enu_offset_between(aircraft_geodetic, world_origin_geodetic)` followed by the
@@ -251,6 +262,92 @@ terrain share the same tangent-plane treatment and visual AGL matches simulation
 AGL at all distances. The reference implementation already exists in
 [`src/environment/TerrainMesh.cpp`](../../src/environment/TerrainMesh.cpp)
 (`geodeticToEcef` + `ecefOffsetToEnu`).
+
+> **Superseded by Issue 8.** The Issue 7 resolution corrected only the *aircraft*
+> side (world-origin curvature-aware projection). It conflated the tile *placement*
+> frame with the tile *surface* frame; the latter was never reconciled, and the
+> resolution was never validated in the running viewer (the GDExtension `.dll` was
+> never rebuilt). Deploying it regressed terrain rendering — see Issue 8.
+
+---
+
+### Issue 8 — Curvature-aware projection regresses terrain alignment; per-tile-centroid surface frame not reconciled
+
+**Status: Resolved — Option 1 (per-tile node rotation).** The curvature-aware aircraft
+projection is kept; the terrain *surface* is reconciled to the same single world-origin ENU
+frame by emitting a per-tile node rotation $R = R_\text{origin}^{\top} R_\text{centroid}$ in
+`export_gltf.py`, so each tile's centroid-relative geometry is placed exactly in the world
+frame the aircraft uses ($\mathbf{v}_\text{world} = \mathbf{c}_\text{world} + R\,\mathbf{v}_\text{centroid}$).
+Per-tile float32 precision is preserved; the aircraft projection and the flat-Earth-revert in
+`SimulationReceiver`/`TerrainLoader.gd` are reverted to the committed curvature-aware baseline
+before implementation. The GLB must be re-exported and the plugin rebuilt; validation per the
+plan below. Issue 7 stands re-marked **incomplete** (aircraft-only). *(Rationale, root-cause
+analysis, and the rejected alternatives follow.)*
+
+**Background — the regression.** The Issue 7 resolution (curvature-aware aircraft projection) was
+deployed for the first time when the GDExtension plugin was finally rebuilt; it
+**regressed** terrain rendering — multiple stacked LOD surfaces appear and the
+aircraft drops through them before reaching the surface it interacts with.
+Reverting `SimulationReceiver` to the pre-LS-T8 flat-Earth path restored correct
+rendering (A/B confirmed). So the flat-Earth path is what has always actually run,
+and the Issue 7 "fix" was never validated against real terrain.
+
+**Root cause — two distinct frames were conflated.**
+
+- **Tile placement** (the glTF node *translation*): `export_gltf.py` places each
+  tile at its centroid's **world-origin** ECEF→ENU offset — curvature-aware, single
+  global origin. This *does* match `GodotEnuProjector`, and the GLB's embedded
+  `world_origin_*` equals `terrain_config.json` (verified), so the origin is correct.
+- **Tile surface geometry** (the glTF *vertices*): each tile stores its vertices in
+  *its own* **centroid-tangent ENU frame** ([terrain.md §Local Tile Frame](terrain.md)),
+  and the nodes carry **translation only — no rotation** (verified: GLB nodes have no
+  `rotation`). Each tile surface therefore lies in its *own* tangent plane, merely
+  shifted — not rotated — into the world frame.
+
+Making the aircraft world-origin curvature-aware aligned it with the tile
+*centroids* but **not** the tile *surfaces*. A tile whose centroid is angular
+distance $\psi$ from the world origin has its tangent plane tilted by $\psi$;
+placed by translation only, its surface is displaced by up to
+$(\text{tile half-extent})\cdot\psi$ vertically, and the displacement **differs per
+tile and per LOD** (different centroids and tile sizes). The result is a patchwork
+of stacked, mutually-offset surfaces; the camera-distance LOD selection — which
+assumes one consistent surface — then shows several at once. The flat-Earth receiver
+masks all of this because its linear tangent plane (up $= h - h_0$, no curvature
+drop) coincides with the per-tile translation placement near the operating area.
+
+The simulation dynamics are **unaffected**: `Aircraft::agl_m()` queries
+`elevation_m()` in WGS84 height directly and never passes through the viewer ENU
+frame. This is purely a viewer-frame consistency defect.
+
+**Required correction — one consistent frame for the aircraft *and* the terrain surface.**
+
+1. **Per-tile node rotation (recommended).** Keep centroid-relative vertices (preserving
+   the float32 precision rationale) but emit, on each glTF tile node, the rotation
+   $R = R_\text{origin}^{\top} R_\text{centroid}$ that maps the tile's centroid-ENU basis
+   to the world-origin-ENU basis. Translation-plus-rotation then places each tile exactly
+   in the single world-origin frame the aircraft already uses
+   ($\mathbf{v}_\text{world} = \mathbf{c}_\text{world} + R\,\mathbf{v}_\text{centroid}$,
+   which is algebraically the exact ECEF→ENU of the vertex). One quaternion per node; no
+   precision loss; the aircraft projection is unchanged.
+2. **Re-express vertices in world-origin ENU.** Drop the per-tile-centroid frame; store
+   every vertex in the single world-origin ENU frame. Conceptually simplest, but vertex
+   coordinates grow to the terrain radius (≤ ~24 km); float32 at 24 km is ~2–3 mm —
+   acceptable for terrain, but a regression from the centroid-relative precision design.
+3. **Keep flat-Earth (status quo after the A/B revert).** Accept the tangent-plane
+   approximation for both aircraft and terrain. Curvature error ~49 m at 25 km — visually
+   irrelevant for a 12 km-radius area but degrades for large datasets.
+
+**Recommendation.** Option 1: it reconciles the terrain *surface* with the world-origin
+frame the aircraft uses, exactly, at the cost of one rotation per tile node. Mark the
+Issue 7 resolution **incomplete** (aircraft-only). Until Option 1 ships, retain the
+flat-Earth receiver (the A/B revert in `SimulationReceiver` / `TerrainLoader.gd`, tagged
+`A/B TEST (issue-1 flat-Earth revert)`), which renders correctly.
+
+**Validation.** Re-export the GLB with per-tile rotation; rebuild via `./build.sh gdext`;
+in the viewer confirm (a) a single terrain surface across all LOD transitions and (b) the
+aircraft sits on the surface at touchdown at both the dataset center and its edges.
+Quantitative: with `live_sim --verbose`, the broadcast `viewer_y` must equal the
+GLB-projected surface height at the sampled lat/lon within float tolerance.
 
 ---
 
@@ -533,7 +630,7 @@ body +X = North, body +Y = East, body +Z = Down.
 `TerrainLoader` applies `mesh_node.rotation_degrees = Vector3(0, 180, 0)` to all
 aircraft meshes. This is a pure Ry(180°) rotation:
 
-$$R_\text{correction} = R_y(180°) = \begin{bmatrix} -1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
+$$R_\text{correction} = R_y(180^\circ) = \begin{bmatrix} -1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & -1 \end{bmatrix}$$
 
 This maps layout axes to NED body axes:
 
@@ -555,7 +652,7 @@ $$q_\text{Vehicle} = R_\text{NED\to Godot} \otimes q_{b2n}$$
 
 The `AircraftMesh` global rotation is:
 
-$$R_\text{mesh,global} = q_\text{Vehicle} \cdot R_y(180°) = R_\text{NED\to Godot} \cdot q_{b2n} \cdot R_y(180°)$$
+$$R_\text{mesh,global} = q_\text{Vehicle} \cdot R_y(180^\circ) = R_\text{NED\to Godot} \cdot q_{b2n} \cdot R_y(180^\circ)$$
 
 At level flight ($q_{b2n}$ = identity), the mesh +X axis (fwd in layout) maps to Godot
 −Z (−North in world frame).

@@ -303,10 +303,17 @@ limit cycles, and the constraint's velocity correction is a discrete analogue; t
 requirement (Test Strategy `Aircraft_BodyCollider_NoRelaunch`) is that the restitution-consistent
 projection does not excite the kinematic attitude.
 
-**§5c — Gear-style rotational reaction $\Delta\theta$ (implemented, OQ-BC-3/6/7 resolved).** The goal
+**§5c — Gear-style rotational reaction $\Delta\theta$ (implemented, OQ-BC-3/6/7 resolved; collider
+portion superseded by OQ-BC-10).** The goal
 is a rotational reaction to a body strike (a wing-low
 or tail-first contact pitches/rolls the airframe *about* the contact, via the §2a low-pass on $M/I$
 with properties P1–P4), with the gear and body-collider contributions **independently attributable**.
+
+> **Defect & resolution (OQ-BC-10 → Alt 1).** Routing the **body-collider** moment through this
+> *compliant* channel injects rotational energy — a wide-wing-box strike catapults the airframe in roll
+> instead of arresting it. Resolved by replacing the collider's share of this channel with an
+> **inelastic rotational velocity-arrest** (dissipative; the rotational analog of §5a), separate from the
+> gear's compliant channel, which is unchanged. Implemented as IP-BC-13.
 
 *As-built today (the starting point).* The `Aircraft::step` rotation-deviation block
 ([landing_gear.md §2a](landing_gear.md)) is **ungated** and driven by the **combined** contact force
@@ -538,13 +545,92 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-All design questions are resolved (resolution notes below). OQ-BC-8 and OQ-BC-9 were the last open ones,
-both resolved to Alternative 1.
+All design questions are resolved (resolution notes below). OQ-BC-8, OQ-BC-9, and OQ-BC-10 resolved to
+Alternative 1.
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
 | OQ-BC-8 | *(Resolved — Alt 1)* Weight-on-wheels for **reporting**: a hysteretic geometric latch (engage at contact, release at clearance $>\delta_\text{off}=V_\text{stall}\Delta t$ — a *derived* band, $V_\text{stall}$ provisional). Reporting-only after OQ-BC-9. Implemented as IP-BC-11 | — |
 | OQ-BC-9 | *(Resolved — Alt 1)* Envelope-wide post-impact limit cycle: the FBW lift-shaping loop coupled to body-collider contact oscillated in shallow/steep/inverted impacts. Resolved by decoupling body-collider contact from the lift-shaping loop (IP-BC-12) | — |
+| OQ-BC-10 | *(Resolved — Alt 1)* Body-collider rotational reaction adds energy via the compliant §5c $\Delta\theta$ channel (catapults roll on wingtip-box contact). Resolved by an **inelastic rotational velocity-arrest** for the collider (rotational analog of §5a), separate from the gear's compliant channel (IP-BC-13) | — |
+
+### OQ-BC-10 — Body-Collider Rotational Reaction Adds Energy; Make It Inelastic *(Resolved — Alternative 1)*
+
+**Resolution (Alternative 1 — inelastic rotational velocity-arrest).** The body collider gets its own
+**dissipative** rotational reaction — the rotational analog of the §5a translational velocity-arrest —
+replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes only the body
+angular-rate component that drives penetrating corners *into* the terrain, with a `max(0, ...)` floor so
+it does no work on rebound (no energy storage or return), yielding a roll/pitch/yaw **rate reduction
+toward zero** at contact rather than a compliant deflection. The **gear keeps its compliant §5c channel
+unchanged** (the OQ-BC-6/7 per-source split already separates the two). The arrest coefficient is
+**derived** (non-magic), with its own CFL bound analogous to §5a's $1/N_\text{arr}$. Acceptance guard:
+a wingtip-strike roll-energy regression (a level wingtip strike must *lose* roll energy, not gain it)
+plus the impact-envelope and landing-gear regressions. Tracked as IP-BC-13. *(Problem analysis and the
+rejected alternatives follow as rationale.)*
+
+**Problem.** The §5c rotational-reaction channel routes the body-collider contact moment through the
+**same compliant second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
+with the per-step change applied to the attitude as a rate (roll via `commitAttitude`, yaw as lateral
+specific force). That path is correct for the **gear**, a compliant spring-damper that stores and
+returns elastic energy. The **body collider is an inelastic backstop** (§5a/§5b), so feeding its contact
+moment through the compliant channel is the wrong physics and **injects rotational energy**.
+
+Observed in the live viewer (small-UAS config with a wide `wing` collision volume, half-extent
+$y = 1.38$ m): when a wingtip box corner touches terrain at a few degrees of roll, the airframe **rolls
+violently away from the contact and keeps rolling after the wingtip has cleared** — energy is added, not
+dissipated. Mechanism:
+
+- The wing box's $1.38$ m lever arm makes the roll moment $M_x = (\mathbf{r}\times\mathbf{F})_x$ large for
+  even a small §5a arrest force.
+- The §5a velocity-arrest force is **half-wave** (`max(0, ...)`, active only while a corner sinks), so
+  contact delivers a one-sided roll **impulse**, not a symmetric arrest.
+- The compliant §5c channel turns that impulse into a $\Delta\theta_\text{roll}$ deflection whose rate is
+  applied to the inertia-free, undamped kinematic attitude. With no rotational inertia or damping to
+  absorb it, the induced roll rate **persists** — the airframe is catapulted in roll.
+
+A true inelastic contact should **arrest** the contact point's rotational velocity (remove the roll
+energy driving the corner into the ground), leaving the airframe at most resting against the surface —
+never accelerating away.
+
+**Alternatives:**
+
+1. **Inelastic rotational velocity-arrest for the collider channel (recommended).** Give the body
+   collider its own **dissipative** rotational reaction — the rotational analog of the §5a translational
+   velocity-arrest — replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes
+   only the body angular-rate component that drives penetrating corners *into* the terrain, with a
+   `max(0, ...)` floor so it does no work on rebound (no energy storage or return). The result is a roll
+   / pitch / yaw **rate reduction toward zero** at contact, not a compliant deflection. The gear keeps
+   its compliant §5c channel unchanged (the OQ-BC-6/7 per-source split already separates the two).
+   - **Benefits:** physically inelastic (cannot add rotational energy); matches the §5a/§5b inelastic
+     character; bounded by construction (the arrest cannot exceed the offending rate); leaves gear
+     behavior untouched; reuses the per-source channel split already in place.
+   - **Drawbacks:** introduces a second rotational mechanism (dissipative) distinct from the gear's
+     compliant one — the §5c shared-linearity invariant no longer covers the collider; needs its own
+     stability/CFL bound (analogous to §5a's $1/N_\text{arr}$).
+   - **Prerequisites:** define the arrest discretization and its **derived** (non-magic) coefficient; a
+     wingtip-strike roll-arrest regression (a level wingtip strike must *lose* roll energy, not gain it)
+     plus the impact-envelope and landing-gear regressions as guards.
+
+2. **Keep the compliant channel but damp/clip the collider rotational contribution.** Add roll-rate
+   damping or a clip so the induced rate decays.
+   - **Benefits:** small change to the existing channel.
+   - **Drawbacks:** still elastic in character (stores then bleeds energy); tuning-dependent; the
+     wide-lever-arm impulse can still overshoot within a step; does not express the intended inelasticity.
+   - **Prerequisites:** a damping/clip coefficient (risks being a magic value).
+
+3. **Suppress the collider rotational channel entirely (translation-only backstop).** Drop the §5c
+   collider moment contribution; the collider arrests translation only (§5a/§5b).
+   - **Benefits:** simplest; cannot add rotational energy.
+   - **Drawbacks:** loses the legitimate attitude response to an off-center strike (a wingtip strike
+     *should* produce some arrest-consistent roll, just not an energy-adding one).
+   - **Prerequisites:** none.
+
+**Recommendation.** Alternative 1 — an inelastic rotational velocity-arrest for the body collider,
+mirroring §5a for rotation and kept separate from the gear's compliant §5c channel. It is the only option
+that makes the contact genuinely inelastic (the stated requirement: "inelastic or nearly so"), with the
+wingtip-strike roll-energy test plus the impact-envelope and gear regressions as the acceptance guard.
+Alternative 3 is the conservative fallback if a stable inelastic rotational arrest proves hard to
+parameterize.
 
 ### OQ-BC-8 — Weight-on-Wheels Detection (Reporting) *(Resolved — Alternative 1)*
 
