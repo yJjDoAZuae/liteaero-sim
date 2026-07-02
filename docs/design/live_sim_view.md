@@ -273,16 +273,10 @@ AGL at all distances. The reference implementation already exists in
 
 ### Issue 8 — Curvature-aware projection regresses terrain alignment; per-tile-centroid surface frame not reconciled
 
-**Status: Resolved — Option 1 (per-tile node rotation).** The curvature-aware aircraft
-projection is kept; the terrain *surface* is reconciled to the same single world-origin ENU
-frame by emitting a per-tile node rotation $R = R_\text{origin}^{\top} R_\text{centroid}$ in
-`export_gltf.py`, so each tile's centroid-relative geometry is placed exactly in the world
-frame the aircraft uses ($\mathbf{v}_\text{world} = \mathbf{c}_\text{world} + R\,\mathbf{v}_\text{centroid}$).
-Per-tile float32 precision is preserved; the aircraft projection and the flat-Earth-revert in
-`SimulationReceiver`/`TerrainLoader.gd` are reverted to the committed curvature-aware baseline
-before implementation. The GLB must be re-exported and the plugin rebuilt; validation per the
-plan below. Issue 7 stands re-marked **incomplete** (aircraft-only). *(Rationale, root-cause
-analysis, and the rejected alternatives follow.)*
+**Status: Resolved.** How to reconcile the terrain surface with the aircraft's frame was a
+design-intent decision, resolved as **OQ-LS-19** (Option 1 — per-tile node rotation) and implemented
+in IP-LV-1/2 (per-tile rotation in `export_gltf.py`; GLB re-exported and validated to machine
+precision). Issue 7 stands re-marked **incomplete** (aircraft-only).
 
 **Background — the regression.** The Issue 7 resolution (curvature-aware aircraft projection) was
 deployed for the first time when the GDExtension plugin was finally rebuilt; it
@@ -319,35 +313,39 @@ The simulation dynamics are **unaffected**: `Aircraft::agl_m()` queries
 `elevation_m()` in WGS84 height directly and never passes through the viewer ENU
 frame. This is purely a viewer-frame consistency defect.
 
-**Required correction — one consistent frame for the aircraft *and* the terrain surface.**
+**Correction.** The alternatives considered for reconciling the frames, and the choice made
+(per-tile node rotation), are the design-intent decision recorded and resolved as **OQ-LS-19**.
 
-1. **Per-tile node rotation (recommended).** Keep centroid-relative vertices (preserving
-   the float32 precision rationale) but emit, on each glTF tile node, the rotation
-   $R = R_\text{origin}^{\top} R_\text{centroid}$ that maps the tile's centroid-ENU basis
-   to the world-origin-ENU basis. Translation-plus-rotation then places each tile exactly
-   in the single world-origin frame the aircraft already uses
-   ($\mathbf{v}_\text{world} = \mathbf{c}_\text{world} + R\,\mathbf{v}_\text{centroid}$,
-   which is algebraically the exact ECEF→ENU of the vertex). One quaternion per node; no
-   precision loss; the aircraft projection is unchanged.
-2. **Re-express vertices in world-origin ENU.** Drop the per-tile-centroid frame; store
-   every vertex in the single world-origin ENU frame. Conceptually simplest, but vertex
-   coordinates grow to the terrain radius (≤ ~24 km); float32 at 24 km is ~2–3 mm —
-   acceptable for terrain, but a regression from the centroid-relative precision design.
-3. **Keep flat-Earth (status quo after the A/B revert).** Accept the tangent-plane
-   approximation for both aircraft and terrain. Curvature error ~49 m at 25 km — visually
-   irrelevant for a 12 km-radius area but degrades for large datasets.
+---
 
-**Recommendation.** Option 1: it reconciles the terrain *surface* with the world-origin
-frame the aircraft uses, exactly, at the cost of one rotation per tile node. Mark the
-Issue 7 resolution **incomplete** (aircraft-only). Until Option 1 ships, retain the
-flat-Earth receiver (the A/B revert in `SimulationReceiver` / `TerrainLoader.gd`, tagged
-`A/B TEST (issue-1 flat-Earth revert)`), which renders correctly.
+### Issue 9 — Live viewer renders multiple terrain LOD surfaces at once (LOD stacking)
 
-**Validation.** Re-export the GLB with per-tile rotation; rebuild via `./build.sh gdext`;
-in the viewer confirm (a) a single terrain surface across all LOD transitions and (b) the
-aircraft sits on the surface at touchdown at both the dataset center and its edges.
-Quantitative: with `live_sim --verbose`, the broadcast `viewer_y` must equal the
-GLB-projected surface height at the sampled lat/lon within float tolerance.
+**Status: Open (defect); fix not yet implemented. Correction approach resolved in OQ-LS-18 (Alternative
+1 — shrink the coarse-LOD cells).** In the live Godot viewer
+several terrain LOD surfaces render simultaneously near the dataset center: the aircraft appears to
+pass through multiple ground layers, and a coarse, blurry surface overlays the fine one directly
+beneath it. Measured on `small_uas_ksba_flight` with the camera ~24 m over the center, 5 LODs (0–4)
+render at once (11 tiles); the `VISIBILITY_RANGE_FADE_SELF` crossfade fades the origin-centered coarse
+tiles at their band's inner edge, leaving ~3 distinctly perceptible surfaces. The effect is worst
+directly over the center — which is the airport — and clears with horizontal distance, so repeatedly
+landing at the airport showed ~3 stacked surfaces consistently.
+
+**Root cause.** The design is nested LOD coverage culled by camera distance to each tile's **centroid**
+([terrain.md §Slant-Range Selection](terrain.md)), which is correct only when a tile is small relative
+to its LOD band. [`build_terrain._LOD_CELL_SIDE_DEG`](../../python/tools/terrain/build_terrain.py) sets
+each cell side to `100 × grid_spacing(lod)`, making every tile ~3× wider than its band. Consequently
+the coarse LODs L2–L6 are single tiles centered at the world origin — their centroid sits under the
+aircraft at the airport (distance ≈ 0), uncullable at close range — and
+[`TerrainLoader._apply_visibility_ranges`](../../godot/addons/liteaero_sim/TerrainLoader.gd) further
+clamps `visibility_range_begin` to 0 for LODs 0–4 through its `− tile_half_diagonal` compensation, so
+all of them render from zero distance. Per-node culling also cannot partially hide a tile that spans
+several bands. The simulation is unaffected — `Aircraft::agl_m()` queries `elevation_m()` directly and
+never uses the viewer tiles — so this is a viewer-only defect; it is long-standing (the tile sizing and
+the radius compensation predate the current dataset — `a631595`) and distinct from the resolved Issue 8
+(per-tile curvature frame).
+
+**Correction.** How to fix it — shrink the coarse cells, non-overlapping rings, an interim culling
+tweak, or per-frame selection — is a design-intent decision documented as open question **OQ-LS-18**.
 
 ---
 
@@ -1523,6 +1521,112 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 
 ---
 
+### OQ-LS-18 — Correction approach for live-viewer LOD stacking
+
+**Resolved — Alternative 1 (shrink the coarse-LOD cells).** The display tiles are made small enough
+that per-node centroid-distance culling selects one opaque LOD per location, by retuning
+[`_LOD_CELL_SIDE_DEG`](../../python/tools/terrain/build_terrain.py) so each coarse LOD's cell side is a
+fraction of its slant-range band (candidate ≈ band width / N, N ≈ 2–4); the nested-coverage + culling
+design and the loader are otherwise unchanged. The fine LODs (L0/L1 — the triangulation-time
+bottleneck) are left as-is. The **exact per-LOD cell sizes are a bounded implementation parameter**,
+not a further open question: they are to be chosen empirically to drive the measured "distinct opaque
+LODs vs. observer position" count to 1 near the center, then confirmed in the viewer. A
+re-triangulation + re-export is required; an export-only / partial-rebuild path (re-triangulate only
+the changed coarse LODs, splice, re-export) should be built first to avoid ~50 min per iteration. The
+one-line interim (Alternative 3) was **not** adopted. Tracked for implementation in
+[live_viewer_terrain_frame.md](../implementation/live_viewer_terrain_frame.md). The observed defect is
+Issue 9.
+
+**Background and alternatives retained below.**
+
+**Problem.** The live viewer renders several terrain LOD surfaces simultaneously near the dataset
+center instead of one; the observed misbehavior, measurements, and root-cause diagnosis are recorded
+in Issue 9. In summary, sufficient to frame this decision: the intended design is nested LOD coverage
+culled by the camera-to-tile-**centroid** distance, but [`build_terrain._LOD_CELL_SIDE_DEG`](../../python/tools/terrain/build_terrain.py)
+sets each cell side to `100 × grid_spacing(lod)`, making every display tile roughly **3× wider than
+its LOD slant-range band**. Distance culling can only select one LOD per location when a tile ≈ one
+slant range; with tiles this large the coarse LODs are single tiles centered at the world origin
+(uncullable under the aircraft) and up to five LODs render at once near the center. The tile sizing is
+a tunable constant, so several corrections are viable; the open question is **which correction to
+adopt** (and, for the recommended one, the cell sizes to use).
+
+**Alternatives.**
+
+1. **Shrink the coarse-LOD cells.** Retune `_LOD_CELL_SIDE_DEG` so each LOD's cell side is a fraction
+   of its band width (candidate ≈ band width / N, N ≈ 2–4; e.g. `~15–30 × grid_spacing` instead of
+   `100 ×`), subdividing the coarse LODs into many small cells so each tile's centroid approximates
+   the observer's slant range over the whole tile. *Benefits:* keeps the existing nested+cull design
+   and the loader unchanged; fixes the invariant at its source; per-cell culling then yields one
+   opaque LOD per location. Shrinking only the coarse LODs is cheap — coarse tiles carry few vertices,
+   so triangulation cost stays low, and the fine LODs (L0/L1) — the triangulation-time bottleneck — are
+   left unchanged. *Drawbacks:* more tiles / draw calls; requires a re-triangulation + re-export.
+   *Prerequisite:* the exact per-LOD cell sizes must be chosen and validated against the "distinct
+   opaque LODs vs. observer position" metric (target: 1) and viewer inspection; with no export-only
+   build path, each iteration currently costs a full `--force` rebuild (~50 min, dominated by L0).
+2. **Non-overlapping rings (holes in coarse tiles).** Emit each LOD only in the annulus its band owns;
+   finer LODs fill the hole, so coverage never overlaps and no distance culling is needed. *Benefits:*
+   cleanest render; removes the culling dependency entirely. *Drawbacks:* introduces cross-LOD
+   T-junctions/seams at ring boundaries that require crack-stitching to avoid gaps; awkward to express
+   with the current few-large-coarse-cell partitioning; largest change. *Prerequisite:* a ring/annulus
+   partitioning scheme and seam-stitching in the triangulation pipeline.
+3. **Asymmetric culling margin (loader-only interim).** In `_apply_visibility_ranges`, add the tile
+   half-diagonal to `end` but never subtract it from `begin`. *Benefits:* one-line change, no
+   re-export, immediate; removes the L2–L6 coarse-center stacking (the blurriest overlays). *Drawbacks:*
+   does not fully resolve — leaves ~2 fine layers (L0 + L1) overlapping at the center, because those
+   tiles are still larger than their bands. Partial relief, not a fix. *Prerequisite:* none.
+4. **Per-frame custom LOD selection.** Replace `visibility_range` with per-tile visibility computed in
+   `_process` from a chosen metric. *Benefits:* full control of the selection rule. *Drawbacks:* still
+   cannot partially hide an oversized tile, so it reduces to Alternative 1's requirement (small tiles)
+   to be correct; adds runtime per-frame code for no structural gain. *Prerequisite:* same small-tile
+   requirement as Alternative 1.
+
+**Recommendation.** Alternative 1 is the correct realization of the existing nested+cull design and
+changes only a sizing constant plus a re-export, leaving the loader untouched. Alternative 3 is a
+valid one-line interim to make the viewer usable before the re-export lands. The exact cell sizes in
+Alternative 1 depend on a measurement that does not yet exist (the observed opaque-LOD count vs.
+position after re-tuning); they should be chosen to drive that count to 1 near the center while
+keeping L0 unchanged, and confirmed in the viewer. Building an export-only / partial-rebuild path
+(re-triangulate only the changed coarse LODs, splice, re-export) before iterating would remove the
+~50 min per-iteration cost.
+
+---
+
+### OQ-LS-19 — Frame reconciliation of the terrain surface with the aircraft's world-origin ENU frame
+
+**Resolved — Option 1 (per-tile node rotation).** Each glTF terrain tile node emits a rotation
+$R = R_\text{origin}^{\top} R_\text{centroid}$ (in the glTF axis convention) alongside its centroid
+translation, so translation + rotation places each tile's centroid-relative vertices exactly in the
+single world-origin ENU frame the aircraft is projected into
+($\mathbf{v}_\text{world} = \mathbf{c}_\text{world} + R\,\mathbf{v}_\text{centroid}$). Centroid-relative
+float32 precision is preserved and the aircraft projection is unchanged. Implemented and validated in
+IP-LV-1/2 (rotation math verified to machine precision; GLB re-exported). Rationale: it reconciles the
+surface exactly at the cost of one quaternion per node, with no precision loss. The observed defect is
+Issue 8.
+
+**Background and rejected alternatives retained below.**
+
+**Problem.** After the aircraft position was made curvature-aware (OQ-LS-15), the terrain *surface* was
+still not in the same frame: each tile's vertices live in that tile's own centroid-tangent ENU frame
+and the glTF nodes carried translation only (no rotation), so each tile's surface tilted per tile/LOD
+and the surfaces stacked (observed as Issue 8). The question was how to place each tile's
+centroid-relative geometry into the single world-origin ENU frame the aircraft is projected into.
+
+**Alternatives.**
+
+1. **Per-tile node rotation (chosen).** Keep centroid-relative vertices; emit the rotation
+   $R = R_\text{origin}^{\top} R_\text{centroid}$ per node so translation + rotation is the exact
+   world-origin ECEF→ENU of each vertex. *Benefits:* exact; one quaternion per node; no precision loss;
+   aircraft projection unchanged. *Drawbacks:* one extra quaternion per tile node.
+2. **Re-express vertices in world-origin ENU.** Drop the per-tile-centroid frame; store every vertex in
+   the single world-origin ENU frame. *Benefits:* conceptually simplest. *Drawbacks:* vertex
+   coordinates grow to the terrain radius (≤ ~24 km); float32 at 24 km is ~2–3 mm — a regression from
+   the centroid-relative precision design.
+3. **Keep flat-Earth (status quo after the A/B revert).** Accept the tangent-plane approximation for
+   both aircraft and terrain. *Benefits:* no change. *Drawbacks:* curvature error ~49 m at 25 km;
+   visually irrelevant for a 12 km-radius area but degrades for large datasets.
+
+---
+
 ## Open Questions — Status Summary
 
 | ID | Summary | Status | Blocking |
@@ -1544,6 +1648,8 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 | OQ-LS-15 | Where to perform ECEF→ENU for aircraft Godot position | Resolved — Option B with strict architectural separation (new `liteaero::projection` module; broadcaster composes a projector; domain layer untouched) | No |
 | OQ-LS-16 | In-tile curvature correction in `TerrainMesh::elevation_m()` | Resolved — Option A, defer (no sim-vs-render mismatch after OQ-LS-15; ~12 m worst-case sim-internal error acceptable) | No |
 | OQ-LS-17 | Geoid grid file distribution | Resolved — Option A (rely on PROJ network access; cached after first build) | No |
+| OQ-LS-18 | Correction approach for live-viewer LOD stacking (defect: Issue 9) | Resolved — Alternative 1 (shrink coarse-LOD cells; cell sizes tuned in implementation) | No (implementation pending) |
+| OQ-LS-19 | Frame reconciliation of terrain surface vs. aircraft (defect: Issue 8) | Resolved — Option 1 (per-tile node rotation; implemented IP-LV-1/2) | No |
 
 ---
 

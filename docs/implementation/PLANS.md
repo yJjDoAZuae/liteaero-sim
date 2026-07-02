@@ -12,7 +12,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Consolidated landing-gear plan: wheel dynamics (OQ-LG-5/6), gear→aircraft force-&-moment coupling (OQ-LG-9–23), and pending debt (OQ-LG-24 effectiveness weight, OQ-LG-15 diagnostic cleanup). SD-1 smoothness reconciliations excluded (undecided — OQ-LG-25) | Active |
 | [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a–§5d + IP-BC-10 done. IP-BC-12 (decouple from FBW lift-shaping) + IP-BC-11 (hysteretic reporting WoW) **done** (committed). **Ready:** IP-BC-13 (OQ-BC-10 → Alt 1, inelastic rotational velocity-arrest — fixes roll-energy injection). Steep/inverted envelope residual tracked there + the lift-path decision | Active |
-| [live_viewer_terrain_frame.md](live_viewer_terrain_frame.md) | Live-viewer terrain frame correction (live_sim_view.md Issue 8 → per-tile node rotation): reconcile the terrain surface to the world-origin ENU frame the aircraft uses. IP-LV-1..3 ready (per-tile rotation in `export_gltf.py`, re-export, validate) | Active |
+| [live_viewer_terrain_frame.md](live_viewer_terrain_frame.md) | Live-viewer terrain rendering corrections. **(1) Frame reconciliation** (Issue 8 / OQ-LS-19 → per-tile node rotation): **IP-LV-1/2 done** (rotation in `export_gltf.py` + tests, GLB re-exported, machine-precision validated; geometry/geodesy consolidated into shared `tools/geodesy.py` + `tools/geometry.py`); IP-LV-3 quantitative PASS, visual pending. **(2) LOD stacking** (Issue 9 / OQ-LS-18 → shrink coarse-LOD cells): **IP-LV-4..6 ready** (export-only rebuild path, retune `_LOD_CELL_SIDE_DEG`, validate one-LOD-per-location). | Active |
 
 ---
 
