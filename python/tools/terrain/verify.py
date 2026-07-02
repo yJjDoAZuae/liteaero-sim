@@ -16,13 +16,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from geodesy import ecef_from_enu
 from las_terrain import TerrainTileData
 
 _log = logging.getLogger("verify")
-
-_WGS84_A: float = 6_378_137.0
-_WGS84_F: float = 1.0 / 298.257223563
-_WGS84_E2: float = 2.0 * _WGS84_F - _WGS84_F**2
 
 
 @dataclass
@@ -44,38 +41,6 @@ class MeshQualityError(ValueError):
     """Raised by check() when a tile fails quality thresholds."""
 
 
-def _enu_to_ecef(
-    enu: np.ndarray,
-    clat_rad: float,
-    clon_rad: float,
-    ch_m: float,
-) -> np.ndarray:
-    """Convert ENU offsets (N, 3) to ECEF positions (N, 3), float64."""
-    sin_lat = math.sin(clat_rad)
-    cos_lat = math.cos(clat_rad)
-    sin_lon = math.sin(clon_rad)
-    cos_lon = math.cos(clon_rad)
-
-    N = _WGS84_A / math.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    cx = (N + ch_m) * cos_lat * cos_lon
-    cy = (N + ch_m) * cos_lat * sin_lon
-    cz = (N * (1.0 - _WGS84_E2) + ch_m) * sin_lat
-
-    # ENU-to-ECEF rotation: columns are the East, North, Up unit vectors.
-    R = np.array(
-        [
-            [-sin_lon, -sin_lat * cos_lon, cos_lat * cos_lon],
-            [cos_lon, -sin_lat * sin_lon, cos_lat * sin_lon],
-            [0.0, cos_lat, sin_lat],
-        ],
-        dtype=np.float64,
-    )
-
-    enu_d = enu.astype(np.float64)
-    ecef = enu_d @ R.T + np.array([cx, cy, cz], dtype=np.float64)
-    return ecef
-
-
 def verify(tile: TerrainTileData) -> MeshQualityReport:
     """Compute quality metrics for tile.
 
@@ -88,7 +53,7 @@ def verify(tile: TerrainTileData) -> MeshQualityReport:
         return report
 
     # Convert all vertices to ECEF float64.
-    ecef = _enu_to_ecef(tile.vertices, tile.centroid_lat_rad, tile.centroid_lon_rad, tile.centroid_height_m)
+    ecef = ecef_from_enu(tile.vertices, tile.centroid_lat_rad, tile.centroid_lon_rad, tile.centroid_height_m)
 
     i0 = tile.indices[:, 0]
     i1 = tile.indices[:, 1]

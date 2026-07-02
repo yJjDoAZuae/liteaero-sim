@@ -11,16 +11,12 @@ For each facet:
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import numpy as np
 
+from geodesy import enu_to_lonlat_deg
 from las_terrain import TerrainTileData
-
-_WGS84_A: float = 6_378_137.0
-_WGS84_F: float = 1.0 / 298.257223563
-_WGS84_E2: float = 2.0 * _WGS84_F - _WGS84_F**2
 
 # DN → linear reflectance [0, 1]
 SCALE_FACTORS: dict[str, float] = {
@@ -61,30 +57,6 @@ BAND_ORDER: dict[str, tuple[int, int, int]] = {
 _DEFAULT_GREY = np.array([128, 128, 128], dtype=np.uint8)
 
 
-def _enu_to_lonlat_deg(
-    east_m: np.ndarray,
-    north_m: np.ndarray,
-    clat_rad: float,
-    clon_rad: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """First-order ENU → geodetic approximation for small offsets.
-
-    Accurate to < 1 m for offsets up to 50 km from the centroid.
-    Returns (lon_deg, lat_deg) arrays.
-    """
-    sin_lat = math.sin(clat_rad)
-    cos_lat = math.cos(clat_rad)
-    N = _WGS84_A / math.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    M = _WGS84_A * (1.0 - _WGS84_E2) / (1.0 - _WGS84_E2 * sin_lat**2) ** 1.5
-
-    dlat_rad = north_m / M
-    dlon_rad = east_m / (N * cos_lat + 1e-30)
-
-    lon_deg = math.degrees(clon_rad) + np.degrees(dlon_rad)
-    lat_deg = math.degrees(clat_rad) + np.degrees(dlat_rad)
-    return lon_deg, lat_deg
-
-
 def colorize(
     tile: TerrainTileData,
     imagery_path: Path,
@@ -123,7 +95,7 @@ def colorize(
     north_m = centroid_enu[:, 1].astype(np.float64)
 
     # Convert to geodetic lon/lat.
-    lon_arr, lat_arr = _enu_to_lonlat_deg(east_m, north_m, tile.centroid_lat_rad, tile.centroid_lon_rad)
+    lon_arr, lat_arr = enu_to_lonlat_deg(east_m, north_m, tile.centroid_lat_rad, tile.centroid_lon_rad)
 
     n_facets = len(tile.indices)
     new_colors = np.full((n_facets, 3), 128, dtype=np.uint8)

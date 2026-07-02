@@ -13,73 +13,31 @@ Design authority: docs/architecture/terrain_build.md §OQ-TB-5 (per-tile texture
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import numpy as np
 import pygltflib
 
+from geodesy import ecef_from_geodetic, enu_offset, enu_to_ecef_rotation, enu_to_lonlat_deg
+from geometry import rotation_matrix_to_quaternion
 from las_terrain import TerrainTileData
 from mosaic_render import MosaicDescriptor
-
-# ---------------------------------------------------------------------------
-# WGS-84 constants (duplicated locally to keep this module self-contained)
-# ---------------------------------------------------------------------------
-
-_WGS84_A: float = 6_378_137.0
-_WGS84_F: float = 1.0 / 298.257223563
-_WGS84_E2: float = 2.0 * _WGS84_F - _WGS84_F**2
 
 # glTF sampler filter / wrap constants (OpenGL enumerants)
 _LINEAR = 9729
 _LINEAR_MIPMAP_LINEAR = 9987
 _CLAMP_TO_EDGE = 33071
 
-
-# ---------------------------------------------------------------------------
-# Geodetic helpers
-# ---------------------------------------------------------------------------
-
-def _ecef_from_geodetic(lat_rad: float, lon_rad: float, h_m: float) -> np.ndarray:
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    N = _WGS84_A / math.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    return np.array([
-        (N + h_m) * cos_lat * math.cos(lon_rad),
-        (N + h_m) * cos_lat * math.sin(lon_rad),
-        (N * (1.0 - _WGS84_E2) + h_m) * sin_lat,
-    ], dtype=np.float64)
-
-
-def _enu_offset(
-    ref_lat_rad: float, ref_lon_rad: float,
-    point_ecef: np.ndarray, ref_ecef: np.ndarray,
-) -> np.ndarray:
-    """Return ENU vector from ref to point, expressed in the ENU frame at ref."""
-    dp = point_ecef - ref_ecef
-    sl, cl = math.sin(ref_lat_rad), math.cos(ref_lat_rad)
-    sn, cn = math.sin(ref_lon_rad), math.cos(ref_lon_rad)
-    east  = -sn * dp[0] + cn * dp[1]
-    north = -sl * cn * dp[0] - sl * sn * dp[1] + cl * dp[2]
-    up    =  cl * cn * dp[0] + cl * sn * dp[1] + sl * dp[2]
-    return np.array([east, north, up], dtype=np.float64)
-
-
-def _enu_to_lonlat_deg(
-    east_m: np.ndarray,
-    north_m: np.ndarray,
-    clat_rad: float,
-    clon_rad: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    """First-order ENU → geodetic approximation (accurate to < 1 m for offsets ≤ 50 km)."""
-    sin_lat = math.sin(clat_rad)
-    cos_lat = math.cos(clat_rad)
-    N = _WGS84_A / math.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    M = _WGS84_A * (1.0 - _WGS84_E2) / (1.0 - _WGS84_E2 * sin_lat**2) ** 1.5
-
-    lon_deg = math.degrees(clon_rad) + np.degrees(east_m  / (N * cos_lat + 1e-30))
-    lat_deg = math.degrees(clat_rad) + np.degrees(north_m / M)
-    return lon_deg, lat_deg
+# Permutation mapping an ENU vector (east, north, up) to the glTF axis
+# convention (X=east, Y=up, Z=−north).  Orthogonal, det = +1.
+_GLTF_FROM_ENU: np.ndarray = np.array(
+    [
+        [1.0,  0.0, 0.0],   # glTF X =  east
+        [0.0,  0.0, 1.0],   # glTF Y =  up
+        [0.0, -1.0, 0.0],   # glTF Z = −north
+    ],
+    dtype=np.float64,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +91,11 @@ def export_gltf(
     TerrainLoader.gd's visibility-range assignment pass.
 
     Node translations carry the ENU offset of each tile centroid from world_origin
-    (glTF axis permutation applied: East→X, Up→Y, −North→Z).
+    (glTF axis permutation applied: East→X, Up→Y, −North→Z).  Node rotations carry the
+    orientation of each tile's centroid-tangent ENU frame relative to the world-origin ENU
+    frame, so translation + rotation places each tile's centroid-relative vertices exactly in
+    the single world-origin frame the aircraft is projected into (reconciles Earth curvature
+    across tiles — live_sim_view.md Issue 8).
 
     Root-level scene extras carry ``"liteaerosim_terrain": true`` and world-origin
     fields consumed by live_sim.cpp / GodotEnuProjector configuration.
@@ -156,7 +118,8 @@ def export_gltf(
             first_tile.centroid_height_m,
         )
     origin_lat, origin_lon, origin_h = world_origin
-    origin_ecef = _ecef_from_geodetic(origin_lat, origin_lon, origin_h)
+    origin_ecef = ecef_from_geodetic(origin_lat, origin_lon, origin_h)
+    origin_enu_to_ecef = enu_to_ecef_rotation(origin_lat, origin_lon)
 
     gltf = pygltflib.GLTF2()
     gltf.asset = pygltflib.Asset(version="2.0", generator="liteaero-sim build_terrain")
@@ -208,7 +171,7 @@ def export_gltf(
         # ----------------------------------------------------------------
         east_m  = verts_enu[:, 0].astype(np.float64)
         north_m = verts_enu[:, 1].astype(np.float64)
-        lon_deg, lat_deg = _enu_to_lonlat_deg(
+        lon_deg, lat_deg = enu_to_lonlat_deg(
             east_m, north_m, tile.centroid_lat_rad, tile.centroid_lon_rad
         )
         lon_range = mosaic.lon_max_deg - mosaic.lon_min_deg
@@ -332,16 +295,31 @@ def export_gltf(
         gltf.meshes.append(mesh)
 
         # Node translation: ENU offset of tile centroid from world origin (axis permuted).
-        tile_ecef = _ecef_from_geodetic(
+        tile_ecef = ecef_from_geodetic(
             tile.centroid_lat_rad, tile.centroid_lon_rad, tile.centroid_height_m
         )
-        enu = _enu_offset(origin_lat, origin_lon, tile_ecef, origin_ecef)
+        enu = enu_offset(origin_lat, origin_lon, tile_ecef, origin_ecef)
         translation = [float(enu[0]), float(enu[2]), float(-enu[1])]
+
+        # Node rotation: the vertices are stored in this tile's centroid-tangent ENU frame,
+        # but the aircraft lives in the single world-origin ENU frame.  R maps the centroid-ENU
+        # basis onto the world-origin-ENU basis (R = R_originᵀ · R_centroid); conjugating by the
+        # glTF axis permutation expresses it in glTF axes so that
+        # v_world = translation + R_gltf · v_centroid is exactly the vertex's world-origin
+        # ECEF→ENU position.  Without it, translation-only placement leaves each tile in its own
+        # tilted tangent plane (Earth curvature) → stacked terrain surfaces (Issue 8).
+        centroid_enu_to_ecef = enu_to_ecef_rotation(
+            tile.centroid_lat_rad, tile.centroid_lon_rad
+        )
+        rotation_enu = origin_enu_to_ecef.T @ centroid_enu_to_ecef
+        rotation_gltf = _GLTF_FROM_ENU @ rotation_enu @ _GLTF_FROM_ENU.T
+        rotation = rotation_matrix_to_quaternion(rotation_gltf)
 
         node = pygltflib.Node(
             name=name,
             mesh=mesh_idx,
             translation=translation,
+            rotation=rotation,
         )
         node_idx = len(gltf.nodes)
         gltf.nodes.append(node)

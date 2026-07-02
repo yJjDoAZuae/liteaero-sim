@@ -15,9 +15,11 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+import _bootstrap  # noqa: F401  # inserts tools/ on sys.path; must precede shared imports
 from colorize import colorize
 from download import DownloadError, default_cache_dir, download_dem, download_imagery
 from export_gltf import export_gltf
+from geodesy import bbox_min_distance_m
 from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
 from mosaic import mosaic_dem, mosaic_imagery
@@ -535,34 +537,6 @@ def _compute_cell_grid(
     return cells
 
 
-def _geodetic_distance_m(
-    lat1_rad: float, lon1_rad: float,
-    lat2_rad: float, lon2_rad: float,
-) -> float:
-    """Equirectangular great-circle distance in metres (sufficient for LOD partitioning)."""
-    dlat = lat2_rad - lat1_rad
-    dlon = (lon2_rad - lon1_rad) * math.cos((lat1_rad + lat2_rad) * 0.5)
-    return math.sqrt(dlat**2 + dlon**2) * 6_371_000.0
-
-
-def _bbox_min_distance_m(
-    center_lat_rad: float,
-    center_lon_rad: float,
-    lat_min_rad: float,
-    lat_max_rad: float,
-    lon_min_rad: float,
-    lon_max_rad: float,
-) -> float:
-    """Minimum great-circle distance from center point to a geodetic bbox (metres).
-
-    Returns 0.0 if the center is inside the bbox.  This is the correct test for
-    whether a tile's coverage overlaps the export circle — see DEFECT-TB-1.
-    """
-    clamped_lat = max(lat_min_rad, min(lat_max_rad, center_lat_rad))
-    clamped_lon = max(lon_min_rad, min(lon_max_rad, center_lon_rad))
-    return _geodetic_distance_m(center_lat_rad, center_lon_rad, clamped_lat, clamped_lon)
-
-
 def _select_display_tiles(
     tiles: list[TerrainTileData],
     center_lat_rad: float,
@@ -582,7 +556,7 @@ def _select_display_tiles(
         if math.isinf(radius):
             display.append(tile)
             continue
-        min_dist_m = _bbox_min_distance_m(
+        min_dist_m = bbox_min_distance_m(
             center_lat_rad, center_lon_rad,
             tile.lat_min_rad, tile.lat_max_rad,
             tile.lon_min_rad, tile.lon_max_rad,
@@ -815,7 +789,7 @@ def _main() -> None:
     except (FileNotFoundError, ValueError, DownloadError) as exc:
         parser.error(str(exc))
 
-    print(f"terrain ready → {glb_path}")
+    print(f"terrain ready -> {glb_path}")
 
 
 if __name__ == "__main__":

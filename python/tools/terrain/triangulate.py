@@ -12,11 +12,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial import Delaunay
 
+from geodesy import enu_from_geodetic
 from las_terrain import TerrainTileData
-
-_WGS84_A: float = 6_378_137.0
-_WGS84_F: float = 1.0 / 298.257223563
-_WGS84_E2: float = 2.0 * _WGS84_F - _WGS84_F**2
 
 # Approximate grid sampling interval in degrees for each LOD level.
 # LOD 0 ≈ 10 m vertex spacing; LOD 6 ≈ 10 km vertex spacing.
@@ -34,60 +31,6 @@ _LOD_GRID_SPACING_DEG: list[float] = [
 def lod_grid_spacing_deg(lod: int) -> float:
     """Return the approximate grid sampling interval in degrees for the given LOD."""
     return _LOD_GRID_SPACING_DEG[lod]
-
-
-def _geodetic_to_ecef_scalar(
-    lat_rad: float, lon_rad: float, h_m: float
-) -> tuple[float, float, float]:
-    sin_lat = math.sin(lat_rad)
-    cos_lat = math.cos(lat_rad)
-    sin_lon = math.sin(lon_rad)
-    cos_lon = math.cos(lon_rad)
-    N = _WGS84_A / math.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    x = (N + h_m) * cos_lat * cos_lon
-    y = (N + h_m) * cos_lat * sin_lon
-    z = (N * (1.0 - _WGS84_E2) + h_m) * sin_lat
-    return x, y, z
-
-
-def _geodetic_to_enu_vec(
-    lat_rad: np.ndarray,
-    lon_rad: np.ndarray,
-    h_m: np.ndarray,
-    clat_rad: float,
-    clon_rad: float,
-    ch_m: float,
-) -> np.ndarray:
-    """Convert geodetic arrays to ENU float32 offsets from centroid.
-
-    Returns (N, 3) float32 array with columns [east_m, north_m, up_m].
-    """
-    sin_lat = np.sin(lat_rad)
-    cos_lat = np.cos(lat_rad)
-    sin_lon = np.sin(lon_rad)
-    cos_lon = np.cos(lon_rad)
-
-    N_arr = _WGS84_A / np.sqrt(1.0 - _WGS84_E2 * sin_lat**2)
-    px = (N_arr + h_m) * cos_lat * cos_lon
-    py = (N_arr + h_m) * cos_lat * sin_lon
-    pz = (N_arr * (1.0 - _WGS84_E2) + h_m) * sin_lat
-
-    cx, cy, cz = _geodetic_to_ecef_scalar(clat_rad, clon_rad, ch_m)
-    dx = px - cx
-    dy = py - cy
-    dz = pz - cz
-
-    # ENU basis vectors at centroid
-    sin_clat = math.sin(clat_rad)
-    cos_clat = math.cos(clat_rad)
-    sin_clon = math.sin(clon_rad)
-    cos_clon = math.cos(clon_rad)
-
-    east = -sin_clon * dx + cos_clon * dy
-    north = -sin_clat * cos_clon * dx - sin_clat * sin_clon * dy + cos_clat * dz
-    up = cos_clat * cos_clon * dx + cos_clat * sin_clon * dy + sin_clat * dz
-
-    return np.column_stack([east, north, up]).astype(np.float32)
 
 
 def triangulate(
@@ -184,7 +127,7 @@ def triangulate(
     # Convert all points to ENU float32 offsets from centroid.
     lat_rad = np.radians(lat_flat)
     lon_rad = np.radians(lon_flat)
-    vertices = _geodetic_to_enu_vec(lat_rad, lon_rad, heights_flat, clat, clon, centroid_height)
+    vertices = enu_from_geodetic(lat_rad, lon_rad, heights_flat, clat, clon, centroid_height)
 
     indices = tri.simplices.astype(np.uint32)
     colors = np.full((len(indices), 3), 128, dtype=np.uint8)

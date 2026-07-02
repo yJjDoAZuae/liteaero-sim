@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import struct
 from pathlib import Path
 
@@ -22,35 +23,43 @@ pytest.importorskip("PIL")
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _make_tile() -> "TerrainTileData":  # type: ignore[name-defined]
+def _make_tile(
+    centroid_lat_rad: float = 0.0,
+    centroid_lon_rad: float = 0.0,
+    centroid_height_m: float = 0.0,
+    vertices: "np.ndarray | None" = None,
+) -> "TerrainTileData":  # type: ignore[name-defined]
     """Build a simple flat tile for GLB export testing."""
     from las_terrain import TerrainTileData
     from scipy.spatial import Delaunay
 
     size = 100.0
-    verts = np.array(
-        [
-            [0.0,      0.0,    0.0],
-            [size,     0.0,    0.0],
-            [size,     size,   0.0],
-            [0.0,      size,   0.0],
-            [size / 2, size / 2, 0.0],
-        ],
-        dtype=np.float32,
-    )
+    if vertices is None:
+        verts = np.array(
+            [
+                [0.0,      0.0,    0.0],
+                [size,     0.0,    0.0],
+                [size,     size,   0.0],
+                [0.0,      size,   0.0],
+                [size / 2, size / 2, 0.0],
+            ],
+            dtype=np.float32,
+        )
+    else:
+        verts = np.asarray(vertices, dtype=np.float32)
     tri = Delaunay(verts[:, :2])
     indices = tri.simplices.astype(np.uint32)
     colors = np.tile([[200, 100, 50]], (len(indices), 1)).astype(np.uint8)
 
     return TerrainTileData(
         lod=0,
-        centroid_lat_rad=0.0,
-        centroid_lon_rad=0.0,
-        centroid_height_m=0.0,
-        lat_min_rad=-0.001,
-        lat_max_rad=0.001,
-        lon_min_rad=-0.001,
-        lon_max_rad=0.001,
+        centroid_lat_rad=centroid_lat_rad,
+        centroid_lon_rad=centroid_lon_rad,
+        centroid_height_m=centroid_height_m,
+        lat_min_rad=centroid_lat_rad - 0.001,
+        lat_max_rad=centroid_lat_rad + 0.001,
+        lon_min_rad=centroid_lon_rad - 0.001,
+        lon_max_rad=centroid_lon_rad + 0.001,
         height_min_m=0.0,
         height_max_m=0.0,
         vertices=verts,
@@ -100,7 +109,7 @@ def test_glb_magic_bytes(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     magic = out.read_bytes()[:4]
     assert magic == b"glTF", f"Expected GLB magic b'glTF', got {magic!r}"
@@ -117,7 +126,7 @@ def test_position_accessor_count_deduped(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     gltf = _read_glb_json_chunk(out)
     n_unique_verts = len(tile.vertices)  # 5 unique vertices
@@ -147,7 +156,7 @@ def test_extras_present(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     raw = out.read_bytes()
     assert b"liteaerosim_terrain" in raw, (
@@ -166,7 +175,7 @@ def test_texcoord0_present(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     gltf = _read_glb_json_chunk(out)
     n_unique_verts = len(tile.vertices)
@@ -195,7 +204,7 @@ def test_single_material_with_texture(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     gltf = _read_glb_json_chunk(out)
 
@@ -222,7 +231,7 @@ def test_color0_absent(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     gltf = _read_glb_json_chunk(out)
     for mesh in gltf.get("meshes", []):
@@ -243,7 +252,7 @@ def test_node_names_encode_lod(tmp_path: Path) -> None:
     tile = _make_tile()
     mosaic = _make_minimal_mosaic()
     out = tmp_path / "terrain.glb"
-    export_gltf([tile], out, mosaic=mosaic)
+    export_gltf([(tile, mosaic)], out)
 
     gltf = _read_glb_json_chunk(out)
     nodes = gltf.get("nodes", [])
@@ -256,14 +265,104 @@ def test_node_names_encode_lod(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# T8 — ValueError when mosaic is None
+# T8 — ValueError when no tiles are supplied
 # ---------------------------------------------------------------------------
 
-def test_raises_without_mosaic(tmp_path: Path) -> None:
-    """export_gltf raises ValueError when no mosaic is supplied."""
+def test_raises_without_tiles(tmp_path: Path) -> None:
+    """export_gltf raises ValueError when the tile list is empty."""
     from export_gltf import export_gltf
 
-    tile = _make_tile()
     out = tmp_path / "terrain.glb"
-    with pytest.raises(ValueError, match="mosaic"):
-        export_gltf([tile], out, mosaic=None)
+    with pytest.raises(ValueError, match="tile_mosaics"):
+        export_gltf([], out)
+
+
+# ---------------------------------------------------------------------------
+# T9 — per-tile node rotation places centroid-relative vertices in the
+#      world-origin ENU frame (IP-LV-1, live_sim_view.md Issue 8)
+# ---------------------------------------------------------------------------
+
+def _quaternion_to_matrix(quat: list[float]) -> np.ndarray:
+    """glTF ``[x, y, z, w]`` quaternion → 3×3 rotation matrix."""
+    x, y, z, w = quat
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w),     2 * (x * z + y * w)],
+        [2 * (x * y + z * w),     1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w),     2 * (y * z + x * w),     1 - 2 * (x * x + y * y)],
+    ], dtype=np.float64)
+
+
+def test_per_tile_rotation_places_vertices_in_world_frame(tmp_path: Path) -> None:
+    """translation + R·v_centroid must equal the vertex's exact world-origin ECEF→ENU
+    position (in glTF axes), so a tile ~20 km from the origin is not left in its own
+    tilted tangent plane."""
+    from export_gltf import export_gltf, _GLTF_FROM_ENU
+    from geodesy import ecef_from_geodetic, enu_offset, enu_to_ecef_rotation
+
+    origin_lat = math.radians(34.40)
+    origin_lon = math.radians(-119.70)
+    origin_h = 12.0
+
+    # Tile centroid ~0.18° north / 0.20° east of the world origin (~20 km) — far enough that
+    # translation-only placement would leave a multi-metre curvature gap.
+    c_lat = math.radians(34.58)
+    c_lon = math.radians(-119.50)
+    c_h = 47.0
+
+    # Non-trivial vertices in the tile's centroid-tangent ENU frame (east, north, up).
+    verts_enu = np.array([
+        [0.0,    0.0,   0.0],
+        [400.0,  0.0,   5.0],
+        [0.0,    400.0, -3.0],
+        [400.0,  400.0, 8.0],
+        [200.0,  200.0, 2.0],
+    ], dtype=np.float32)
+
+    tile = _make_tile(
+        centroid_lat_rad=c_lat,
+        centroid_lon_rad=c_lon,
+        centroid_height_m=c_h,
+        vertices=verts_enu,
+    )
+    mosaic = _make_minimal_mosaic()
+    out = tmp_path / "terrain.glb"
+    export_gltf([(tile, mosaic)], out, world_origin=(origin_lat, origin_lon, origin_h))
+
+    gltf = _read_glb_json_chunk(out)
+    node = gltf["nodes"][0]
+    translation = np.array(node["translation"], dtype=np.float64)
+    rotation = _quaternion_to_matrix(node["rotation"])
+
+    origin_ecef = ecef_from_geodetic(origin_lat, origin_lon, origin_h)
+    centroid_ecef = ecef_from_geodetic(c_lat, c_lon, c_h)
+    centroid_enu_to_ecef = enu_to_ecef_rotation(c_lat, c_lon)
+
+    for v_enu in verts_enu.astype(np.float64):
+        # Exact world-origin ECEF→ENU of this vertex, then permuted to glTF axes.
+        p_ecef = centroid_ecef + centroid_enu_to_ecef @ v_enu
+        v_world_enu = enu_offset(origin_lat, origin_lon, p_ecef, origin_ecef)
+        expected_gltf = _GLTF_FROM_ENU @ v_world_enu
+
+        # Placement realized by the glTF node (vertex stored in glTF axes).
+        v_gltf = _GLTF_FROM_ENU @ v_enu
+        reconstructed = translation + rotation @ v_gltf
+
+        assert np.allclose(reconstructed, expected_gltf, atol=1e-2), (
+            f"vertex {v_enu} mis-placed: got {reconstructed}, expected {expected_gltf}"
+        )
+
+
+def test_per_tile_rotation_identity_at_origin(tmp_path: Path) -> None:
+    """A tile whose centroid is the world origin gets an identity rotation."""
+    from export_gltf import export_gltf
+
+    tile = _make_tile()  # centroid at (0, 0, 0)
+    mosaic = _make_minimal_mosaic()
+    out = tmp_path / "terrain.glb"
+    export_gltf([(tile, mosaic)], out, world_origin=(0.0, 0.0, 0.0))
+
+    gltf = _read_glb_json_chunk(out)
+    rotation = gltf["nodes"][0]["rotation"]
+    assert np.allclose(rotation, [0.0, 0.0, 0.0, 1.0], atol=1e-9), (
+        f"Expected identity quaternion at origin, got {rotation}"
+    )

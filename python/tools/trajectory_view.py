@@ -39,26 +39,11 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
+from geometry import euler_zyx_to_rotation_matrix
+
 if TYPE_CHECKING:
     import pandas as pd
     from mode_overlay import ModeEventSeries
-
-# ---------------------------------------------------------------------------
-# Rotation matrix
-# ---------------------------------------------------------------------------
-
-
-def _rotation_matrix(heading_rad: float, pitch_rad: float, roll_rad: float) -> np.ndarray:
-    """ZYX Euler rotation: R_z(ψ) @ R_y(θ) @ R_x(φ).  Returns (3, 3) array."""
-    cpsi, spsi = math.cos(heading_rad), math.sin(heading_rad)
-    cth, sth = math.cos(pitch_rad), math.sin(pitch_rad)
-    cphi, sphi = math.cos(roll_rad), math.sin(roll_rad)
-
-    rz = np.array([[cpsi, -spsi, 0.0], [spsi, cpsi, 0.0], [0.0, 0.0, 1.0]])
-    ry = np.array([[cth, 0.0, sth], [0.0, 1.0, 0.0], [-sth, 0.0, cth]])
-    rx = np.array([[1.0, 0.0, 0.0], [0.0, cphi, -sphi], [0.0, sphi, cphi]])
-    return rz @ ry @ rx
-
 
 # ---------------------------------------------------------------------------
 # CameraMode
@@ -138,7 +123,7 @@ class RibbonTrail:
         v_upper = np.empty((n, 3))
         v_lower = np.empty((n, 3))
         for i in range(n):
-            r = _rotation_matrix(float(heading_rad[i]), float(pitch_rad[i]), float(roll_rad[i]))
+            r = euler_zyx_to_rotation_matrix(float(heading_rad[i]), float(pitch_rad[i]), float(roll_rad[i]))
             w = r @ wing_body
             v_upper[i] = positions[i] + w
             v_lower[i] = positions[i] - w
