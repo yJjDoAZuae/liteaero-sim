@@ -65,7 +65,9 @@ def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
     # -------------------------------------------------------------------
     # 2. Triangulate → L0 tile.
     # -------------------------------------------------------------------
-    tile_l0 = triangulate(dem_path, bbox, lod=0)
+    from raster_sample import RasterSampler
+
+    tile_l0 = triangulate(RasterSampler.from_path(dem_path), bbox, lod=0)
     assert tile_l0.lod == 0
     assert len(tile_l0.indices) >= 2
 
@@ -100,8 +102,11 @@ def test_synthetic_pipeline_end_to_end(tmp_path: Path) -> None:
         dst.write(img_data)
 
     from colorize import colorize
+    from raster_sample import RasterSampler
 
-    tile_colored = colorize(tile_l1, imagery_path, source="sentinel2")
+    tile_colored = colorize(
+        tile_l1, RasterSampler.from_path(imagery_path, multiband=True), source="sentinel2"
+    )
     # All facets should be white (255, 255, 255).
     np.testing.assert_array_equal(tile_colored.colors, 255)
 

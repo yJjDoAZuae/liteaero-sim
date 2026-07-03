@@ -1639,6 +1639,122 @@ centroid-relative geometry into the single world-origin ENU frame the aircraft i
 
 ---
 
+### OQ-LS-20 — Streamable terrain asset format
+
+**Problem.** The terrain is exported as a single monolithic glTF-binary (GLB) file that contains every
+tile's mesh plus an embedded JPEG texture, and the live viewer loads it whole at scene start:
+[`TerrainLoader.gd`](../../godot/addons/liteaero_sim/TerrainLoader.gd) calls
+`ResourceLoader.load(glb_path)` then `instantiate()`, placing every tile node into the scene tree at
+once. This is adequate for the current 13-display-tile dataset (~352 MB GLB) but does not survive the
+uniform small-footprint tiling resolved in OQ-LS-18. That tiling covers the parameterized region with a
+fixed ~300–500 m footprint at every LOD, producing on the order of **10³–10⁴ tiles** (for the
+~26 km × 21 km `small_uas_ksba_flight` region at a 400 m footprint, ≈ 3,400 tiles *per LOD*). A single
+container has two disqualifying properties: (a) it is **all-or-nothing** — `ResourceLoader.load()` parses
+and instantiates the whole file, so a residency/streaming manager (OQ-LS-21) has no unit to page in or
+out; the entire dataset is resident the instant it loads. (b) the file grows to **many GB**, making
+startup parse time and disk footprint large. The question is what on-disk packaging and index the
+exporter ([`export_gltf.py`](../../python/tools/terrain/export_gltf.py) /
+[`build_terrain.py`](../../python/tools/terrain/build_terrain.py)) should produce, and what loader
+([`TerrainLoader.gd`](../../godot/addons/liteaero_sim/TerrainLoader.gd)) should consume, so that
+individual tiles or tile-groups can be loaded and freed at runtime. This decision must be made **before**
+the IP-LV-5 re-tile: the re-tile should emit the chosen format directly, since a monolithic GLB would
+have to be regenerated to change the packaging.
+
+**Alternatives.**
+
+1. **Per-tile files plus a spatial index.** Export each tile as its own small GLB (mesh + embedded
+   texture) and write a manifest (JSON or binary) listing, per tile: LOD, centroid, axis-aligned
+   bounding box, footprint bbox, and file path. The streaming manager loads and frees individual tile
+   files by proximity. *Benefits:* finest paging granularity; each tile is a self-contained unit;
+   trivial index. *Drawbacks:* 10³–10⁴ small files — filesystem enumeration overhead, slow directory
+   operations, and thousands of separate runtime `ResourceLoader.load()` glTF parses (each with its own
+   texture upload). *Prerequisite:* manifest schema; a loader that reads the manifest and loads tiles on
+   demand.
+2. **Per-region chunk files plus an index.** Group tiles into spatial chunks — e.g. an N×N block of
+   footprints, one file per (LOD, chunk) — and write an index mapping chunk → file + contained tiles.
+   The manager pages whole chunks. *Benefits:* hundreds of files instead of thousands; amortizes file
+   open and parse; a natural fit for a grid streaming scheme. *Drawbacks:* coarser paging granularity (a
+   chunk loads somewhat more than strictly needed near its edge); chunk size is an added tunable that
+   must be reconciled with the streaming radius (OQ-LS-21). *Prerequisite:* a chunking scheme and index;
+   a chunk-keyed loader.
+3. **Single container with a random-access index.** Keep one file but make it seekable — store per-tile
+   byte offsets (glTF with external/segmented buffers, or a custom pack) so the manager can read only a
+   requested tile's bytes without parsing the whole file. *Benefits:* one file to distribute; no
+   thousands-of-files problem. *Drawbacks:* Godot's `ResourceLoader` loads a GLB whole, so partial reads
+   require a **custom parser/loader** (realistically in the C++ GDExtension), plus per-tile GPU texture
+   upload; highest Godot-side complexity. *Prerequisite:* a custom pack format and a custom Godot loader.
+4. **Texture atlas plus shared mesh buffers.** Pack many tiles' textures into shared atlas pages and
+   their meshes into shared vertex buffers (`MultiMesh`), and page atlas pages / buffer regions rather
+   than files. *Benefits:* minimizes draw calls and resource count; best steady-state render
+   performance. *Drawbacks:* most complex to build (atlas allocation, mesh-region management) and largely
+   orthogonal to the residency question; better treated as a later render optimization than as the
+   storage format. *Prerequisite:* an atlas packer and a `MultiMesh` / shared-buffer render path.
+
+**Recommendation.** Alternative 2 (per-region chunk files plus an index). It gives the streaming manager
+real paging units without the 10³–10⁴-tiny-files cost of Alternative 1 or the custom-loader burden of
+Alternative 3, and chunk size is a single tunable that can be validated against the VRAM budget and a
+load-hitch criterion during IP-LV-6. The chunk boundary should be chosen to align with the OQ-LS-21
+streaming radius so a small, bounded number of chunks is resident at once. The atlas/`MultiMesh`
+optimization (Alternative 4) is deferred to IP-LV-6 profiling and pursued only if draw calls prove to be
+the runtime bottleneck. Because the exporter must emit this format, resolve OQ-LS-20 before the IP-LV-5
+re-tile.
+
+---
+
+### OQ-LS-21 — Terrain tile residency / streaming manager
+
+**Problem.** Godot's `visibility_range` culls a `MeshInstance3D` from *rendering* by the camera's
+distance to the node origin, but the node, its mesh, and its texture stay **resident in RAM and VRAM** —
+culling never frees memory. With the uniform small-footprint tiling (OQ-LS-18), the fine LODs (L0, L1)
+cover the whole region as thousands of tiles, and keeping all their textures resident exceeds the
+reference GPU budget (GTX 1050 Ti, 4 GB) by multiples: for the ~26 km × 21 km `small_uas_ksba_flight`
+region at a 400 m footprint there are ≈ 3,400 L0 tiles, so even at 512×512 RGBA8 (~1 MB resident each)
+that is **≈ 3.4 GB for L0 alone**, and the L0 texture cap is 2048×2048 (~16 MB each → far over budget);
+L1 adds more. The fine LODs must therefore be **loaded only near the aircraft and freed when far**,
+while the coarse LODs (few, large-area tiles) stay resident as the distant backdrop. The question is what
+manager governs load/free, on what trigger, with what hysteresis and threading, and how it composes with
+the existing `visibility_range` culling (which remains the correct per-frame *render* selector within the
+resident set).
+
+**Alternatives.**
+
+1. **Radius-based paging keyed on aircraft position.** A manager (GDScript in `TerrainLoader` or the C++
+   GDExtension) keeps resident the fine-LOD tiles whose footprint centroid is within a load radius
+   `R_load` of the aircraft; it loads tiles entering `R_load` and frees tiles beyond a larger unload
+   radius `R_unload` (hysteresis to prevent thrash at the boundary). Coarse LODs are loaded once and kept.
+   `visibility_range` continues to do the final per-frame render culling within the resident set.
+   *Benefits:* bounds VRAM to the load disk (resident fine-tile count ≈ π·R_load² / footprint²);
+   simple and predictable; directly matches the "fly near the ground in the specified region" use case.
+   *Drawbacks:* possible load hitches when crossing into new tiles (mitigated by asynchronous load and a
+   margin between `R_load` and the visibility band); `R_load` / `R_unload` require tuning. *Prerequisite:*
+   the streamable asset format (OQ-LS-20); an asynchronous loader; a per-move proximity check.
+2. **Velocity-predictive prefetch.** Extend Alternative 1 to prefetch tiles along the predicted flight
+   path (bias the load region forward along the velocity vector) rather than a symmetric disk.
+   *Benefits:* fewer hitches at cruise speed because tiles are loaded before they are reached.
+   *Drawbacks:* more complex; over- or under-fetches during maneuvers; still needs the radius scheme as a
+   fallback. *Prerequisite:* everything in Alternative 1 plus aircraft velocity/heading available to the
+   manager.
+3. **Do nothing (rely on `visibility_range` / driver eviction).** Load everything and hope the GPU driver
+   evicts unused textures. *Benefits:* no new code. *Drawbacks:* does not work — `visibility_range` frees
+   no memory and the driver keeps uploaded textures resident; this is exactly the status quo that
+   motivates the question. Listed for completeness; rejected.
+4. **Texture-detail streaming instead of tile unload.** Keep every tile resident but stream only texture
+   mip levels (upload high-resolution mips near the aircraft, low near the horizon). *Benefits:* no
+   tile-level load/unload, so no geometry pop. *Drawbacks:* Godot 4 has no first-class partial-mip
+   streaming for imported textures; this requires a custom virtual-texturing system — a very large
+   effort disproportionate to the need. *Prerequisite:* a virtual-texture subsystem.
+
+**Recommendation.** Alternative 1 (radius-based paging with hysteresis) as the baseline: it directly
+bounds VRAM to the load disk, matches the near-ground use case, and is the minimal mechanism that
+actually frees memory. Add Alternative 2's velocity prefetch later only if load hitches at cruise prove
+noticeable (an IP-LV-6 profiling finding). `R_load` / `R_unload`, the async-load threading, and whether
+the manager lives in GDScript or the GDExtension are implementation choices to be fixed in the plan and
+tuned against the VRAM budget and a "no visible pop or frame hitch" criterion; a GDScript proximity check
+driving an asynchronous `ResourceLoader` is expected to suffice. This depends on OQ-LS-20 (a pageable
+asset format); resolve that first.
+
+---
+
 ## Open Questions — Status Summary
 
 | ID | Summary | Status | Blocking |
@@ -1660,8 +1776,10 @@ centroid-relative geometry into the single world-origin ENU frame the aircraft i
 | OQ-LS-15 | Where to perform ECEF→ENU for aircraft Godot position | Resolved — Option B with strict architectural separation (new `liteaero::projection` module; broadcaster composes a projector; domain layer untouched) | No |
 | OQ-LS-16 | In-tile curvature correction in `TerrainMesh::elevation_m()` | Resolved — Option A, defer (no sim-vs-render mismatch after OQ-LS-15; ~12 m worst-case sim-internal error acceptable) | No |
 | OQ-LS-17 | Geoid grid file distribution | Resolved — Option A (rely on PROJ network access; cached after first build) | No |
-| OQ-LS-18 | Correction approach for live-viewer LOD stacking (defect: Issue 9) | Resolved — Alternative 1 (shrink coarse-LOD cells; cell sizes tuned in implementation) | No (implementation pending) |
+| OQ-LS-18 | Correction approach for live-viewer LOD stacking (defect: Issue 9) | Resolved — Alternative 1 (uniform small tile footprint region-wide; IP-LV-5) | No (implementation pending) |
 | OQ-LS-19 | Frame reconciliation of terrain surface vs. aircraft (defect: Issue 8) | Resolved — Option 1 (per-tile node rotation; implemented IP-LV-1/2) | No |
+| OQ-LS-20 | Streamable terrain asset format (monolithic GLB → pageable units) | **Open** — recommend Alternative 2 (per-region chunk files + index) | **Yes — blocks IP-LV-8, and IP-LV-5 (exporter must emit the chosen format)** |
+| OQ-LS-21 | Terrain tile residency / streaming manager | **Open** — recommend Alternative 1 (radius-based paging with hysteresis) | **Yes — blocks IP-LV-7; depends on OQ-LS-20** |
 
 ---
 

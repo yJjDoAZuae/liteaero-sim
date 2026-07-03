@@ -3,7 +3,7 @@
 For each facet:
 1. Compute the facet centroid in geodetic coordinates from the tile centroid
    and the three vertex ENU offsets (first-order ENU→geodetic approximation).
-2. Sample the imagery raster at the centroid (lon, lat) using rasterio.DatasetReader.sample().
+2. Sample the imagery raster at the centroid (lon, lat) via a RasterSampler.
 3. Extract the R, G, B bands per BAND_ORDER[source].
 4. Scale from raw integer to 8-bit: clamp(raw * SCALE_FACTORS[source] * 255, 0, 255).
 5. If the sampled pixel is nodata, use the default grey {128, 128, 128}.
@@ -11,12 +11,11 @@ For each facet:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 
 from geodesy import enu_to_lonlat_deg
 from las_terrain import TerrainTileData
+from raster_sample import RasterSampler
 
 # DN → linear reflectance [0, 1]
 SCALE_FACTORS: dict[str, float] = {
@@ -59,24 +58,26 @@ _DEFAULT_GREY = np.array([128, 128, 128], dtype=np.uint8)
 
 def colorize(
     tile: TerrainTileData,
-    imagery_path: Path,
+    img: RasterSampler,
     source: str = "sentinel2",
 ) -> TerrainTileData:
-    """Return a new TerrainTileData with colors populated from imagery_path.
+    """Return a new TerrainTileData with colors populated from an imagery sampler.
 
     For each facet:
     1. Compute centroid geodetic position from tile centroid + mean ENU offsets.
     2. Sample the imagery raster at centroid (lon, lat).
     3. Scale and clamp raw band values to uint8.
-    4. Nodata pixels → default grey {128, 128, 128}.
+    4. Nodata / out-of-bounds pixels → default grey {128, 128, 128}.
+
+    ``img`` is a multiband :class:`RasterSampler` (read once, reused across all
+    tiles) so colorization is a vectorized index rather than a full raster read
+    per tile.
 
     Returns a new TerrainTileData (input tile is not modified).
 
     Raises:
         KeyError: if source is not in SCALE_FACTORS.
     """
-    import rasterio
-
     if source not in SCALE_FACTORS:
         raise KeyError(f"Unsupported source '{source}'. Choose from: {list(SCALE_FACTORS)}")
 
@@ -100,27 +101,20 @@ def colorize(
     n_facets = len(tile.indices)
     new_colors = np.full((n_facets, 3), 128, dtype=np.uint8)
 
-    with rasterio.open(imagery_path) as src:
-        nodata = src.nodata
-        # Convert all geodetic coords to pixel indices in one vectorized call.
-        rows, cols = rasterio.transform.rowcol(src.transform, lon_arr, lat_arr)
-        rows = np.asarray(rows, dtype=np.intp)
-        cols = np.asarray(cols, dtype=np.intp)
+    nodata = img.nodata
+    # Sample all required bands at every facet centroid in one vectorized call.
+    # BAND_ORDER is 1-indexed (rasterio convention); the sampler holds all bands.
+    sampled = img.sample(lon_arr, lat_arr)  # (bands, F)
+    r_raw = sampled[r_band - 1].astype(np.float32)
+    g_raw = sampled[g_band - 1].astype(np.float32)
+    b_raw = sampled[b_band - 1].astype(np.float32)
 
-        # Mark facets whose centroid falls outside the raster extent.
-        in_bounds = (rows >= 0) & (rows < src.height) & (cols >= 0) & (cols < src.width)
-        rows_safe = np.clip(rows, 0, src.height - 1)
-        cols_safe = np.clip(cols, 0, src.width - 1)
-
-        # Read the three required bands into memory (H × W each).
-        r_data = src.read(r_band)
-        g_data = src.read(g_band)
-        b_data = src.read(b_band)
-
-    # Sample all facets at once via numpy fancy indexing.
-    r_raw = r_data[rows_safe, cols_safe].astype(np.float32)
-    g_raw = g_data[rows_safe, cols_safe].astype(np.float32)
-    b_raw = b_data[rows_safe, cols_safe].astype(np.float32)
+    # Mark facets whose centroid falls outside the imagery extent (sampler clamps
+    # them to the nearest edge pixel, so flag them explicitly for grey fill).
+    left, bottom, right, top = img.bounds
+    in_bounds = (
+        (lon_arr >= left) & (lon_arr <= right) & (lat_arr >= bottom) & (lat_arr <= top)
+    )
 
     # DN → reflectance → gain → gamma → uint8
     # display = clip(DN * scale * gain, 0, 1) ^ (1/gamma) * 255

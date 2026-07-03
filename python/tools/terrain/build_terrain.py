@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
 from mosaic import mosaic_dem, mosaic_imagery
 from mosaic_render import render_mosaic
+from raster_sample import RasterSampler
 from terrain_paths import (
     derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir,
     terrain_config_path,
@@ -101,6 +104,43 @@ _VIS_END_M: list[float | None] = [345.0, 1_035.0, 3_105.0, 9_315.0, 27_945.0, 83
 # Project root: parents[3] of python/tools/terrain/build_terrain.py = liteaero-sim/
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 
+# ---------------------------------------------------------------------------
+# Per-cell triangulation worker (used by the parallel build path)
+# ---------------------------------------------------------------------------
+
+# Process-local cache of in-memory raster samplers, keyed by (path, multiband).
+# Each ProcessPoolExecutor worker reads the DEM and imagery once, then reuses the
+# in-memory arrays for every cell it processes — so the raster read cost is paid
+# once per worker, not once per cell.
+_SAMPLER_CACHE: dict[tuple[str, bool], RasterSampler] = {}
+
+
+def _get_sampler(path: str, multiband: bool) -> RasterSampler:
+    """Return a cached (per-process) RasterSampler for path, reading it once."""
+    key = (path, multiband)
+    sampler = _SAMPLER_CACHE.get(key)
+    if sampler is None:
+        sampler = RasterSampler.from_path(Path(path), multiband=multiband)
+        _SAMPLER_CACHE[key] = sampler
+    return sampler
+
+
+def _build_cell(
+    task: tuple[str, str, str, int, tuple[float, float, float, float]],
+) -> TerrainTileData:
+    """Triangulate + colorize + quality-check a single cell (ProcessPool worker).
+
+    ``task`` = (dem_path, imagery_path, imagery_source, lod, cell_bbox_deg).
+    Rasters are sampled from the process-local in-memory cache (see _get_sampler).
+    """
+    dem_path, img_path, source, lod, cell_bbox = task
+    dem = _get_sampler(dem_path, multiband=False)
+    img = _get_sampler(img_path, multiband=True)
+    tile = triangulate(dem, cell_bbox, lod=lod)
+    tile = colorize(tile, img, source=source)
+    check(tile)
+    return tile
+
 # Approximate bounding box of the contiguous United States (CONUS).
 # Used to decide whether NAIP imagery is available as a high-resolution source.
 _CONUS_LON_MIN: float = -124.85
@@ -123,6 +163,7 @@ def build_terrain(
     dem_source: str = "copernicus_dem_glo30",
     imagery_source: str = "auto",
     force: bool = False,
+    workers: int = 1,
 ) -> Path:
     """Build a complete terrain dataset for a live-sim aircraft configuration.
 
@@ -153,6 +194,10 @@ def build_terrain(
     force:
         If True, delete all derived outputs and rebuild from scratch.  Cached
         DEM/imagery files in ``python/cache/terrain/`` are retained.
+    workers:
+        Number of processes used to triangulate/colorize tiles.  ``1`` (default)
+        runs the per-cell loop in-process; a value ``> 1`` distributes cells over
+        a ``ProcessPoolExecutor`` (each worker reads the DEM and imagery once).
 
     Returns
     -------
@@ -328,17 +373,38 @@ def build_terrain(
     # -------------------------------------------------------------------
     all_tiles: list[TerrainTileData] = []
 
+    # Flatten every (lod, cell) across all 7 LODs into a single task list.
+    cell_tasks: list[tuple[int, tuple[float, float, float, float]]] = []
     for lod in range(7):
         cells = _compute_cell_grid(bbox_deg, lod=lod)
-        _log.info(
-            "%s: triangulating LOD %d  (%d cell(s)) ...", dataset_name, lod, len(cells)
-        )
-        for row, col, cell_bbox in cells:
-            _log.debug("%s: LOD %d  row=%d col=%d ...", dataset_name, lod, row, col)
-            tile = triangulate(dem_ellipsoidal_path, cell_bbox, lod=lod)
-            tile = colorize(tile, best_img_path, source=best_img_source)
+        _log.info("%s: LOD %d  ->  %d cell(s)", dataset_name, lod, len(cells))
+        cell_tasks.extend((lod, cell_bbox) for _row, _col, cell_bbox in cells)
+
+    _log.info(
+        "%s: triangulating %d tile(s) across 7 LODs  (workers=%d) ...",
+        dataset_name, len(cell_tasks), workers,
+    )
+
+    if workers == 1:
+        # Serial, in-process: read the DEM and imagery once, reuse for every cell.
+        dem_sampler = RasterSampler.from_path(dem_ellipsoidal_path)
+        img_sampler = RasterSampler.from_path(best_img_path, multiband=True)
+        for lod, cell_bbox in cell_tasks:
+            tile = triangulate(dem_sampler, cell_bbox, lod=lod)
+            tile = colorize(tile, img_sampler, source=best_img_source)
             check(tile)
             all_tiles.append(tile)
+    else:
+        # Parallel: each worker reads the rasters once (process-local cache) and
+        # processes a chunk of cells.  Only small (path, lod, bbox) tuples cross the
+        # process boundary — the large raster arrays are never pickled.
+        worker_args = [
+            (str(dem_ellipsoidal_path), str(best_img_path), best_img_source, lod, cell_bbox)
+            for lod, cell_bbox in cell_tasks
+        ]
+        chunksize = max(1, len(worker_args) // (workers * 8))
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            all_tiles.extend(executor.map(_build_cell, worker_args, chunksize=chunksize))
 
     # -------------------------------------------------------------------
     # Step 4: Write .las_terrain (all LODs)
@@ -769,6 +835,16 @@ def _main() -> None:
         action="store_true",
         help="show detailed per-step progress",
     )
+    parser.add_argument(
+        "--workers",
+        metavar="N",
+        type=int,
+        default=os.cpu_count() or 1,
+        help=(
+            "number of processes for tile triangulation/colorization "
+            "(default: all CPU cores; use 1 for serial in-process)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -790,6 +866,7 @@ def _main() -> None:
             dem_source=args.dem_source,
             imagery_source=args.imagery_source,
             force=args.force,
+            workers=args.workers,
         )
     except (FileNotFoundError, ValueError, DownloadError) as exc:
         parser.error(str(exc))

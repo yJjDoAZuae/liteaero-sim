@@ -103,7 +103,9 @@ def test_solid_color_raster_all_facets_same_color(tmp_path: Path) -> None:
     raw_val = 5000
     _write_rgb_raster(imagery_path, r_val=raw_val, g_val=raw_val, b_val=raw_val)
 
-    result = colorize(tile, imagery_path, source="sentinel2")
+    from raster_sample import RasterSampler
+
+    result = colorize(tile, RasterSampler.from_path(imagery_path, multiband=True), source="sentinel2")
 
     # All facets should have the same color.
     assert result.colors.shape == (len(tile.indices), 3)
@@ -125,7 +127,9 @@ def test_cloud_masked_pixel_returns_default_grey(tmp_path: Path) -> None:
     # nodata = 0; write 0 everywhere so all centroids hit nodata.
     _write_rgb_raster(imagery_path, r_val=0, g_val=0, b_val=0, nodata=0)
 
-    result = colorize(tile, imagery_path, source="sentinel2")
+    from raster_sample import RasterSampler
+
+    result = colorize(tile, RasterSampler.from_path(imagery_path, multiband=True), source="sentinel2")
 
     np.testing.assert_array_equal(result.colors[0], [128, 128, 128])
     np.testing.assert_array_equal(result.colors[1], [128, 128, 128])
@@ -141,7 +145,9 @@ def test_color_scaling_16bit_to_8bit(tmp_path: Path) -> None:
     raw_r, raw_g, raw_b = 2000, 3000, 4000
     _write_rgb_raster(imagery_path, r_val=raw_r, g_val=raw_g, b_val=raw_b)
 
-    result = colorize(tile, imagery_path, source="sentinel2")
+    from raster_sample import RasterSampler
+
+    result = colorize(tile, RasterSampler.from_path(imagery_path, multiband=True), source="sentinel2")
 
     from colorize import DISPLAY_GAIN, DISPLAY_GAMMA
     scale = SCALE_FACTORS["sentinel2"]

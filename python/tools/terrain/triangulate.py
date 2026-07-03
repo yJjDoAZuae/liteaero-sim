@@ -7,13 +7,13 @@ guarantee crack-free joins between tile edges.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import numpy as np
 from scipy.spatial import Delaunay
 
 from geodesy import enu_from_geodetic
 from las_terrain import TerrainTileData
+from raster_sample import RasterSampler
 
 # Approximate grid sampling interval in degrees for each LOD level.
 # LOD 0 ≈ 10 m vertex spacing; LOD 6 ≈ 10 km vertex spacing.
@@ -34,12 +34,12 @@ def lod_grid_spacing_deg(lod: int) -> float:
 
 
 def triangulate(
-    dem_path: Path,
+    dem: RasterSampler,
     bbox_deg: tuple[float, float, float, float],  # (lon_min, lat_min, lon_max, lat_max)
     lod: int = 0,
     boundary_points: np.ndarray | None = None,  # (K, 2) float64 lon/lat of locked boundary verts
 ) -> TerrainTileData:
-    """Build a TIN from dem_path over bbox_deg at the given LOD.
+    """Build a TIN from an in-memory DEM sampler over bbox_deg at the given LOD.
 
     Algorithm:
     1. Sample DEM at a regular grid with spacing lod_grid_spacing_deg(lod).
@@ -49,14 +49,21 @@ def triangulate(
     5. Assign default grey color {128, 128, 128} to all facets.
     6. Return TerrainTileData.
 
+    ``dem`` is a :class:`RasterSampler` (read once, reused across all cells) so that
+    the per-cell cost is the Delaunay triangulation, not per-point raster I/O.
+
     Raises:
-        ValueError: if dem_path does not cover bbox_deg.
+        ValueError: if the DEM does not cover bbox_deg.
         ValueError: if the triangulation produces fewer than 2 facets.
     """
-    import rasterio
-
     lon_min, lat_min, lon_max, lat_max = bbox_deg
     spacing = lod_grid_spacing_deg(lod)
+
+    if not dem.covers(bbox_deg):
+        raise ValueError(
+            f"DEM does not cover bbox_deg: DEM bounds={dem.bounds}, "
+            f"requested bbox={bbox_deg}"
+        )
 
     # Sample DEM on a regular lon/lat grid.
     lons = np.arange(lon_min, lon_max + spacing * 0.5, spacing)
@@ -72,35 +79,15 @@ def triangulate(
     lon_flat = lon_grid.ravel().astype(np.float64)
     lat_flat = lat_grid.ravel().astype(np.float64)
 
-    # Sample heights from DEM.
-    with rasterio.open(dem_path) as src:
-        bounds = src.bounds
-        eps = 1e-8
-        if (
-            lon_min < bounds.left - eps
-            or lat_min < bounds.bottom - eps
-            or lon_max > bounds.right + eps
-            or lat_max > bounds.top + eps
-        ):
-            raise ValueError(
-                f"dem_path does not cover bbox_deg: DEM bounds={bounds}, "
-                f"requested bbox={bbox_deg}"
-            )
-
-        coords = list(zip(lon_flat.tolist(), lat_flat.tolist()))
-        heights_flat = np.array([v[0] for v in src.sample(coords)], dtype=np.float64)
-        src_nodata = src.nodata
-
-    if src_nodata is not None:
-        heights_flat[heights_flat == src_nodata] = 0.0
+    heights_flat = dem.sample(lon_flat, lat_flat).astype(np.float64)
+    if dem.nodata is not None:
+        heights_flat[heights_flat == dem.nodata] = 0.0
 
     # Inject boundary points.
     if boundary_points is not None and len(boundary_points) > 0:
-        with rasterio.open(dem_path) as src:
-            bp_coords = list(zip(boundary_points[:, 0].tolist(), boundary_points[:, 1].tolist()))
-            bp_heights = np.array(
-                [v[0] for v in src.sample(bp_coords)], dtype=np.float64
-            )
+        bp_heights = dem.sample(boundary_points[:, 0], boundary_points[:, 1]).astype(np.float64)
+        if dem.nodata is not None:
+            bp_heights[bp_heights == dem.nodata] = 0.0
         lon_flat = np.concatenate([lon_flat, boundary_points[:, 0]])
         lat_flat = np.concatenate([lat_flat, boundary_points[:, 1]])
         heights_flat = np.concatenate([heights_flat, bp_heights])

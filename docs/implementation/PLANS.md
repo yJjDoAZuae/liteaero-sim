@@ -12,7 +12,7 @@ Plans are created and maintained using the [`/impl` skill](../../.claude/command
 | --- | --- | --- |
 | [landing_gear_dynamics.md](landing_gear_dynamics.md) | Consolidated landing-gear plan: wheel dynamics (OQ-LG-5/6), gear→aircraft force-&-moment coupling (OQ-LG-9–23), and pending debt (OQ-LG-24 effectiveness weight, OQ-LG-15 diagnostic cleanup). SD-1 smoothness reconciliations excluded (undecided — OQ-LG-25) | Active |
 | [body_collider_dynamics.md](body_collider_dynamics.md) | Body-collider §5 improvements: §5a–§5d + IP-BC-10 done. IP-BC-12 (decouple from FBW lift-shaping) + IP-BC-11 (hysteretic reporting WoW) **done** (committed). **Ready:** IP-BC-13 (OQ-BC-10 → Alt 1, inelastic rotational velocity-arrest — fixes roll-energy injection). Steep/inverted envelope residual tracked there + the lift-path decision | Active |
-| [live_viewer_terrain_frame.md](live_viewer_terrain_frame.md) | Live-viewer terrain rendering corrections. **(1) Frame reconciliation** (Issue 8 / OQ-LS-19 → per-tile node rotation): **IP-LV-1/2 done** (rotation in `export_gltf.py` + tests, GLB re-exported, machine-precision validated; geometry/geodesy consolidated into shared `tools/geodesy.py` + `tools/geometry.py`); IP-LV-3 quantitative PASS, visual pending. **(2) LOD stacking** (Issue 9 / OQ-LS-18 → uniform small tile footprint region-wide): IP-LV-4 fix triangulator speed (prerequisite, `WORK-TB-1`), IP-LV-5 uniform re-tile, IP-LV-6 validate + profile, **IP-LV-7/8 design-needed** (tile streaming/residency manager + streamable asset format — needs own OQ). | Active |
+| [live_viewer_terrain_frame.md](live_viewer_terrain_frame.md) | Live-viewer terrain rendering corrections. **(1) Frame reconciliation** (Issue 8 / OQ-LS-19 → per-tile node rotation): **IP-LV-1/2 done** (rotation in `export_gltf.py` + tests, GLB re-exported, machine-precision validated; geometry/geodesy consolidated into shared `tools/geodesy.py` + `tools/geometry.py`); IP-LV-3 quantitative PASS, visual pending. **(2) LOD stacking** (Issue 9 / OQ-LS-18 → uniform small tile footprint region-wide): **IP-LV-4 done** (triangulator speed / `WORK-TB-1`: `RasterSampler` read-once vectorized sampling + `ProcessPoolExecutor` — per-cell raster cost 730 ms → ~0.3 ms, output bit-identical); remaining chain **IP-LV-8 → IP-LV-7 → IP-LV-5 → IP-LV-6**: IP-LV-8 streamable asset format (**OQ-LS-20** open — recommend per-region chunk files) and IP-LV-7 tile streaming/residency manager (**OQ-LS-21** open — recommend radius-based paging) must be resolved and built before IP-LV-5 re-tile (exporter must emit the pageable format) and IP-LV-6 validate + profile. | Active |
 
 ---
 
@@ -36,9 +36,10 @@ reference and must not be consulted as descriptions of current work.
 **In `docs/roadmap/` (implementation records, not implementation plans):**
 
 - [`terrain-implementation-plan.md`](../roadmap/terrain-implementation-plan.md) — all 22
-  implementation steps are ✅ complete. One pending performance item (WORK-TB-1:
-  parallelize the terrain build triangulation loop with `ProcessPoolExecutor`) is not yet
-  implemented and not yet blocking any other work. One defect (DEFECT-TB-1: tile export
+  implementation steps are ✅ complete. The performance item WORK-TB-1 (parallelize the terrain
+  build triangulation loop with `ProcessPoolExecutor`) is **implemented** under IP-LV-4 in
+  [`live_viewer_terrain_frame.md`](live_viewer_terrain_frame.md), together with the read-once
+  `RasterSampler` fix that removed the dominant per-cell raster I/O. One defect (DEFECT-TB-1: tile export
   uses centroid-distance filtering instead of bbox intersection) is resolved with a
   workaround; the correct fix is not yet implemented.
 - [`liteaero-flight-migration-plan.md`](../roadmap/liteaero-flight-migration-plan.md) —

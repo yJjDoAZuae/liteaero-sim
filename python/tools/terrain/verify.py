@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import math
-from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -114,17 +113,17 @@ def verify(tile: TerrainTileData) -> MeshQualityReport:
     aspect_ratios = max_edges**2 / (2.0 * areas + 1.0e-30)
     report.max_aspect_ratio = float(np.max(aspect_ratios))
 
-    # Edge valence via Counter keyed on sorted (i, j) pairs.
-    edges: list[tuple[int, int]] = []
-    for facet in tile.indices:
-        a, b, c = int(facet[0]), int(facet[1]), int(facet[2])
-        edges.append((min(a, b), max(a, b)))
-        edges.append((min(b, c), max(b, c)))
-        edges.append((min(a, c), max(a, c)))
-
-    valence = Counter(edges)
-    report.open_boundary_edge_count = sum(1 for v in valence.values() if v == 1)
-    report.non_manifold_edge_count = sum(1 for v in valence.values() if v > 2)
+    # Edge valence: count how many facets share each undirected edge.  Vectorized —
+    # build the (3F, 2) array of the three edges per facet, sort each row so (i, j)
+    # and (j, i) collapse, then count unique rows.
+    e01_ij = tile.indices[:, [0, 1]]
+    e12_ij = tile.indices[:, [1, 2]]
+    e02_ij = tile.indices[:, [0, 2]]
+    edges = np.concatenate([e01_ij, e12_ij, e02_ij], axis=0)  # (3F, 2)
+    edges = np.sort(edges, axis=1)  # undirected: min in col 0, max in col 1
+    _, counts = np.unique(edges, axis=0, return_counts=True)
+    report.open_boundary_edge_count = int(np.count_nonzero(counts == 1))
+    report.non_manifold_edge_count = int(np.count_nonzero(counts > 2))
 
     return report
 

@@ -51,13 +51,14 @@ def _write_flat_dem(
 
 # T1 — 5×5 grid → exactly 32 triangles; all vertices at correct ENU up_m.
 def test_flat_raster_produces_valid_mesh(tmp_path: Path) -> None:
+    from raster_sample import RasterSampler
     from triangulate import lod_grid_spacing_deg, triangulate
 
     spacing = lod_grid_spacing_deg(0)
     dem = tmp_path / "flat.tif"
     bbox = _write_flat_dem(dem, n_cols=5, n_rows=5, height=100.0, lon_min=0.0, lat_min=0.0, spacing=spacing)
 
-    tile = triangulate(dem, bbox, lod=0)
+    tile = triangulate(RasterSampler.from_path(dem), bbox, lod=0)
 
     # A 5×5 regular grid produces 2*(5-1)*(5-1) = 32 Delaunay triangles.
     assert len(tile.indices) == 32, f"Expected 32 facets, got {len(tile.indices)}"
@@ -68,6 +69,7 @@ def test_flat_raster_produces_valid_mesh(tmp_path: Path) -> None:
 
 # T2 — N×M raster → N×M vertices in the output tile.
 def test_vertex_count_equals_grid_points(tmp_path: Path) -> None:
+    from raster_sample import RasterSampler
     from triangulate import lod_grid_spacing_deg, triangulate
 
     n_cols, n_rows = 4, 6
@@ -75,12 +77,13 @@ def test_vertex_count_equals_grid_points(tmp_path: Path) -> None:
     dem = tmp_path / "nm.tif"
     bbox = _write_flat_dem(dem, n_cols=n_cols, n_rows=n_rows, height=50.0, lon_min=0.0, lat_min=0.0, spacing=spacing)
 
-    tile = triangulate(dem, bbox, lod=0)
+    tile = triangulate(RasterSampler.from_path(dem), bbox, lod=0)
     assert len(tile.vertices) == n_cols * n_rows
 
 
 # T3 — provided boundary_points appear verbatim in output vertex list.
 def test_boundary_vertices_locked(tmp_path: Path) -> None:
+    from raster_sample import RasterSampler
     from triangulate import lod_grid_spacing_deg, triangulate
 
     spacing = lod_grid_spacing_deg(0)
@@ -101,7 +104,7 @@ def test_boundary_vertices_locked(tmp_path: Path) -> None:
         dem2, n_cols=5, n_rows=6, height=0.0, lon_min=lon_min, lat_min=lat_min, spacing=spacing
     )
 
-    tile = triangulate(dem2, bbox2, lod=0, boundary_points=bp)
+    tile = triangulate(RasterSampler.from_path(dem2), bbox2, lod=0, boundary_points=bp)
 
     # The total vertex count should be 5×6 (grid) + 1 (boundary) = 31.
     assert len(tile.vertices) == 31
@@ -109,6 +112,7 @@ def test_boundary_vertices_locked(tmp_path: Path) -> None:
 
 # T4 — triangulated tile passes Python quality check (min_angle ≥ 10°, max_aspect ≤ 15).
 def test_output_passes_quality_verifier(tmp_path: Path) -> None:
+    from raster_sample import RasterSampler
     from triangulate import lod_grid_spacing_deg, triangulate
     from verify import check
 
@@ -116,5 +120,5 @@ def test_output_passes_quality_verifier(tmp_path: Path) -> None:
     dem = tmp_path / "qv.tif"
     bbox = _write_flat_dem(dem, n_cols=5, n_rows=5, height=100.0, lon_min=0.0, lat_min=0.0, spacing=spacing)
 
-    tile = triangulate(dem, bbox, lod=0)
+    tile = triangulate(RasterSampler.from_path(dem), bbox, lod=0)
     check(tile)  # Should not raise.

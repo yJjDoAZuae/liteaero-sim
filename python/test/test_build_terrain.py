@@ -337,8 +337,8 @@ class TestEndToEndMocked:
         return mock_download_imagery
 
     @staticmethod
-    def _mock_triangulate(dem_path: Path, cell_bbox: tuple, *, lod: int = 0):
-        """Return a minimal TerrainTileData without reading dem_path."""
+    def _mock_triangulate(dem, cell_bbox: tuple, *, lod: int = 0):
+        """Return a minimal TerrainTileData without sampling the DEM."""
         from las_terrain import TerrainTileData
 
         lon_min, lat_min, lon_max, lat_max = cell_bbox
@@ -361,7 +361,7 @@ class TestEndToEndMocked:
         )
 
     @staticmethod
-    def _mock_colorize(tile, img_path: Path, *, source: str = "sentinel2"):
+    def _mock_colorize(tile, img, *, source: str = "sentinel2"):
         """Return tile unchanged (colorization mocked)."""
         return tile
 
