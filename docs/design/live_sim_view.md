@@ -1641,6 +1641,24 @@ centroid-relative geometry into the single world-origin ENU frame the aircraft i
 
 ### OQ-LS-20 — Streamable terrain asset format
 
+**Resolved — Alternative 2 (per-region chunk files plus an index), with a hard scalability requirement.**
+The format must have headroom for regions **far larger** than the current UAS dataset: fast-jet testing
+will need a world area on the order of **several hundred km radius** while still supporting **full
+ground-level LOD** — on the order of millions of fine tiles. This rules out any packaging whose runtime
+cost scales with the whole region: the index must **not** be a flat manifest enumerating every tile.
+Instead, chunks are addressed by **integer chunk coordinate** `(lod, chunk_x, chunk_y)` computed from a
+small top-level descriptor (region origin, chunk size in footprints, tile footprint, LOD count, coverage
+bounds), so the loader derives exactly which chunk file it needs from the aircraft position in O(1) with
+no global scan; chunk files are discovered by coordinate, with a compact sparse-occupancy record for
+non-rectangular coverage. Chunk size is an integer number of tile footprints, chosen to align with the
+OQ-LS-21 load radius so a small, bounded set of chunks is resident. The atlas / `MultiMesh` option
+(Alternative 4) remains a later render optimization, not part of the storage format. Actually *generating*
+a several-hundred-km full-LOD dataset is a separate build-time/storage concern (IP-LV-5 and beyond); this
+decision only requires the format to impose no ceiling on it. The observed motivation is the thousands-to-
+millions of tiles produced by the OQ-LS-18 uniform tiling.
+
+**Background and alternatives retained below.**
+
 **Problem.** The terrain is exported as a single monolithic glTF-binary (GLB) file that contains every
 tile's mesh plus an embedded JPEG texture, and the live viewer loads it whole at scene start:
 [`TerrainLoader.gd`](../../godot/addons/liteaero_sim/TerrainLoader.gd) calls
@@ -1702,6 +1720,24 @@ re-tile.
 ---
 
 ### OQ-LS-21 — Terrain tile residency / streaming manager
+
+**Resolved — Alternative 1 (radius-based paging) with asymmetric hysteresis.** Fetch and eviction use
+**different radii**: a tile loads when it comes within a fetch radius `R_fetch` of the aircraft and is
+freed only once it lies beyond a strictly larger unload radius `R_unload` (`R_unload > R_fetch`), so the
+hysteresis gap prevents load/free thrash at the boundary. Pure velocity-predictive prefetch
+(Alternative 2) is **rejected as the primary mechanism** because the project assumes highly dynamic
+maneuvering, which makes velocity extrapolation frequently wrong. The asymmetry the design exploits:
+**over-fetching carries no detail-loss cost** — a wrongly anticipated fetch only transiently spends
+memory/bandwidth and is corrected at the next evaluation, whereas a wrong eviction (or a missed fetch)
+risks a visible gap or pop. Therefore the fetch side may be **generous and mildly predictive** (a large
+`R_fetch`, optionally biased along recent motion) while the eviction side stays **conservative and lazy**
+(large `R_unload`, unhurried frees) — safety comes from the hysteresis gap, not from prediction accuracy.
+Coarse LODs remain permanently resident as the far backdrop; `visibility_range` still performs the final
+per-frame render culling within the resident set. `R_fetch` / `R_unload`, the async-load threading, and
+whether the manager lives in GDScript or the GDExtension are implementation parameters for the plan,
+tuned against the VRAM budget and a "no visible pop or frame hitch" criterion.
+
+**Background and alternatives retained below.**
 
 **Problem.** Godot's `visibility_range` culls a `MeshInstance3D` from *rendering* by the camera's
 distance to the node origin, but the node, its mesh, and its texture stay **resident in RAM and VRAM** —
@@ -1778,8 +1814,8 @@ asset format); resolve that first.
 | OQ-LS-17 | Geoid grid file distribution | Resolved — Option A (rely on PROJ network access; cached after first build) | No |
 | OQ-LS-18 | Correction approach for live-viewer LOD stacking (defect: Issue 9) | Resolved — Alternative 1 (uniform small tile footprint region-wide; IP-LV-5) | No (implementation pending) |
 | OQ-LS-19 | Frame reconciliation of terrain surface vs. aircraft (defect: Issue 8) | Resolved — Option 1 (per-tile node rotation; implemented IP-LV-1/2) | No |
-| OQ-LS-20 | Streamable terrain asset format (monolithic GLB → pageable units) | **Open** — recommend Alternative 2 (per-region chunk files + index) | **Yes — blocks IP-LV-8, and IP-LV-5 (exporter must emit the chosen format)** |
-| OQ-LS-21 | Terrain tile residency / streaming manager | **Open** — recommend Alternative 1 (radius-based paging with hysteresis) | **Yes — blocks IP-LV-7; depends on OQ-LS-20** |
+| OQ-LS-20 | Streamable terrain asset format (monolithic GLB → pageable units) | Resolved — Alternative 2 (per-region chunk files + coordinate-addressable index; headroom for several-hundred-km regions at full ground LOD) | No (implementation pending, IP-LV-8) |
+| OQ-LS-21 | Terrain tile residency / streaming manager | Resolved — Alternative 1 (radius-based paging with asymmetric hysteresis: generous fetch, conservative evict) | No (implementation pending, IP-LV-7) |
 
 ---
 
