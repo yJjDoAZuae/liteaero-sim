@@ -1523,19 +1523,26 @@ dependency from `Aircraft` initialization (OQ-LS-12 Option B).
 
 ### OQ-LS-18 — Correction approach for live-viewer LOD stacking
 
-**Resolved — Alternative 1 (shrink the coarse-LOD cells).** The display tiles are made small enough
-that per-node centroid-distance culling selects one opaque LOD per location, by retuning
-[`_LOD_CELL_SIDE_DEG`](../../python/tools/terrain/build_terrain.py) so each coarse LOD's cell side is a
-fraction of its slant-range band (candidate ≈ band width / N, N ≈ 2–4); the nested-coverage + culling
-design and the loader are otherwise unchanged. The fine LODs (L0/L1 — the triangulation-time
-bottleneck) are left as-is. The **exact per-LOD cell sizes are a bounded implementation parameter**,
-not a further open question: they are to be chosen empirically to drive the measured "distinct opaque
-LODs vs. observer position" count to 1 near the center, then confirmed in the viewer. A
-re-triangulation + re-export is required; an export-only / partial-rebuild path (re-triangulate only
-the changed coarse LODs, splice, re-export) should be built first to avoid ~50 min per iteration. The
-one-line interim (Alternative 3) was **not** adopted. Tracked for implementation in
-[live_viewer_terrain_frame.md](../implementation/live_viewer_terrain_frame.md). The observed defect is
-Issue 9.
+**Resolved — Alternative 1, realized as a uniform small tile footprint across the specified region.**
+The tiles are made small enough that per-node centroid-distance culling selects one opaque LOD per
+location. The correct realization is **not** a per-LOD multiplier on the (already 3×-scaled) vertex
+spacing — that keeps the coarse tiles large (a `6× grid_spacing` attempt, 2026-07-02, fixed L2/L3 but
+L4 at 6 km still stacked; 302 tiles / 352 MB / ~3 h build) — but a **single small tile footprint (≈
+300–500 m) applied to every LOD**, with LOD expressed as vertex *density* within that fixed footprint.
+Every LOD covers the **whole parameterized terrain region** (so culling is crisp wherever the aircraft
+flies); tiles are not re-tiled past the dataset boundary (coarse backdrop only). This yields thousands
+of small tiles, which introduces two prerequisites, both now tracked in
+[live_viewer_terrain_frame.md](../implementation/live_viewer_terrain_frame.md):
+
+- **Triangulator speed (IP-LV-4).** The current per-cell cost (~3 s even for tiny cells) makes a
+  thousands-of-tiles build multi-hour; it must be parallelized and its fixed overhead stripped first.
+- **Tile-residency / streaming (IP-LV-7/8).** Godot `visibility_range` culls rendering only — all
+  loaded tiles stay resident, and thousands of high-detail textures exceed the GPU budget — so a
+  streaming manager and a streamable (non-monolithic) asset format are required. The streaming approach
+  itself warrants its own design/OQ.
+
+The one-line interim (Alternative 3) was rejected (see its entry — it removes distant terrain, not just
+stacking). The observed defect is Issue 9.
 
 **Background and alternatives retained below.**
 
@@ -1569,11 +1576,16 @@ adopt** (and, for the recommended one, the cell sizes to use).
    T-junctions/seams at ring boundaries that require crack-stitching to avoid gaps; awkward to express
    with the current few-large-coarse-cell partitioning; largest change. *Prerequisite:* a ring/annulus
    partitioning scheme and seam-stitching in the triangulation pipeline.
-3. **Asymmetric culling margin (loader-only interim).** In `_apply_visibility_ranges`, add the tile
-   half-diagonal to `end` but never subtract it from `begin`. *Benefits:* one-line change, no
-   re-export, immediate; removes the L2–L6 coarse-center stacking (the blurriest overlays). *Drawbacks:*
-   does not fully resolve — leaves ~2 fine layers (L0 + L1) overlapping at the center, because those
-   tiles are still larger than their bands. Partial relief, not a fix. *Prerequisite:* none.
+3. **Asymmetric culling margin (loader-only interim — rejected on testing).** In
+   `_apply_visibility_ranges`, add the tile half-diagonal to `end` but never subtract it from `begin`.
+   One line, no re-export. **This does not work** and is worse than the defect: with the coarse LODs as
+   single tiles centered at the origin, a tile has *one* centroid, so its opacity depends only on the
+   observer's distance from center, not on which part of it is being viewed. Setting `begin` to the band
+   lower bound culls the whole coarse tile whenever the observer is *inside* that band's inner radius —
+   i.e. **standing at the airport (center), every coarse tile is culled and all distant terrain toward
+   the horizon disappears** (predictor: nothing renders at 300 m–11 km from an observer at center). A
+   single large tile is all-or-nothing and cannot be "fine near you, coarse far," so no `visibility_range`
+   setting fixes it — confirming that Alternative 1 (small tiles) is required, not optional.
 4. **Per-frame custom LOD selection.** Replace `visibility_range` with per-tile visibility computed in
    `_process` from a chosen metric. *Benefits:* full control of the selection rule. *Drawbacks:* still
    cannot partially hide an oversized tile, so it reduces to Alternative 1's requirement (small tiles)

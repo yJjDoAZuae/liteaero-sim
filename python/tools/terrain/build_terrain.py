@@ -67,6 +67,11 @@ _LOD_MAX_PIXEL_DIM: list[int] = [
 
 # LOD cell side in degrees: 100 grid points × lod_grid_spacing_deg(N) per terrain.md.
 # L5 and L6 use the same side as L4 (clamped to the coverage area in practice).
+# Cell side per LOD (degrees).  NOTE: this per-LOD-scaled sizing is superseded by the
+# uniform-small-footprint design (live_sim_view.md OQ-LS-18 → live_viewer_terrain_frame.md IP-LV-5),
+# which is blocked on the triangulator-speed fix (IP-LV-4).  Left at the original 100× baseline until
+# that lands; a 6× coarse-LOD experiment (2026-07-02) confirmed a per-LOD multiplier cannot fix the
+# stacking (L4 at 6 km still stacked).
 _LOD_CELL_SIDE_DEG: list[float] = [
     100 * lod_grid_spacing_deg(lod) for lod in range(5)
 ] + [
