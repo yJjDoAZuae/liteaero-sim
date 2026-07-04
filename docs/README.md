@@ -97,6 +97,8 @@ Design documents live in `docs/design/` (see [`docs/design/README.md`](design/RE
 | [`algorithms/equations_of_motion.md`](algorithms/equations_of_motion.md) | RK4 equations-of-motion integration |
 | [`algorithms/integration.md`](algorithms/integration.md) | Numerical integration methods |
 | [`algorithms/air_data.md`](algorithms/air_data.md) | Air data computation — indicated airspeed, Mach, AGL |
+| [`algorithms/screen_space_lod_selection.md`](algorithms/screen_space_lod_selection.md) | Screen-space error → required LOD at any slant range; adequacy range, hysteresis dead-band |
+| [`algorithms/lod_culling_geometry.md`](algorithms/lod_culling_geometry.md) | Distance-to-centroid LOD culling: selection error, tile-size bound, transition alignment, tile-count scaling |
 
 ### Schemas
 

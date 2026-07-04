@@ -65,6 +65,7 @@ Prior to 2026-05-21, subsystem design authority documents were stored in
 | [`sim_runner.md`](sim_runner.md) | `SimRunner`, `RunnerConfig`, `ExecutionMode` |
 | [`terrain.md`](terrain.md) | `V_Terrain`, `TerrainMesh`, height query interface |
 | [`terrain_build.md`](terrain_build.md) | Python terrain ingestion pipeline |
+| [`terrain_lod_rendering.md`](terrain_lod_rendering.md) | Rendering-LOD policy — tile-scale and screen-space-error threshold determination |
 | [`godot_plugin.md`](godot_plugin.md) | GDExtension C++ plugin — `SimulationReceiver`, build system |
 | [`live_sim_view.md`](live_sim_view.md) | Live simulation viewer — UDP broadcast path, SimSession, Godot scene |
 | [`python_bindings.md`](python_bindings.md) | pybind11 module — binding strategy, exposed classes |

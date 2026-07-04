@@ -1791,6 +1791,89 @@ asset format); resolve that first.
 
 ---
 
+### OQ-LS-22 — Tile footprint strategy: uniform vs. per-LOD-scaled
+
+**Problem.** OQ-LS-18 resolved the LOD-stacking defect by giving every LOD a **uniform small tile
+footprint** across the whole region (LOD = vertex density within that fixed footprint), so per-node
+centroid-distance culling selects one LOD per location. Implementing it (IP-LV-5) and measuring on the
+`small_uas_ksba_flight` region (~26 km × 21 km, 12 km radius) at a 400 m footprint exposed two
+consequences that were not quantified when OQ-LS-18 was decided:
+
+1. **Tile-count explosion.** The region becomes 3,660 cells; with all 7 LODs that is **25,620 tiles**.
+   Tile count grows as (region area) / (footprint²), so it is punishing for larger regions — and OQ-LS-20
+   set a hard requirement that the format support **several-hundred-km-radius** fast-jet worlds at full
+   ground LOD. A 300 km radius at a 400 m footprint is on the order of **10⁶–10⁷ tiles**, which a uniform
+   small footprint cannot feasibly build, store, or render.
+2. **Redundant coarse LODs.** A tile footprint of 400 m is smaller than the coarse LODs' native vertex
+   spacings (L4 ≈ 1 km, L5 ≈ 3 km, L6 ≈ 10 km), so those LODs clamp to the minimum mesh (a 3×3 grid, 9
+   vertices) inside each 400 m cell. L3–L6 therefore have **geometrically identical meshes** — the same
+   9 vertices per cell — differing only in texture resolution and visibility band. That is 14,640 coarse
+   tiles which are 3,660 unique meshes duplicated four times, all resident as the backdrop (thousands of
+   draw calls). The mismatch is structural: a coarse LOD's visibility band is tens of km wide, so its
+   tiles do **not** need to be 400 m for culling to be crisp — a tile only needs to be smaller than its
+   own band, not smaller than the finest band.
+
+The finest LOD is well served by ~400 m (its band is ~345 m), so the question is specifically the
+footprint used for the **coarse** LODs, and whether the footprint must be uniform at all.
+
+**Alternatives.**
+
+1. **Uniform small footprint (the OQ-LS-18 realization, as implemented).** One footprint (≈ 400 m) for
+   every LOD. *Benefits:* crispest possible culling (every tile ≈ finest-band size); simplest tiling
+   (one cell grid); exactly the resolved design. *Drawbacks:* 25,620 tiles for a 12 km region and
+   ~10⁶–10⁷ for a several-hundred-km one — infeasible at the OQ-LS-20 scale; 14,640 redundant coarse
+   tiles; heavy build (a mosaic render per tile) and a large resident-node/draw-call count.
+   *Prerequisite:* the atlas / `MultiMesh` optimization (OQ-LS-20 Alternative 4) to survive the draw
+   calls, and still no answer for the several-hundred-km requirement.
+2. **Larger uniform footprint.** Keep uniform but raise the footprint (e.g. 1000 m → ~590 cells → ~4,130
+   tiles). *Benefits:* keeps the uniform simplicity; ~6× fewer tiles; identical maximum ground detail
+   (density/texture unchanged). *Drawbacks:* the finest LOD's tile (1000 m) is now ~3× its ~345 m band —
+   the same "tile wider than its band" condition that produced the original stacking, reintroduced (less
+   severely) for L0; the coarse LODs are still redundant; still scales as 1/footprint² so it only defers
+   the several-hundred-km problem. *Prerequisite:* none.
+3. **Per-LOD footprint scaled to each LOD's band.** Set each LOD's footprint to a fraction of its own
+   visibility-band width (small for fine LODs, large for coarse), e.g. `footprint(lod) ≈ visibility_end(lod) / k`.
+   *Benefits:* culling stays crisp per LOD (each tile is smaller than its own band, which is all culling
+   needs); coarse LODs become few large tiles sized to their wide bands, eliminating both the redundant
+   duplicate geometry and the tile-count explosion; the total tile count is roughly constant per LOD
+   rather than growing with the finest spacing, so it **scales to the several-hundred-km fast-jet worlds**
+   OQ-LS-20 requires. Chunking (by centroid) and streaming are unaffected. *Drawbacks:* not a single tile
+   size (revisits the "uniform" premise of OQ-LS-18); adds a per-LOD footprint mapping to define and tune.
+   *Note:* this is **not** the per-LOD *multiplier* rejected in OQ-LS-18 Alternative 3/4 — that kept
+   coarse tiles ~3× *larger* than their band (too big → stacking); a footprint ≈ band/k makes each tile
+   *smaller* than its band (correct), differing from the uniform case only in that coarse tiles are as
+   large as their band safely allows rather than needlessly tiny. *Prerequisite:* choose `k` (and any
+   per-LOD overrides) and validate the opaque-LOD-per-location metric.
+4. **Uniform small footprint with a capped LOD count.** Keep 400 m but stop generating LODs once the mesh
+   stops changing (L0–L3 only), and extend the coarsest generated LOD's visibility range to the horizon.
+   *Benefits:* removes the identical L4–L6 duplicates (25,620 → 14,640 tiles). *Drawbacks:* does not fix
+   the core problem — the backdrop is still 3,660 tiny L3 tiles (still thousands of draw calls) — and
+   distant terrain has no representation coarser than a 9-vertex 400 m tile; still 1/footprint² scaling.
+   *Prerequisite:* extend the coarsest band to infinity in the loader.
+
+**Recommendation.** Alternative 3 (per-LOD footprint scaled to the band), but with a caveat that the
+earlier confident framing omitted. The mathematics is now worked out rather than asserted:
+[terrain_lod_rendering.md](terrain_lod_rendering.md) defines the policy, from the derivations in
+[lod_culling_geometry.md](../algorithms/lod_culling_geometry.md) (the geometry) and
+[screen_space_lod_selection.md](../algorithms/screen_space_lod_selection.md) (the thresholds — which
+also replace the unfounded 300 m/345 m band values that anchored the original phrasing of this
+question). The case *for* Alternative 3: the admissible tile size is a per-LOD bound
+$h_\ell \le \tfrac12\gamma(R_{\ell+1}-R_\ell)$, so uniform tiling must use the finest LOD's tiny bound
+everywhere — $\approx 6\times$ more tiles at equal resolution, redundant coarse geometry, and no bound
+on the count as the region grows (infeasible at the several-hundred-km OQ-LS-20 scale). The **caveat**:
+per-LOD footprints use distinct grids, so adjacent-LOD tiles covering the same point have offset
+centroids ($\le h_\ell + h_{\ell+1}$), and their crossfades align cleanly only if
+$h_{\ell+1} \lesssim B_{\ell+1}$ (crossfade width). Uniform *shared-grid* tiling has this offset equal
+to zero by construction — that is the real, provable reason the uniform instinct is attractive, and it
+is a property per-LOD gives up. The alignment ratio is constant across LODs and $O(1)$ for the
+recommended parameters, but whether it renders cleanly depends on the renderer's crossfade profile and
+**must be measured, not assumed** (terrain_lod_rendering.md Test Strategy). So: Alternative 3 is
+recommended on scalability and tile-count grounds, conditional on that measurement; the uniform
+shared-grid scheme (Alternative 1, already implemented) remains the fallback if per-LOD crossfades cannot
+be made seamless, and is in any case the right baseline for the first in-engine validation (IP-LV-6).
+
+---
+
 ## Open Questions — Status Summary
 
 | ID | Summary | Status | Blocking |
@@ -1815,7 +1898,8 @@ asset format); resolve that first.
 | OQ-LS-18 | Correction approach for live-viewer LOD stacking (defect: Issue 9) | Resolved — Alternative 1 (uniform small tile footprint region-wide; IP-LV-5) | No (implementation pending) |
 | OQ-LS-19 | Frame reconciliation of terrain surface vs. aircraft (defect: Issue 8) | Resolved — Option 1 (per-tile node rotation; implemented IP-LV-1/2) | No |
 | OQ-LS-20 | Streamable terrain asset format (monolithic GLB → pageable units) | Resolved — Alternative 2 (per-region chunk files + coordinate-addressable index; headroom for several-hundred-km regions at full ground LOD) | No (implementation pending, IP-LV-8) |
-| OQ-LS-21 | Terrain tile residency / streaming manager | Resolved — Alternative 1 (radius-based paging with asymmetric hysteresis: generous fetch, conservative evict) | No (implementation pending, IP-LV-7) |
+| OQ-LS-21 | Terrain tile residency / streaming manager | Resolved — Alternative 1 (radius-based paging with asymmetric hysteresis: generous fetch, conservative evict) | No (implemented, IP-LV-7) |
+| OQ-LS-22 | Tile footprint strategy: uniform vs. per-LOD-scaled (tile-count explosion + redundant coarse LODs at uniform 400 m) | **Open** — recommend Alternative 3 (per-LOD footprint scaled to each LOD's band) | **Yes — gates the IP-LV-5 re-tile** |
 
 ---
 

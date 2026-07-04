@@ -163,6 +163,19 @@ $$\ell = \min\!\left(6,\ \left\lfloor \log_3\!\left(\frac{r}{r_0}\right) \right\
 This places the boundary between consecutive LOD levels at approximately 3× the lower
 boundary, ensuring roughly 30 vertices span any line of sight at every level.
 
+> **Provisional basis — not derived from rendered resolution.** The value $r_0 = 300$ m and the
+> "≈30 vertices per line of sight" rationale are a geometric rule of thumb; they are **not** tied
+> to output resolution, field of view, or a rendered-error tolerance, so the specific boundary
+> distances have no principled basis for deciding when a level looks adequate on screen. For the
+> **live-viewer rendering** LOD, these thresholds are superseded by a screen-space-error policy
+> — see [terrain_lod_rendering.md](terrain_lod_rendering.md) and the algorithm derivations in
+> [screen_space_lod_selection.md](../algorithms/screen_space_lod_selection.md) and
+> [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md). Under a $1$-pixel tolerance
+> at $1080$p and the viewer's $90^\circ$ FOV, the principled boundaries are ≈5× larger than the
+> table below. The **simulator-internal** LOD used for collision and sensor queries (the use
+> case this rule was written for) still needs its own threshold basis derived from a *physical*
+> (metres-of-surface-deviation) tolerance rather than this convention — an open follow-up.
+
 ### LOD Hysteresis Band
 
 To prevent rapid LOD switching ("flickering") when the observer slant range hovers near a
