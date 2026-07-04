@@ -177,33 +177,107 @@ scheme has zero alignment offset and would be reconsidered there) — not a sile
 
 ## Open Questions
 
-| ID | Question | Blocking |
+| ID | Summary | Blocking |
 | --- | --- | --- |
-| OQ-LR-1 | Build-time vs. runtime thresholds | Not blocking (has a safe default) |
-| OQ-LR-2 | Confirmation of the parameter defaults ($\tau,\gamma,\delta,H_\text{ref}$) | Blocking the re-tile |
+| OQ-LR-1 | Build-time vs. runtime evaluation of the LOD thresholds and crossfades | Not blocking — fixed-reference default is usable |
+| OQ-LR-2 | Rendering-LOD quality/cost operating point ($\tau$, $\gamma$) | Blocking — sets the tile count; gates the re-tile |
 
-### OQ-LR-1 — Build-time versus runtime threshold evaluation
+### OQ-LR-1 — Build-time versus runtime evaluation of the LOD thresholds
 
-**Problem.** $R_\ell \propto H_\text{ref}/\tan(\phi/2)$, so the thresholds depend on the actual
-output resolution and camera FOV, which can change at runtime (window resize, FOV/zoom change).
-Precomputing tile footprints at build time is unavoidable — geometry cannot be re-tiled per
-frame — but the *visibility bands* could be recomputed at runtime from the live viewport height
-and FOV. **Alternatives.** (1) Fix both at $H_\text{ref}, \phi_\text{ref}$ at build time — simple,
-but a $2\times$ resolution or FOV change makes the thresholds off by $2\times$. (2) Precompute
-footprints at build time, recompute visibility bands each frame from the live $H,\phi$ — keeps
-thresholds correct as the window/FOV change, with the footprint fixed to the build-time reference
-(a mismatch bounded by the resolution ratio, absorbed by $\gamma$'s margin). **Recommendation.**
-Alternative 2 for the bands; footprints from $H_\text{ref}$. Non-blocking because the fixed
-default is usable for validation.
+**Problem.** A LOD's adequacy range is $R_\ell = \varepsilon_\ell\,H/(2\tau\tan(\phi/2))$
+(§1): it is proportional to the viewport height $H$ (pixels) and to $\cot(\phi/2)$, where $\phi$
+is the vertical field of view. The tile footprints $f_\ell$ (§2) are baked geometry and must be
+fixed at build time from a reference $(H_\text{ref}, \phi_\text{ref})$ — geometry cannot be
+re-tiled per frame. The *visibility bands* $[R_\ell, R_{\ell+1}]$ and crossfade widths
+$B_\ell = 2\delta R_\ell$ applied by the viewer, however, may either be frozen at the same
+reference values or recomputed at runtime from the live viewport height and camera FOV, which
+change on window resize and on any FOV/zoom change. If the bands are frozen and the runtime
+viewport differs from $H_\text{ref}$ by a factor $k$, every threshold is wrong by $k$: on a
+$2160$-pixel display against an $H_\text{ref}=1080$ reference ($k=2$), each LOD switches at half
+its correct distance — visible over-coarsening at mid range. Affected use cases: UC-LR-1
+(thresholds), UC-LR-3 (crossfade). Not affected: UC-LR-2 (footprints), which are unavoidably
+build-time.
 
-### OQ-LR-2 — Confirmation of the parameter defaults
+**Alternatives.**
 
-**Problem.** The recommended $\tau=1$ px, $\gamma=0.25$, $\delta=0.15$, $H_\text{ref}=1080$ are
-engineering starting points, not measured. They set the absolute tile count and the alignment
-ratio of §3, so they gate the (expensive) re-tile. **Recommendation.** Confirm $\tau$ and
-$H_\text{ref}$ against the intended display, then validate $\gamma,\delta$ against the Test
-Strategy metric before committing to a full re-tile; treat the first per-LOD build as a tuning
-iteration. Blocking the re-tile run.
+1. **Fixed reference for everything.** Freeze $R_\ell$ and $B_\ell$ at the build-time
+   $(H_\text{ref}, \phi_\text{ref})$; the viewer uses the baked band table verbatim. *Benefits:*
+   simplest; the bands are compile-time constants; no per-frame arithmetic; fully deterministic
+   across runs. *Drawbacks:* thresholds are off by the resolution/FOV ratio whenever the runtime
+   display differs from the reference — a factor of $2$ at $2160$p vs $1080$p, with correspondingly
+   early coarsening. *Prerequisite:* a chosen $(H_\text{ref}, \phi_\text{ref})$ (OQ-LR-2 and the
+   viewer camera).
+2. **Runtime bands, build-time footprints.** Bake $f_\ell$ from $H_\text{ref}$; recompute $R_\ell$
+   and $B_\ell$ each frame (or on resize / FOV change) from the live $H$ and $\phi$. *Benefits:*
+   thresholds stay pixel-correct as the window resizes or the FOV changes, at the cost of a few
+   divisions per frame; the footprint is fixed to $H_\text{ref}$, and any footprint-versus-band
+   mismatch away from the reference is bounded by the resolution ratio and absorbed by the $\gamma$
+   purity margin (§2). *Drawbacks:* the footprint-to-band match is exact only at $H_\text{ref}$; a
+   small runtime coupling of the loader to the live camera parameters. *Prerequisite:* the viewer
+   reads the live viewport height and FOV each frame.
+3. **Runtime footprints too.** Re-tile the geometry to the live resolution. *Benefits:* exact
+   footprint-to-band match at any resolution. *Drawbacks:* infeasible — tiling is an offline,
+   multi-minute build; it cannot run per frame or per resize. *Prerequisite:* none that is
+   achievable at runtime.
+
+**Recommendation.** Alternative 2: recompute the visibility bands and crossfades at runtime from
+the live $H, \phi$, with footprints baked from $H_\text{ref}$. It keeps the pixel-accurate
+thresholds correct across displays for a handful of per-frame divisions, and the only residual —
+the footprint/band mismatch away from the reference — is bounded by $\gamma$. Not blocking: the
+fixed-reference default (Alternative 1) is adequate for the first in-engine validation, so the
+runtime path can follow.
+
+### OQ-LR-2 — Rendering-LOD quality/cost operating point ($\tau$, $\gamma$)
+
+**Problem.** The policy has two operating-point parameters that trade rendered quality against
+tile count and build cost; the LOD thresholds and per-LOD footprints are their outputs, so the
+choice sets the size of every downstream build. $\tau$ (pixels) is the maximum on-screen
+geometric error tolerated; since $R_\ell \propto 1/\tau$, a larger $\tau$ moves every LOD
+transition nearer and coarsens sooner — going from $\tau=1$ px to $\tau=2$ px halves every
+adequacy range. $\gamma \in (0,1)$ is the fraction of each LOD band allowed to be single-LOD-impure
+(§2); the footprint is $f_\ell \approx (\gamma/\sqrt2)(R_{\ell+1}-R_\ell)$, so the tile count per
+LOD is $N_\ell = A/f_\ell^2 \propto 1/\gamma^2$ — halving $\gamma$ quadruples the tiles per LOD
+and simultaneously tightens the crossfade-alignment margin $h/B$ (§3). The two remaining
+parameters are not free here: the reference resolution $H_\text{ref}$ scales all $R_\ell$
+($\propto H$) and is fixed by the resolution of OQ-LR-1, and the hysteresis $\delta$ inherits the
+established $0.15$ anti-flicker value (from [terrain.md §LOD Hysteresis Band](terrain.md)) unless a
+specific reason to change it arises. The operating point sets the absolute tile count for a region
+— at the illustrative $\tau=1$, $\gamma=0.25$, $H_\text{ref}=1080$ the finest footprint is
+$\approx 190$ m — and therefore the build time, VRAM, and draw-call load, and it gates the
+(expensive) re-tile. Affected use cases: UC-LR-1, UC-LR-2, UC-LR-4.
+
+**Alternatives.** (Each is a $(\tau, \gamma)$ pair; $H_\text{ref}$ from OQ-LR-1 and $\delta=0.15$
+throughout.)
+
+1. **Pixel-accurate, generous tiles — $\tau = 1$ px, $\gamma = 0.25$.** *Benefits:* sub-pixel LOD
+   error at the reference resolution; the largest crossfade-alignment margin of the set (smallest
+   $h/B$), so the per-LOD transition is the most forgiving; crispest result. *Drawbacks:* the
+   highest tile count and build cost (finest footprint $\approx 190$ m at $1080$p → the most fine
+   tiles), and the heaviest VRAM / draw-call load. *Prerequisite:* the residency streaming manager
+   (IP-LV-7, done) to bound VRAM to a neighborhood of the aircraft.
+2. **Pixel-accurate, tighter tiles — $\tau = 1$ px, $\gamma = 0.5$.** *Benefits:* the same pixel
+   accuracy with $\approx 4\times$ fewer tiles than Alternative 1 (finest footprint $\approx 380$
+   m); a much lighter build. *Drawbacks:* half of each LOD band is single-LOD-impure, so the
+   crossfade must span a larger share of the band and the alignment margin $h/B$ is tighter —
+   a higher risk that the per-LOD crossfade shows a seam. *Prerequisite:* the transition-alignment
+   gate (Test Strategy) must pass at this $\gamma$.
+3. **Performance-first — $\tau = 2$ px, $\gamma = 0.35$.** *Benefits:* adequacy ranges halved
+   (coarsen sooner) combined with a moderate $\gamma$ gives far fewer tiles overall and the
+   lightest runtime of the set. *Drawbacks:* up to a $2$-pixel geometric error on screen at the
+   reference resolution — mildly visible LOD popping / under-detail; coarser near-ground detail
+   transitions. *Prerequisite:* confirm that a $2$-pixel error is acceptable for the intended use.
+4. **Match the maximum anticipated display — $\tau = 1$ px, $\gamma = 0.25$, $H_\text{ref} = 2160$.**
+   *Benefits:* pixel-accurate even on a $4$K display with no runtime recompute (pairs with OQ-LR-1
+   Alternative 1). *Drawbacks:* $\approx 4\times$ the tile count of Alternative 1 at the reference
+   (footprints halve); the heaviest of all options, and wasteful when the display is usually
+   $1080$p. *Prerequisite:* a justification that $4$K is the operating target.
+
+**Recommendation.** Alternative 1 ($\tau = 1$ px, $\gamma = 0.25$) as the starting operating point,
+confirmed at IP-LV-6. It is pixel-accurate with the safest alignment margin, and its tile-count
+cost is precisely what the streaming manager (IP-LV-7) exists to absorb; the first per-LOD build
+is treated as a tuning iteration, and $\gamma$ is raised toward Alternative 2 only if profiling
+shows the tile count is a problem *and* the alignment gate still passes at the larger $\gamma$.
+Blocking the re-tile run.
 
 ---
 
