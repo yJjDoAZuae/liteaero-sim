@@ -4,7 +4,9 @@
 per-LOD tile footprints are determined. It replaces the earlier convention-based band table
 (the "≈30 vertices per line of sight, $r_0=300$ m" rule in
 [terrain.md §Slant-Range Selection](terrain.md), which is not tied to rendered resolution) with
-a screen-space-error policy.
+a screen-space-error policy. Per-LOD footprints are the resolution of
+[live_sim_view.md OQ-LS-22](live_sim_view.md) (Alternative 3); the numeric parameters
+($\tau$, $H_\text{ref}$, $\gamma$, $\delta$) remain open as OQ-LR-2 below.
 
 **Scope.** This document governs LOD selection for **on-screen rendering** only — deciding which
 terrain tile mesh and texture are drawn at a given observer distance so that the on-screen error
@@ -134,7 +136,8 @@ also does not bound the count as the region grows — the several-hundred-kilome
 required by the streaming format ([live_sim_view.md OQ-LS-20](live_sim_view.md)) are infeasible
 at a sub-kilometre uniform footprint.
 
-**The design therefore adopts per-LOD footprints (§2).** Its one cost, established in
+**The design adopts per-LOD footprints (§2)** — the resolution of
+[live_sim_view.md OQ-LS-22](live_sim_view.md) (Alternative 3). Its one cost, established in
 [lod_culling_geometry.md §Transition Alignment](../algorithms/lod_culling_geometry.md), is that
 adjacent-LOD tiles covering the same point have offset centroids (offset $\le h_\ell+h_{\ell+1}$),
 so their crossfades must overlap: the condition is $h_{\ell+1}\lesssim B_{\ell+1}$, i.e.
@@ -143,9 +146,11 @@ $$
 \tfrac{\gamma}{2}\,(R_{\ell+2}-R_{\ell+1}) \;\lesssim\; 2\,\delta\,R_{\ell+1},
 $$
 
-a ratio that is constant across LODs and, with the recommended $\gamma,\delta$, is $O(1)$ — it
-must be verified, not assumed (Open Questions, Test Strategy). The uniform (shared-grid) scheme
-has zero alignment offset and remains the fallback if the per-LOD crossfade cannot be made clean.
+a ratio that is constant across LODs and, with the recommended $\gamma,\delta$, is $O(1)$. This is
+a **validation gate, not an assumption**: it must be confirmed per the Test Strategy before the
+per-LOD tiling is committed. Should it prove impossible to make the per-LOD crossfade seamless for
+achievable $\gamma,\delta$, that is a design escalation back to OQ-LS-22 (the uniform shared-grid
+scheme has zero alignment offset and would be reconsidered there) — not a silent fallback.
 
 ---
 
@@ -223,4 +228,4 @@ iteration. Blocking the re-tile run.
 | [screen_space_lod_selection.md](../algorithms/screen_space_lod_selection.md) | Adequacy range $R_\ell$, hysteresis dead-band, worked thresholds |
 | [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md) | Tile-size bound, transition alignment, tile-count scaling |
 | [terrain.md](terrain.md) | Simplification error schedule $\varepsilon_\ell$; sim-side (physical) LOD model |
-| [live_sim_view.md](live_sim_view.md) | Streaming format/manager (OQ-LS-20/21) and the footprint question (OQ-LS-22) this policy informs |
+| [live_sim_view.md](live_sim_view.md) | Streaming format/manager (OQ-LS-20/21); OQ-LS-22 resolved to Alternative 3 (per-LOD footprints), which this policy defines |

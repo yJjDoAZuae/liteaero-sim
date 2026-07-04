@@ -1793,6 +1793,26 @@ asset format); resolve that first.
 
 ### OQ-LS-22 — Tile footprint strategy: uniform vs. per-LOD-scaled
 
+**Resolved — Alternative 3 (per-LOD footprint scaled to each LOD's band).** Each LOD is tiled at its own
+footprint $f_\ell \approx \tfrac{\gamma}{\sqrt2}(R_{\ell+1}-R_\ell)$ — small for the fine near-ground LODs,
+large for the coarse backdrop LODs — so the admissible-tile-size bound
+$h_\ell \le \tfrac12\gamma(R_{\ell+1}-R_\ell)$ is met at every level with the fewest tiles (≈ 6× fewer than
+uniform at equal resolution) and the count stays bounded as the region grows, the only option compatible
+with the several-hundred-km scale of OQ-LS-20. The full policy, parameters, and derivation are in
+[terrain_lod_rendering.md](terrain_lod_rendering.md), built on
+[lod_culling_geometry.md](../algorithms/lod_culling_geometry.md) and
+[screen_space_lod_selection.md](../algorithms/screen_space_lod_selection.md); as part of this the LOD
+thresholds move to screen-space-error adequacy ranges, replacing the former convention distances.
+**Caveat carried into validation:** per-LOD uses distinct per-LOD grids, so adjacent-LOD tiles covering a
+point have offset centroids and their crossfades align cleanly only if $h_{\ell+1} \lesssim B_{\ell+1}$
+(crossfade width) — a ratio constant across LODs but renderer-dependent, to be **measured** per the
+terrain_lod_rendering.md Test Strategy; if it cannot be made seamless the design escalates back to this
+question rather than silently reverting to uniform. The **uniform-footprint tiling implemented as the
+IP-LV-5 baseline is superseded** by this decision. The remaining parameter choices ($\tau$, $H_\text{ref}$,
+$\gamma$, $\delta$) are tracked as terrain_lod_rendering.md OQ-LR-2.
+
+**Background and alternatives retained below.**
+
 **Problem.** OQ-LS-18 resolved the LOD-stacking defect by giving every LOD a **uniform small tile
 footprint** across the whole region (LOD = vertex density within that fixed footprint), so per-node
 centroid-distance culling selects one LOD per location. Implementing it (IP-LV-5) and measuring on the
@@ -1899,7 +1919,7 @@ be made seamless, and is in any case the right baseline for the first in-engine 
 | OQ-LS-19 | Frame reconciliation of terrain surface vs. aircraft (defect: Issue 8) | Resolved — Option 1 (per-tile node rotation; implemented IP-LV-1/2) | No |
 | OQ-LS-20 | Streamable terrain asset format (monolithic GLB → pageable units) | Resolved — Alternative 2 (per-region chunk files + coordinate-addressable index; headroom for several-hundred-km regions at full ground LOD) | No (implementation pending, IP-LV-8) |
 | OQ-LS-21 | Terrain tile residency / streaming manager | Resolved — Alternative 1 (radius-based paging with asymmetric hysteresis: generous fetch, conservative evict) | No (implemented, IP-LV-7) |
-| OQ-LS-22 | Tile footprint strategy: uniform vs. per-LOD-scaled (tile-count explosion + redundant coarse LODs at uniform 400 m) | **Open** — recommend Alternative 3 (per-LOD footprint scaled to each LOD's band) | **Yes — gates the IP-LV-5 re-tile** |
+| OQ-LS-22 | Tile footprint strategy: uniform vs. per-LOD-scaled (tile-count explosion + redundant coarse LODs at uniform 400 m) | Resolved — Alternative 3 (per-LOD footprint scaled to each LOD's band; policy in terrain_lod_rendering.md) | No (implementation pending — supersedes uniform IP-LV-5; params → OQ-LR-2) |
 
 ---
 
