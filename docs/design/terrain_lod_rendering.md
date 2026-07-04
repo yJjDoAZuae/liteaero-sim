@@ -5,8 +5,9 @@ per-LOD tile footprints are determined. It replaces the earlier convention-based
 (the "≈30 vertices per line of sight, $r_0=300$ m" rule in
 [terrain.md §Slant-Range Selection](terrain.md), which is not tied to rendered resolution) with
 a screen-space-error policy. Per-LOD footprints are the resolution of
-[live_sim_view.md OQ-LS-22](live_sim_view.md) (Alternative 3); the numeric parameters
-($\tau$, $H_\text{ref}$, $\gamma$, $\delta$) remain open as OQ-LR-2 below.
+[live_sim_view.md OQ-LS-22](live_sim_view.md) (Alternative 3); the numeric parameters are resolved
+(OQ-LR-2 → $\tau=1$ px, $\gamma=0.25$; OQ-LR-1 → runtime bands with footprints baked at
+$H_\text{ref}=1080$, $\delta=0.15$), so the policy is fully specified and ready to implement.
 
 **Scope.** This document governs LOD selection for **on-screen rendering** only — deciding which
 terrain tile mesh and texture are drawn at a given observer distance so that the on-screen error
@@ -45,18 +46,22 @@ in the Integration Contract.
 ## Design Parameters
 
 The policy has four free parameters; every threshold and footprint below is a function of them
-and of the per-LOD geometric error schedule. Recommended defaults are given but are **pending
-confirmation and in-engine validation** (see Open Questions); they are the design's starting
-values, not measured optima.
+and of the per-LOD geometric error schedule. The values below are **adopted** — the quality/cost
+operating point $(\tau,\gamma)$ is [OQ-LR-2](#oq-lr-2--rendering-lod-qualitycost-operating-point-tau-gamma)
+resolved to Alternative 1, $H_\text{ref}$ is fixed by [OQ-LR-1](#oq-lr-1--build-time-versus-runtime-evaluation-of-the-lod-thresholds)
+(footprints baked at the reference, visibility bands recomputed at runtime), and $\delta$ inherits
+the established anti-flicker value. They remain subject to confirmation-by-measurement at IP-LV-6
+(the re-tile is treated as a tuning iteration), but they are the design's committed starting point,
+not placeholders.
 
-| Symbol | Meaning | Recommended default | Source / notes |
+| Symbol | Meaning | Adopted value | Source / notes |
 | --- | --- | --- | --- |
-| $\tau$ | Geometric pixel tolerance (max on-screen mesh error) | $1$ px | Quality target; $\ge 1$ px loosens, coarsens sooner |
+| $\tau$ | Geometric pixel tolerance (max on-screen mesh error) | $1$ px | OQ-LR-2 Alt 1; $\ge 1$ px loosens, coarsens sooner |
 | $\tau_\text{tex}$ | Texture pixel tolerance (max on-screen texel size) | $1$ px | Governs texture-LOD; usually met by GPU mipmapping |
-| $H_\text{ref}$ | Reference viewport height (pixels) used to precompute thresholds | $1080$ | The actual runtime height may differ — see OQ-LR-1 |
-| $\phi$ | Vertical field of view | $90^\circ$ (from the viewer camera) | $\tan(\phi/2)=1$; if the camera FOV changes, thresholds move |
-| $\gamma$ | Tile-size purity fraction (impure share of a band) | $0.25$ | Fraction of each LOD band allowed to be single-LOD-impure |
-| $\delta$ | Hysteresis half-width (fractional range dead-band) | $0.15$ | Crossfade width $B_\ell = 2\delta R_\ell$; $\approx 2\tau\delta$ px dead-band |
+| $H_\text{ref}$ | Reference viewport height (pixels) for the **baked footprints** | $1080$ | OQ-LR-1 Alt 2: footprints from $H_\text{ref}$; runtime bands from live $H$ |
+| $\phi$ | Vertical field of view | $90^\circ$ (from the viewer camera) | $\tan(\phi/2)=1$; runtime bands track the live FOV (OQ-LR-1 Alt 2) |
+| $\gamma$ | Tile-size purity fraction (impure share of a band) | $0.25$ | OQ-LR-2 Alt 1; fraction of each LOD band allowed single-LOD-impure |
+| $\delta$ | Hysteresis half-width (fractional range dead-band) | $0.15$ | Inherited anti-flicker value; crossfade width $B_\ell = 2\delta R_\ell$ |
 
 The **per-LOD geometric error** $\varepsilon_\ell$ is the maximum vertical deviation of LOD
 $\ell$'s mesh from the true surface, taken from the simplification error schedule
@@ -79,8 +84,10 @@ R_\ell = \frac{\varepsilon_\ell\,H_\text{ref}}{2\,\tau\,\tan(\phi/2)} .
 $$
 
 LOD $\ell$ is drawn over the observer-distance band $[\,R_\ell,\ R_{\ell+1}\,]$ (the coarsest
-level runs to infinity). With the recommended defaults and $\tan(45^\circ)=1$, the scale factor
-is $H_\text{ref}/(2\tau) = 540$ m per metre of error, giving the **illustrative** thresholds:
+level runs to infinity). With the adopted parameters and $\tan(45^\circ)=1$, the scale factor is
+$H_\text{ref}/(2\tau) = 540$ m per metre of error, giving the reference thresholds (the runtime
+viewer rescales the *bands* by the live $H/H_\text{ref}$ and $\cot(\phi/2)$ per OQ-LR-1 Alt 2; the
+baked *footprints* of §2 use these reference values):
 
 | LOD $\ell$ | $\varepsilon_\ell$ (m) | $R_\ell = 540\,\varepsilon_\ell$ (m) | Band $[R_\ell, R_{\ell+1}]$ (m) |
 | --- | --- | --- | --- |
@@ -109,7 +116,8 @@ $$
 f_\ell \;\approx\; \frac{\gamma}{\sqrt2}\,\bigl(R_{\ell+1}-R_\ell\bigr).
 $$
 
-With the illustrative thresholds and $\gamma = 0.25$:
+With the adopted reference thresholds and $\gamma = 0.25$ (footprints are baked at $H_\text{ref}$,
+so these are the values the build uses):
 
 | LOD $\ell$ | Band width $R_{\ell+1}-R_\ell$ (m) | Footprint $f_\ell \approx 0.177\,(R_{\ell+1}-R_\ell)$ (m) |
 | --- | --- | --- |
@@ -156,19 +164,23 @@ scheme has zero alignment offset and would be reconsidered there) — not a sile
 
 ## Integration Contract
 
-- **Terrain build** (`build_terrain` / `terrain_chunks`, Python). Computes $R_\ell$ (§1) and
-  $f_\ell$ (§2) from the design parameters and $\varepsilon_\ell$ schedule; tiles each LOD at its
-  own footprint $f_\ell$; groups tiles into chunks and writes the descriptor. The chunk grid
-  becomes **per-LOD** (chunk size derived from $f_\ell$), which the coordinate-addressable
-  descriptor already supports per `(lod, cx, cy)`. The current build uses a single uniform
-  footprint and the convention thresholds — updating it to this policy is a work item.
-- **Viewer** (`TerrainLoader.gd`, Godot). Sets each LOD node's visibility band to
-  $[\,R_\ell(1-\delta)-h_\ell,\ R_{\ell+1}(1+\delta)+h_\ell\,]$ (bands padded by the tile radius
-  per [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md)) with a crossfade over
-  $B_\ell$. The streaming manager
-  ([live_sim_view.md OQ-LS-21](live_sim_view.md)) pages the fine LODs whose footprints and counts
-  §2 quantifies. The viewer currently sets bands from the convention table — updating it is a work
-  item.
+- **Terrain build** (`build_terrain` / `terrain_chunks`, Python). Computes the reference $R_\ell$
+  (§1, at $H_\text{ref}$) and the footprints $f_\ell$ (§2) from the design parameters and
+  $\varepsilon_\ell$ schedule; tiles each LOD at its own footprint $f_\ell$; groups tiles into
+  chunks and writes the descriptor. The chunk grid becomes **per-LOD** (chunk size derived from
+  $f_\ell$), which the coordinate-addressable descriptor already supports per `(lod, cx, cy)`. The
+  descriptor records the parameters ($\varepsilon_\ell$, $H_\text{ref}$, $\tau$, $\phi_\text{ref}$,
+  $\gamma$, $\delta$) so the viewer can recompute bands. The current build uses a single uniform
+  footprint and the convention thresholds — updating it is IP-LV-5/9.
+- **Viewer** (`TerrainLoader.gd`, Godot). Per OQ-LR-1 Alternative 2, **recomputes** each LOD's
+  visibility band each frame (or on viewport/FOV change) from the *live* viewport height $H$ and
+  FOV $\phi$: $R_\ell = \varepsilon_\ell H/(2\tau\tan(\phi/2))$, then sets the node band to
+  $[\,R_\ell(1-\delta)-h_\ell,\ R_{\ell+1}(1+\delta)+h_\ell\,]$ (padded by the tile radius per
+  [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md)) with a crossfade over
+  $B_\ell = 2\delta R_\ell$; the streaming radii `R_fetch`/`R_unload`
+  ([live_sim_view.md OQ-LS-21](live_sim_view.md)) derive from the same live $R_\ell$. The baked
+  footprints stay fixed at $H_\text{ref}$. The current viewer sets frozen bands from the
+  convention table — updating it is IP-LV-10.
 - **Parameter provenance.** $\varepsilon_\ell$ is owned by the simplification schedule
   ([terrain.md](terrain.md)); $\phi$ by the viewer camera; $H_\text{ref}$, $\tau$, $\tau_\text{tex}$,
   $\gamma$, $\delta$ by this document.
@@ -179,10 +191,20 @@ scheme has zero alignment offset and would be reconsidered there) — not a sile
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| OQ-LR-1 | Build-time vs. runtime evaluation of the LOD thresholds and crossfades | Not blocking — fixed-reference default is usable |
-| OQ-LR-2 | Rendering-LOD quality/cost operating point ($\tau$, $\gamma$) | Blocking — sets the tile count; gates the re-tile |
+| OQ-LR-1 | Build-time vs. runtime evaluation of the LOD thresholds and crossfades | Resolved — Alternative 2 (runtime bands from live $H,\phi$; footprints baked at $H_\text{ref}$) |
+| OQ-LR-2 | Rendering-LOD quality/cost operating point ($\tau$, $\gamma$) | Resolved — Alternative 1 ($\tau=1$ px, $\gamma=0.25$) |
 
 ### OQ-LR-1 — Build-time versus runtime evaluation of the LOD thresholds
+
+**Resolved — Alternative 2 (runtime bands, build-time footprints).** The tile footprints $f_\ell$
+are baked at the reference $(H_\text{ref}=1080,\ \phi_\text{ref}=90^\circ)$; the viewer recomputes
+the visibility bands $[R_\ell,R_{\ell+1}]$ and crossfade widths $B_\ell$ each frame (or on
+viewport/FOV change) from the *live* $H$ and $\phi$, and derives the streaming radii from the same
+live $R_\ell$. This keeps the pixel-accurate thresholds correct as the window resizes or the FOV
+changes, for a few divisions per frame; the only residual — a footprint/band mismatch away from
+$H_\text{ref}$ — is bounded by the resolution ratio and absorbed by the $\gamma$ purity margin. The
+descriptor carries the parameters so the viewer can evaluate $R_\ell$. Realized in IP-LV-10.
+**Background and alternatives retained below.**
 
 **Problem.** A LOD's adequacy range is $R_\ell = \varepsilon_\ell\,H/(2\tau\tan(\phi/2))$
 (§1): it is proportional to the viewport height $H$ (pixels) and to $\cot(\phi/2)$, where $\phi$
@@ -228,6 +250,16 @@ fixed-reference default (Alternative 1) is adequate for the first in-engine vali
 runtime path can follow.
 
 ### OQ-LR-2 — Rendering-LOD quality/cost operating point ($\tau$, $\gamma$)
+
+**Resolved — Alternative 1 ($\tau = 1$ px, $\gamma = 0.25$).** The operating point is pixel-accurate
+(sub-pixel LOD error at the reference resolution) with the safest crossfade-alignment margin
+(smallest $h/B$), giving the most forgiving per-LOD transition. Its tile-count cost — the highest of
+the alternatives, finest footprint $\approx 190$ m at $1080$p — is exactly what the residency
+streaming manager (IP-LV-7) is there to bound. The first per-LOD build is a tuning iteration
+(IP-LV-6); $\gamma$ is raised toward Alternative 2 only if profiling shows the count is a problem
+*and* the transition-alignment gate still passes at the larger $\gamma$. $H_\text{ref}=1080$ and
+$\delta=0.15$ stand (OQ-LR-1 and the inherited anti-flicker value). **Background and alternatives
+retained below.**
 
 **Problem.** The policy has two operating-point parameters that trade rendered quality against
 tile count and build cost; the LOD thresholds and per-LOD footprints are their outputs, so the
