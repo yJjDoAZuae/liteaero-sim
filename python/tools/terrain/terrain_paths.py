@@ -7,12 +7,13 @@ project root (``Path(__file__).parents[3]``).  Override by setting
 Repository structure under ``TERRAIN_DATA_ROOT``::
 
     <dataset_name>/
-        terrain_config.json  Godot sidecar: world origin, GLB and las_terrain paths
+        terrain_config.json  Godot sidecar: world origin, tile descriptor and las_terrain paths
         source/              raw downloaded files (DEM GeoTIFF, imagery GeoTIFF)
         derived/
             las_terrain/     LAS-format triangulated terrain
-            gltf/
-                terrain.glb
+            terrain_tiles/   per-(LOD, chunk) GLB files + descriptor.json (streamable format)
+                descriptor.json
+                L0/c_<cx>_<cy>.glb ...
             metadata.json
 """
 from __future__ import annotations
@@ -61,6 +62,16 @@ def las_terrain_dir(dataset_name: str) -> Path:
 def gltf_path(dataset_name: str) -> Path:
     """Return the path to the exported terrain GLB for a dataset."""
     return derived_dir(dataset_name) / "gltf" / "terrain.glb"
+
+
+def terrain_tiles_dir(dataset_name: str) -> Path:
+    """Return the directory holding the per-(LOD, chunk) GLB files for a dataset."""
+    return derived_dir(dataset_name) / "terrain_tiles"
+
+
+def terrain_descriptor_path(dataset_name: str) -> Path:
+    """Return the path to the chunked-terrain ``descriptor.json`` for a dataset."""
+    return terrain_tiles_dir(dataset_name) / "descriptor.json"
 
 
 def metadata_path(dataset_name: str) -> Path:

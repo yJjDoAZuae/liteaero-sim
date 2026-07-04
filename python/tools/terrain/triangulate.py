@@ -38,11 +38,14 @@ def triangulate(
     bbox_deg: tuple[float, float, float, float],  # (lon_min, lat_min, lon_max, lat_max)
     lod: int = 0,
     boundary_points: np.ndarray | None = None,  # (K, 2) float64 lon/lat of locked boundary verts
+    spacing_deg: float | None = None,  # grid spacing override (else lod_grid_spacing_deg(lod))
 ) -> TerrainTileData:
     """Build a TIN from an in-memory DEM sampler over bbox_deg at the given LOD.
 
     Algorithm:
-    1. Sample DEM at a regular grid with spacing lod_grid_spacing_deg(lod).
+    1. Sample DEM at a regular grid with spacing ``spacing_deg`` (or, if None, the
+       LOD's native ``lod_grid_spacing_deg(lod)``).  A coarser-than-native spacing is
+       clamped by the caller so a small fixed-footprint cell still yields a valid mesh.
     2. Inject boundary_points (if provided) without modification.
     3. Run scipy.spatial.Delaunay on the (lon, lat) 2D projection.
     4. Convert all points to ENU float32 offsets from the tile centroid.
@@ -57,7 +60,7 @@ def triangulate(
         ValueError: if the triangulation produces fewer than 2 facets.
     """
     lon_min, lat_min, lon_max, lat_max = bbox_deg
-    spacing = lod_grid_spacing_deg(lod)
+    spacing = spacing_deg if spacing_deg is not None else lod_grid_spacing_deg(lod)
 
     if not dem.covers(bbox_deg):
         raise ValueError(

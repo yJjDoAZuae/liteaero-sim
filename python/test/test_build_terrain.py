@@ -178,98 +178,51 @@ class TestChunkGrid:
 
 
 class TestCellGrid:
-    def test_l0_cell_count_for_1km_bbox(self) -> None:
+    def test_uniform_cell_count_single(self) -> None:
         import build_terrain as bt
 
-        # Exactly 1 km × 1 km bbox → 1×1 L0 cells.
-        side_deg = bt._LOD_CELL_SIDE_DEG[0]  # 0.009
-        bbox = (0.0, 0.0, side_deg, side_deg)
-        cells = bt._compute_cell_grid(bbox, lod=0)
+        # A bbox exactly one cell wide (per axis) → 1×1 = 1 cell.
+        lon_side, lat_side = bt._cell_side_deg(400.0, math.radians(34.0))
+        bbox = (0.0, 0.0, lon_side, lat_side)
+        cells = bt._compute_cell_grid(bbox, lon_side, lat_side)
         assert len(cells) == 1
 
-    def test_l0_cell_count_for_larger_bbox(self) -> None:
+    def test_uniform_cell_count_grid(self) -> None:
         import build_terrain as bt
 
-        # 3 km × 3 km bbox → 3×3 = 9 L0 cells.
-        side_deg = 3 * bt._LOD_CELL_SIDE_DEG[0]  # 0.027
-        bbox = (0.0, 0.0, side_deg, side_deg)
-        cells = bt._compute_cell_grid(bbox, lod=0)
+        # 2.5× the cell side per axis → ceil(2.5) = 3 cells per axis → 3×3 = 9.
+        lon_side, lat_side = bt._cell_side_deg(400.0, math.radians(34.0))
+        bbox = (0.0, 0.0, 2.5 * lon_side, 2.5 * lat_side)
+        cells = bt._compute_cell_grid(bbox, lon_side, lat_side)
         assert len(cells) == 9
 
-    def test_each_cell_has_row_col_and_bbox(self) -> None:
+    def test_same_grid_for_every_lod(self) -> None:
+        """The uniform footprint means the cell grid is identical across LODs;
+        only the effective spacing (vertex density) changes."""
         import build_terrain as bt
 
-        side_deg = 2 * bt._LOD_CELL_SIDE_DEG[1]
-        bbox = (0.0, 0.0, side_deg, side_deg)
-        cells = bt._compute_cell_grid(bbox, lod=1)
+        lon_side, lat_side = bt._cell_side_deg(400.0, math.radians(34.0))
+        bbox = (0.0, 34.0, 2 * lon_side, 34.0 + 2 * lat_side)
+        cells = bt._compute_cell_grid(bbox, lon_side, lat_side)
         assert len(cells) == 4
         for row, col, cell_bbox in cells:
-            assert isinstance(row, int)
-            assert isinstance(col, int)
+            assert isinstance(row, int) and isinstance(col, int)
             assert len(cell_bbox) == 4
 
-
-class TestGeographicPartitioning:
-    def test_center_tile_always_included(self) -> None:
+    def test_coarse_lod_spacing_clamped_to_cell(self) -> None:
+        """A coarse LOD's native spacing exceeds a 400 m cell, so it must be clamped so
+        the cell still yields at least _MIN_CELL_POINTS points per axis."""
         import build_terrain as bt
-        from las_terrain import TerrainTileData
 
-        # Build a minimal tile at (0,0) with lod=0.
-        tile = TerrainTileData(
-            lod=0,
-            centroid_lat_rad=0.0,
-            centroid_lon_rad=0.0,
-            centroid_height_m=0.0,
-            lat_min_rad=0.0, lat_max_rad=0.001,
-            lon_min_rad=0.0, lon_max_rad=0.001,
-            height_min_m=0.0, height_max_m=0.0,
-            vertices=np.zeros((3, 3), dtype=np.float32),
-            indices=np.zeros((1, 3), dtype=np.uint32),
-            colors=np.zeros((1, 3), dtype=np.uint8),
-        )
-        selected = bt._select_display_tiles([tile], center_lat_rad=0.0, center_lon_rad=0.0)
-        assert len(selected) == 1
-
-    def test_distant_l0_tile_excluded(self) -> None:
-        import build_terrain as bt
-        from las_terrain import TerrainTileData
-
-        # L0 export radius = 345 m.  Place tile 1 km away.
-        offset_rad = 1_000.0 / 6_371_000.0
-        tile = TerrainTileData(
-            lod=0,
-            centroid_lat_rad=offset_rad,
-            centroid_lon_rad=0.0,
-            centroid_height_m=0.0,
-            lat_min_rad=0.0, lat_max_rad=offset_rad * 2,
-            lon_min_rad=0.0, lon_max_rad=0.001,
-            height_min_m=0.0, height_max_m=0.0,
-            vertices=np.zeros((3, 3), dtype=np.float32),
-            indices=np.zeros((1, 3), dtype=np.uint32),
-            colors=np.zeros((1, 3), dtype=np.uint8),
-        )
-        selected = bt._select_display_tiles([tile], center_lat_rad=0.0, center_lon_rad=0.0)
-        assert len(selected) == 0
-
-    def test_l6_tile_always_included(self) -> None:
-        import build_terrain as bt
-        from las_terrain import TerrainTileData
-
-        # L6 export radius = infinity.
-        tile = TerrainTileData(
-            lod=6,
-            centroid_lat_rad=0.5,
-            centroid_lon_rad=0.5,
-            centroid_height_m=0.0,
-            lat_min_rad=0.0, lat_max_rad=1.0,
-            lon_min_rad=0.0, lon_max_rad=1.0,
-            height_min_m=0.0, height_max_m=0.0,
-            vertices=np.zeros((3, 3), dtype=np.float32),
-            indices=np.zeros((1, 3), dtype=np.uint32),
-            colors=np.zeros((1, 3), dtype=np.uint8),
-        )
-        selected = bt._select_display_tiles([tile], center_lat_rad=0.0, center_lon_rad=0.0)
-        assert len(selected) == 1
+        lon_side, lat_side = bt._cell_side_deg(400.0, math.radians(34.0))
+        smaller = min(lon_side, lat_side)
+        # L6 native spacing (~0.09°) is far larger than a 400 m cell (~0.0036°).
+        s6 = bt._effective_spacing_deg(6, lon_side, lat_side)
+        assert s6 <= smaller / (bt._MIN_CELL_POINTS - 1) + 1e-12
+        # L0 native spacing (~10 m) fits, so it is used unchanged.
+        s0 = bt._effective_spacing_deg(0, lon_side, lat_side)
+        from triangulate import lod_grid_spacing_deg
+        assert s0 == lod_grid_spacing_deg(0)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +290,7 @@ class TestEndToEndMocked:
         return mock_download_imagery
 
     @staticmethod
-    def _mock_triangulate(dem, cell_bbox: tuple, *, lod: int = 0):
+    def _mock_triangulate(dem, cell_bbox: tuple, *, lod: int = 0, spacing_deg=None):
         """Return a minimal TerrainTileData without sampling the DEM."""
         from las_terrain import TerrainTileData
 
@@ -413,10 +366,10 @@ class TestEndToEndMocked:
         import build_terrain as bt
 
         with self._all_mocks(bt, tmp_path / "cache"):
-            glb_path = bt.build_terrain(_aircraft_config)
+            descriptor_path = bt.build_terrain(_aircraft_config)
 
-        assert glb_path.exists(), "GLB file not created"
-        assert glb_path.suffix == ".glb"
+        assert descriptor_path.exists(), "descriptor.json not created"
+        assert descriptor_path.name == "descriptor.json"
 
     def test_las_terrain_file_created(
         self, tmp_path: Path, _aircraft_config: Path
@@ -529,17 +482,21 @@ class TestEndToEndMocked:
     ) -> None:
         import build_terrain as bt
         from las_terrain import read_las_terrain
-        from terrain_paths import gltf_path, las_terrain_dir
+        from terrain_paths import (
+            las_terrain_dir, terrain_descriptor_path, terrain_tiles_dir,
+        )
 
         with self._all_mocks(bt, tmp_path / "cache"):
             bt.build_terrain(_aircraft_config)
 
-        # .las_terrain holds all LODs; GLB holds only display subset.
+        # .las_terrain holds all LODs; the chunk GLBs hold only the display subset.
         las_path = las_terrain_dir("test_aircraft") / "terrain.las_terrain"
         all_tiles = read_las_terrain(las_path)
 
-        glb_bytes = gltf_path("test_aircraft").read_bytes()
-        assert glb_bytes[:4] == b"glTF"
+        descriptor = json.loads(terrain_descriptor_path("test_aircraft").read_text())
+        assert descriptor["chunks"], "no chunk files written"
+        first_chunk = terrain_tiles_dir("test_aircraft") / descriptor["chunks"][0]["file"]
+        assert first_chunk.read_bytes()[:4] == b"glTF"
 
         # All 7 LODs must be present in the .las_terrain.
         lods_present = {t.lod for t in all_tiles}
@@ -548,23 +505,25 @@ class TestEndToEndMocked:
     def test_glb_node_names_contain_lod(
         self, tmp_path: Path, _aircraft_config: Path
     ) -> None:
-        """Node names in the GLB must follow the tile_L{N}_... convention."""
+        """Node names in a chunk GLB must follow the tile_L{N}_... convention."""
         import json as _json
         import struct
 
         import build_terrain as bt
-        from terrain_paths import gltf_path
+        from terrain_paths import terrain_descriptor_path, terrain_tiles_dir
 
         with self._all_mocks(bt, tmp_path / "cache"):
             bt.build_terrain(_aircraft_config)
 
-        glb_bytes = gltf_path("test_aircraft").read_bytes()
+        descriptor = _json.loads(terrain_descriptor_path("test_aircraft").read_text())
+        chunk_file = terrain_tiles_dir("test_aircraft") / descriptor["chunks"][0]["file"]
+        glb_bytes = chunk_file.read_bytes()
         chunk_length = struct.unpack("<I", glb_bytes[12:16])[0]
         gltf = _json.loads(glb_bytes[20 : 20 + chunk_length].rstrip(b"\x20"))
 
         node_names = [n.get("name", "") for n in gltf.get("nodes", [])]
         assert any(n.startswith("tile_L") for n in node_names), (
-            f"No tile_L* nodes found in GLB. Node names: {node_names}"
+            f"No tile_L* nodes found in chunk GLB. Node names: {node_names}"
         )
 
     def test_terrain_config_includes_default_aircraft_mesh_path(
@@ -654,13 +613,13 @@ class TestBuildTerrainConfig:
             center_lon_rad=-2.09139,
             center_h_m=3.0,
         )
-        for key in ("schema_version", "dataset_name", "glb_path",
+        for key in ("schema_version", "dataset_name", "terrain_descriptor_path",
                     "world_origin_lat_rad", "world_origin_lon_rad",
                     "world_origin_height_m", "aircraft_mesh_path",
                     "las_terrain_path"):
             assert key in result, f"missing key: {key}"
         assert result["schema_version"] == 1
-        assert result["glb_path"] == "res://terrain/terrain.glb"
+        assert result["terrain_descriptor_path"].endswith("descriptor.json")
 
     def test_las_terrain_path_contains_dataset_name(self) -> None:
         import build_terrain as bt

@@ -4,14 +4,20 @@
 ##                   docs/architecture/godot_plugin.md §TerrainLoader Integration
 ##
 ## Reads terrain_config.json from the path supplied via the Godot command-line user
-## arg --terrain at scene start, loads the terrain GLB programmatically via
-## ResourceLoader, instantiates it into the scene tree, applies per-node LOD
-## visibility ranges, loads the aircraft mesh, and positions the camera — all before
-## the first UDP packet arrives.
+## arg --terrain at scene start, loads the terrain, applies per-node LOD visibility
+## ranges, loads the aircraft mesh, and positions the camera — all before the first
+## UDP packet arrives.
 ##
-## Terrain texture: the GLB carries an embedded JPEG mosaic texture and a PBR
-## material on each MeshInstance3D.  No material override is applied by this loader;
-## the GLB's imported material is used as-is.
+## Terrain input (two shapes, dispatched in _ready):
+##   * Live streaming terrain — config "terrain_descriptor_path" points at a chunked
+##     dataset's descriptor.json (OQ-LS-20): per-(LOD, chunk) GLB files addressed by
+##     integer chunk coordinate.  IP-LV-8 loads every chunk up front; IP-LV-7 adds
+##     proximity streaming via load_chunk() / free_chunk() / chunk_coord_for_position().
+##   * Static test scene — config "glb_path" points at a single monolithic GLB
+##     (gen_test_assets axis-prism terrain).
+##
+## Terrain texture: each GLB carries embedded JPEG mosaic textures and a PBR material
+## per MeshInstance3D.  No material override is applied by this loader.
 ##
 ## Appearance controls (adjustable in the Inspector while the scene runs):
 ##   aircraft_saturation / aircraft_brightness / aircraft_contrast / aircraft_transparency
@@ -26,29 +32,10 @@
 extends Node
 
 
-## LOD visibility range lower bounds (metres) — switch-to-finer hysteresis thresholds.
-## Index = LOD level (0–6).  From terrain.md §LOD Hysteresis Band.
-const _LOD_VIS_BEGIN_M: Array[float] = [
-	0.0,      # L0
-	255.0,    # L1
-	765.0,    # L2
-	2295.0,   # L3
-	6885.0,   # L4
-	20655.0,  # L5
-	61965.0,  # L6
-]
-
-## LOD visibility range upper bounds (metres) — switch-to-coarser hysteresis thresholds.
-## 0.0 means no upper limit (infinity in Godot's convention for visibility_range_end = 0).
-const _LOD_VIS_END_M: Array[float] = [
-	345.0,    # L0
-	1035.0,   # L1
-	3105.0,   # L2
-	9315.0,   # L3
-	27945.0,  # L4
-	83835.0,  # L5
-	0.0,      # L6  (infinity)
-]
+## Rendering-LOD visibility bands are NOT fixed constants: they are recomputed at runtime from
+## the live viewport height and field of view using the screen-space-error policy recorded in the
+## terrain descriptor (terrain_lod_rendering.md, OQ-LR-1 Alternative 2 / OQ-LR-2).  The former
+## fixed convention table (r_0 = 300 m) is superseded — see _recompute_lod_bands().
 
 # ---------------------------------------------------------------------------
 # Appearance controls — aircraft
@@ -128,6 +115,30 @@ const _LOD_VIS_END_M: Array[float] = [
 		_update_aircraft_cg_offset()
 
 # ---------------------------------------------------------------------------
+# Terrain streaming (OQ-LS-21 / IP-LV-7)
+# ---------------------------------------------------------------------------
+
+@export_group("Terrain Streaming")
+
+## Page fine-LOD chunks in/out by aircraft proximity (chunked datasets only).
+## When false, every chunk is loaded up front (the IP-LV-8 behavior).
+@export var enable_streaming: bool = true
+
+## Highest LOD index that streams by proximity.  LODs 0..stream_lod_max are the
+## fine, texture-heavy tiles paged in/out; LODs above this load once and remain
+## resident as the distant backdrop.
+@export_range(0, 6) var stream_lod_max: int = 2
+
+## Fetch margin (metres) added to a LOD's visibility-band outer radius to get its
+## load radius R_fetch — a chunk is loaded slightly before its tiles become visible.
+@export_range(0.0, 20000.0) var fetch_margin_m: float = 800.0
+
+## Unload margin (metres) added to a LOD's visibility-band outer radius to get its
+## free radius R_unload.  Must exceed fetch_margin_m: the R_unload > R_fetch gap is
+## the hysteresis that prevents load/free thrash at the boundary (OQ-LS-21).
+@export_range(0.0, 40000.0) var unload_margin_m: float = 2400.0
+
+# ---------------------------------------------------------------------------
 # Private state
 # ---------------------------------------------------------------------------
 
@@ -138,11 +149,43 @@ var _aircraft_mesh_node:    Node3D             = null
 var _aircraft_cg_prepos:    Vector3            = Vector3.ZERO  # CG in pre-position world space
 
 # ---------------------------------------------------------------------------
+# Streamable-chunk terrain state (OQ-LS-20 / IP-LV-8)
+# ---------------------------------------------------------------------------
+
+## Parent node that all loaded terrain chunk nodes are added under.
+var _terrain_root:          Node3D             = null
+## Absolute directory holding the chunk GLB files (descriptor.json's directory).
+var _tiles_root:            String             = ""
+## Per-LOD chunk side length in metres (tile_footprints_m[lod] * chunk_footprints), from the
+## descriptor.  Per-LOD footprints (OQ-LS-22 Alt 3) give per-LOD chunk grids.
+var _chunk_sizes_m:         Array              = []   # per-LOD chunk side (m); index = LOD
+## Loaded chunk nodes keyed by "lod_cx_cy" → Node3D (for load/free by the streaming manager).
+var _loaded_chunks:         Dictionary         = {}
+## Descriptor chunk records keyed by "lod_cx_cy" → { "lod", "cx", "cy", "file", "tile_count" }.
+var _chunk_index:           Dictionary         = {}
+## Aircraft chunk coordinate at the last streaming evaluation (re-evaluate on change only).
+var _last_stream_chunk:     Vector2i           = Vector2i(2147483647, 2147483647)
+
+# --- Runtime screen-space-error LOD bands (terrain_lod_rendering.md / IP-LV-10) ---
+## Rendering-LOD policy parameters from the descriptor (transition_error_m, tau_px, delta, ...).
+var _lod_policy:            Dictionary         = {}
+## LOD band edges [0, R1, ..., R6, R7] (m) at the current viewport height / FOV; band ℓ = [ℓ, ℓ+1].
+var _lod_edges_m:           Array              = []
+## Per-LOD visibility begin/end (m) before per-node tile-radius padding; end 0 = infinite (coarsest).
+var _lod_begin_base:        Array              = []
+var _lod_end_base:          Array              = []
+## Viewport height / vertical FOV at the last band recompute (recompute only on change).
+var _last_view_h:           float              = -1.0
+var _last_view_fov:         float              = -1.0
+
+# ---------------------------------------------------------------------------
 
 var _diag_frame_counter: int = 0
 
 func _process(_delta: float) -> void:
 	_update_camera()
+	_maybe_recompute_lod_bands()
+	_update_terrain_streaming()
 	_diag_frame_counter += 1
 	if _diag_frame_counter % 300 == 0:
 		var vehicle := _find_vehicle(get_tree().root)
@@ -166,17 +209,22 @@ func _ready() -> void:
 		print("TerrainLoader: config load failed — aborting")
 		return
 
-	print("TerrainLoader: config loaded, glb_path=%s" % config.get("glb_path", "(missing)"))
-
-	var terrain_node := _load_terrain_scene(config["glb_path"])
-	if terrain_node == null:
-		print("TerrainLoader: terrain scene load failed — aborting")
+	# Two terrain input shapes are supported for two distinct scenes:
+	#   * live streaming terrain  → "terrain_descriptor_path" (chunked, OQ-LS-20)
+	#   * static axis-test scene  → "glb_path" (single monolithic GLB, gen_test_assets)
+	var terrain_ok := false
+	if config.has("terrain_descriptor_path"):
+		terrain_ok = _load_chunked_terrain(config["terrain_descriptor_path"])
+	elif config.has("glb_path"):
+		terrain_ok = _load_single_glb_terrain(config["glb_path"])
+	else:
+		print("TerrainLoader: config has neither terrain_descriptor_path nor glb_path — aborting")
 		return
 
-	print("TerrainLoader: terrain scene loaded OK, child count=%d" % terrain_node.get_child_count())
-	add_child(terrain_node)
-	_diag_print_terrain_positions(terrain_node)
-	_apply_visibility_ranges(terrain_node)
+	if not terrain_ok:
+		print("TerrainLoader: terrain load failed — aborting")
+		return
+
 	_load_aircraft_mesh(config)
 	# LS-T8: SimulationReceiver no longer needs the world origin.  The
 	# simulation-side GodotEnuProjector consumes terrain_config.json directly
@@ -350,15 +398,297 @@ func _load_config() -> Dictionary:
 	return parsed as Dictionary
 
 
+## Load the single-GLB static test scene (gen_test_assets axis-prism terrain).
+func _load_single_glb_terrain(glb_path: String) -> bool:
+	print("TerrainLoader: loading single-GLB terrain, glb_path=%s" % glb_path)
+	var terrain_node := _load_terrain_scene(glb_path)
+	if terrain_node == null:
+		return false
+	print("TerrainLoader: terrain scene loaded OK, child count=%d" % terrain_node.get_child_count())
+	add_child(terrain_node)
+	_diag_print_terrain_positions(terrain_node)
+	_apply_visibility_ranges(terrain_node)
+	return true
+
+
+## Load a chunked streamable-terrain dataset from its descriptor.json (OQ-LS-20).
+##
+## Reads the descriptor, records the chunk index (for coordinate-addressable load/free),
+## and — for IP-LV-8 — loads every chunk up front so behavior matches the former monolithic
+## GLB.  IP-LV-7 will switch the fine LODs to on-demand streaming by aircraft proximity via
+## load_chunk() / free_chunk() and chunk_coord_for_position().
+func _load_chunked_terrain(descriptor_path: String) -> bool:
+	var abs_desc := _resolve_terrain_path(descriptor_path)
+	print("TerrainLoader: loading chunked terrain from %s" % abs_desc)
+	var f := FileAccess.open(abs_desc, FileAccess.READ)
+	if f == null:
+		push_error("TerrainLoader: cannot open descriptor %s" % abs_desc)
+		return false
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_error("TerrainLoader: descriptor %s is not a JSON object" % abs_desc)
+		return false
+	var descriptor: Dictionary = parsed
+
+	_tiles_root = abs_desc.get_base_dir()
+	_chunk_sizes_m = descriptor.get("chunk_sizes_m", [])
+	if _chunk_sizes_m.is_empty() or float(_chunk_sizes_m[0]) <= 0.0:
+		push_error("TerrainLoader: descriptor chunk_sizes_m must be a non-empty per-LOD list of positive sizes")
+		return false
+
+	# Screen-space-error LOD policy (terrain_lod_rendering.md / IP-LV-10): the visibility bands are
+	# computed from these parameters at the live viewport height / FOV, not from a fixed table.
+	_lod_policy = descriptor.get("lod_policy", {})
+	_recompute_lod_bands()
+
+	_terrain_root = Node3D.new()
+	_terrain_root.name = "TerrainChunks"
+	add_child(_terrain_root)
+
+	var chunks: Array = descriptor.get("chunks", [])
+	for rec in chunks:
+		_chunk_index[_chunk_key(int(rec["lod"]), int(rec["cx"]), int(rec["cy"]))] = rec
+
+	# Load the coarse (backdrop) LODs up front; when streaming is enabled the fine
+	# LODs (0..stream_lod_max) are paged in by proximity in _update_terrain_streaming().
+	# With streaming disabled, every chunk is loaded here (the IP-LV-8 behavior).
+	for rec in chunks:
+		var lod := int(rec["lod"])
+		if enable_streaming and lod <= stream_lod_max:
+			continue
+		_load_chunk(lod, int(rec["cx"]), int(rec["cy"]))
+
+	print("TerrainLoader: indexed %d chunk(s), %d resident up front, chunk_sizes=%s m" % [
+		chunks.size(), _loaded_chunks.size(), str(_chunk_sizes_m)])
+	return chunks.size() > 0
+
+
+## Key a chunk by "(lod)_(cx)_(cy)" for the loaded-chunk / index dictionaries.
+func _chunk_key(lod: int, cx: int, cy: int) -> String:
+	return "%d_%d_%d" % [lod, cx, cy]
+
+
+## Load one chunk GLB into the terrain root and apply LOD visibility ranges.
+## Idempotent: a chunk already resident is left as-is.  Returns true if resident afterward.
+func load_chunk(lod: int, cx: int, cy: int) -> bool:
+	return _load_chunk(lod, cx, cy)
+
+
+func _load_chunk(lod: int, cx: int, cy: int) -> bool:
+	var key := _chunk_key(lod, cx, cy)
+	if _loaded_chunks.has(key):
+		return true
+	if not _chunk_index.has(key):
+		return false  # no such chunk in this dataset (sparse coverage)
+	var rec: Dictionary = _chunk_index[key]
+	var abs_path := _tiles_root.path_join(str(rec["file"]))
+	var node := _load_terrain_scene(abs_path)
+	if node == null:
+		push_error("TerrainLoader: failed to load chunk %s" % abs_path)
+		return false
+	node.name = "chunk_%s" % key
+	_terrain_root.add_child(node)
+	_apply_visibility_ranges(node)
+	_loaded_chunks[key] = node
+	return true
+
+
+## Free a resident chunk (used by the streaming manager to unload distant fine tiles).
+func free_chunk(lod: int, cx: int, cy: int) -> void:
+	var key := _chunk_key(lod, cx, cy)
+	if not _loaded_chunks.has(key):
+		return
+	var node: Node = _loaded_chunks[key]
+	_loaded_chunks.erase(key)
+	if is_instance_valid(node):
+		node.queue_free()
+
+
+## Per-LOD chunk side length (m).  Clamps the LOD index to the available range.
+func _chunk_size_for_lod(lod: int) -> float:
+	if _chunk_sizes_m.is_empty():
+		return 0.0
+	return float(_chunk_sizes_m[clampi(lod, 0, _chunk_sizes_m.size() - 1)])
+
+
+## Return the (cx, cy) chunk coordinate containing a Godot-space position at a given LOD.
+## Godot axes: X = ENU east, Z = −ENU north; each LOD indexes its own chunk grid.
+func chunk_coord_for_position(godot_pos: Vector3, lod: int) -> Vector2i:
+	var size := _chunk_size_for_lod(lod)
+	var east := godot_pos.x
+	var north := -godot_pos.z
+	return Vector2i(int(floor(east / size)), int(floor(north / size)))
+
+
+## Page fine-LOD chunks in/out by aircraft proximity (OQ-LS-21, Alternative 1 with
+## asymmetric hysteresis).  Re-evaluated only when the aircraft crosses into a new finest-LOD
+## chunk (the smallest grid — the most sensitive trigger).
+func _update_terrain_streaming() -> void:
+	if not enable_streaming or _terrain_root == null or _chunk_sizes_m.is_empty():
+		return
+	var vehicle := _find_vehicle(get_tree().root)
+	if vehicle == null:
+		return
+	var pos := vehicle.global_position
+	if is_nan(pos.x) or is_inf(pos.x) or is_nan(pos.z) or is_inf(pos.z):
+		return
+	var here := chunk_coord_for_position(pos, 0)
+	if here == _last_stream_chunk:
+		return
+	_last_stream_chunk = here
+	_stream_evaluate(pos)
+
+
+## Load streamed chunks within each fine LOD's fetch radius and free those beyond its
+## (larger) unload radius.  R_unload > R_fetch is the hysteresis gap that prevents thrash.
+## Each LOD uses its own chunk grid (per-LOD chunk size).
+func _stream_evaluate(aircraft_pos: Vector3) -> void:
+	var top_lod := mini(stream_lod_max, 6)
+	# Fetch: for each streamed LOD, load every existing chunk within R_fetch.
+	for lod in range(top_lod + 1):
+		var size := _chunk_size_for_lod(lod)
+		if size <= 0.0:
+			continue
+		var r_fetch := _stream_radius_m(lod, fetch_margin_m)
+		var here := chunk_coord_for_position(aircraft_pos, lod)
+		var reach := int(ceil(r_fetch / size)) + 1
+		for dcx in range(-reach, reach + 1):
+			for dcy in range(-reach, reach + 1):
+				var cx := here.x + dcx
+				var cy := here.y + dcy
+				if not _chunk_index.has(_chunk_key(lod, cx, cy)):
+					continue
+				if aircraft_pos.distance_to(_chunk_center_godot(lod, cx, cy)) <= r_fetch:
+					_load_chunk(lod, cx, cy)
+	# Unload: free resident streamed chunks that have fallen outside R_unload.
+	var to_free: Array = []
+	for key: String in _loaded_chunks.keys():
+		var parts := key.split("_")
+		var lod := int(parts[0])
+		if lod > top_lod:
+			continue  # coarse LODs stay resident as the backdrop
+		var cx := int(parts[1])
+		var cy := int(parts[2])
+		if aircraft_pos.distance_to(_chunk_center_godot(lod, cx, cy)) > _stream_radius_m(lod, unload_margin_m):
+			to_free.append([lod, cx, cy])
+	for t: Array in to_free:
+		free_chunk(t[0], t[1], t[2])
+
+
+## Recompute the per-LOD visibility band edges from the screen-space-error policy at the current
+## viewport height and vertical FOV (terrain_lod_rendering.md §1; OQ-LR-1 Alternative 2).  Sets
+## _lod_edges_m (band edges), _lod_begin_base / _lod_end_base (δ-adjusted, pre tile-radius padding).
+func _recompute_lod_bands() -> void:
+	if _lod_policy.is_empty():
+		return
+	var errs: Array = _lod_policy.get("transition_error_m", [])
+	if errs.is_empty():
+		return
+	var tau: float = float(_lod_policy.get("tau_px", 1.0))
+	var delta: float = float(_lod_policy.get("delta", 0.15))
+	var h_px := _live_viewport_height()
+	var vfov := _live_vertical_fov_rad()
+	# R = eps * H / (2 * tau * tan(vfov/2));  k is the metres-per-metre-of-error scale.
+	var k := h_px / (2.0 * tau * tan(vfov * 0.5))
+
+	# Band edges: [0, R1, ..., R6, R7]; the coarsest outer edge is extrapolated geometrically.
+	_lod_edges_m = [0.0]
+	for e in errs:
+		_lod_edges_m.append(float(e) * k)
+	var n := _lod_edges_m.size()
+	if n >= 2 and _lod_edges_m[n - 2] > 0.0:
+		var ratio: float = _lod_edges_m[n - 1] / _lod_edges_m[n - 2]
+		_lod_edges_m.append(_lod_edges_m[n - 1] + (_lod_edges_m[n - 1] - _lod_edges_m[n - 2]) * ratio)
+	else:
+		_lod_edges_m.append(_lod_edges_m[n - 1] * 4.0)
+
+	# Per-LOD δ-adjusted band [edges[l]*(1-δ), edges[l+1]*(1+δ)]; coarsest end = 0 (infinite).
+	_lod_begin_base = []
+	_lod_end_base = []
+	var lod_count := _lod_edges_m.size() - 1
+	for lod in range(lod_count):
+		_lod_begin_base.append(float(_lod_edges_m[lod]) * (1.0 - delta))
+		if lod == lod_count - 1:
+			_lod_end_base.append(0.0)  # coarsest LOD renders to the horizon
+		else:
+			_lod_end_base.append(float(_lod_edges_m[lod + 1]) * (1.0 + delta))
+
+
+## Recompute the bands and re-apply them to every resident chunk when the viewport height or
+## vertical FOV has changed (window resize / FOV change) — OQ-LR-1 Alternative 2.
+func _maybe_recompute_lod_bands() -> void:
+	if _lod_policy.is_empty() or _terrain_root == null:
+		return
+	var h := _live_viewport_height()
+	var vfov := _live_vertical_fov_rad()
+	if is_equal_approx(h, _last_view_h) and is_equal_approx(vfov, _last_view_fov):
+		return
+	_last_view_h = h
+	_last_view_fov = vfov
+	_recompute_lod_bands()
+	for node in _loaded_chunks.values():
+		if is_instance_valid(node):
+			_apply_visibility_ranges(node)
+
+
+## Live viewport height in pixels (falls back to the descriptor's reference height).
+func _live_viewport_height() -> float:
+	var vp := get_viewport()
+	if vp == null:
+		return float(_lod_policy.get("h_ref_px", 1080.0))
+	return maxf(1.0, vp.get_visible_rect().size.y)
+
+
+## Live vertical field of view (radians).  The camera uses KEEP_WIDTH (its `fov` is horizontal),
+## so the vertical FOV is derived from the viewport aspect ratio.
+func _live_vertical_fov_rad() -> float:
+	if _camera == null:
+		return float(_lod_policy.get("fov_ref_rad", deg_to_rad(90.0)))
+	var fov_rad := deg_to_rad(_camera.fov)
+	if _camera.keep_aspect == Camera3D.KEEP_HEIGHT:
+		return fov_rad
+	# KEEP_WIDTH: _camera.fov is the horizontal FOV; convert to vertical via the aspect ratio.
+	var aspect := 1.0
+	var vp := get_viewport()
+	if vp != null:
+		var sz := vp.get_visible_rect().size
+		if sz.y > 0.0:
+			aspect = sz.x / sz.y
+	return 2.0 * atan(tan(fov_rad * 0.5) / maxf(0.01, aspect))
+
+
+## Streaming radius for a LOD = its screen-space-error band outer edge (R_{lod+1}) + margin.
+## The coarsest LOD has no finite outer edge; fall back to the camera far clip.
+func _stream_radius_m(lod: int, margin_m: float) -> float:
+	var outer := 0.0
+	if lod + 1 < _lod_edges_m.size():
+		outer = float(_lod_edges_m[lod + 1])
+	if outer <= 0.0:
+		outer = camera_far_m
+	return outer + margin_m
+
+
+## Center of chunk (lod, cx, cy) in Godot space (Y = 0, the world-origin plane).
+func _chunk_center_godot(lod: int, cx: int, cy: int) -> Vector3:
+	var size := _chunk_size_for_lod(lod)
+	var east := (float(cx) + 0.5) * size
+	var north := (float(cy) + 0.5) * size
+	return Vector3(east, 0.0, -north)
+
+
+## Resolve a project-root-relative terrain path to an absolute/res:// path usable by the
+## file and glTF loaders (shared by the descriptor and single-GLB paths).
+func _resolve_terrain_path(p: String) -> String:
+	var resolved := p
+	if not p.begins_with("res://") and not p.begins_with("/") and not (p.length() > 1 and p[1] == ":"):
+		resolved = ProjectSettings.globalize_path("res://").path_join(p)
+	return resolved.replace("\\", "/")
+
+
 func _load_terrain_scene(glb_path: String) -> Node3D:
-	# Resolve project-root-relative paths (not starting with res:// or an absolute path).
-	var resolved := glb_path
-	if not glb_path.begins_with("res://") and not glb_path.begins_with("/") and not (glb_path.length() > 1 and glb_path[1] == ":"):
-		# globalize_path("res://") returns the project root with a trailing slash.
-		var project_root := ProjectSettings.globalize_path("res://")
-		resolved = project_root.path_join(glb_path)
-	# Godot's ResourceLoader requires forward slashes; normalize any Windows backslashes.
-	resolved = resolved.replace("\\", "/")
+	# Resolve project-root-relative paths (not starting with res:// or an absolute path)
+	# and normalize separators for Godot's loaders.
+	var resolved := _resolve_terrain_path(glb_path)
 
 	# res:// paths go through the pre-imported cache via ResourceLoader.
 	# Absolute filesystem paths use GLTFDocument for runtime loading, because
@@ -471,11 +801,14 @@ func _load_aircraft_mesh(config: Dictionary) -> void:
 func _apply_visibility_ranges(node: Node) -> void:
 	if node is MeshInstance3D:
 		var lod := _parse_lod_from_name(node.name)
-		if lod >= 0:
+		if lod >= 0 and lod < _lod_begin_base.size():
 			var mi := node as MeshInstance3D
+			# Pad the per-LOD band by the tile's AABB half-diagonal so centroid-distance culling
+			# approximates nearest-edge-distance culling (lod_culling_geometry.md).
 			var radius := mi.get_aabb().size.length() * 0.5
-			mi.visibility_range_begin = max(0.0, _LOD_VIS_BEGIN_M[lod] - radius)
-			mi.visibility_range_end   = (_LOD_VIS_END_M[lod] + radius) if _LOD_VIS_END_M[lod] > 0.0 else 0.0
+			var end_base: float = _lod_end_base[lod]
+			mi.visibility_range_begin = max(0.0, float(_lod_begin_base[lod]) - radius)
+			mi.visibility_range_end   = (end_base + radius) if end_base > 0.0 else 0.0
 			# Cross-fade self out (not in) at both edges so only one LOD level is
 			# opaque at a time.  Without this, the hysteresis overlap band shows two
 			# terrain meshes simultaneously — the coarser LOD visible as a second

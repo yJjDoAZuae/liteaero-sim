@@ -20,16 +20,16 @@ from pathlib import Path
 import _bootstrap  # noqa: F401  # inserts tools/ on sys.path; must precede shared imports
 from colorize import colorize
 from download import DownloadError, default_cache_dir, download_dem, download_imagery
-from export_gltf import export_gltf
-from geodesy import bbox_min_distance_m
 from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
+from lod_policy import lod_footprints_m, lod_policy_dict
 from mosaic import mosaic_dem, mosaic_imagery
 from mosaic_render import render_mosaic
 from raster_sample import RasterSampler
+from terrain_chunks import export_chunked_terrain
 from terrain_paths import (
-    derived_dir, gltf_path, las_terrain_dir, metadata_path, source_dir,
-    terrain_config_path,
+    derived_dir, las_terrain_dir, metadata_path, source_dir,
+    terrain_config_path, terrain_descriptor_path, terrain_tiles_dir,
 )
 from triangulate import lod_grid_spacing_deg, triangulate
 from verify import MeshQualityError, check
@@ -68,38 +68,30 @@ _LOD_MAX_PIXEL_DIM: list[int] = [
     4096,   # L6  same as L4
 ]
 
-# LOD cell side in degrees: 100 grid points × lod_grid_spacing_deg(N) per terrain.md.
-# L5 and L6 use the same side as L4 (clamped to the coverage area in practice).
-# Cell side per LOD (degrees).  NOTE: this per-LOD-scaled sizing is superseded by the
-# uniform-small-footprint design (live_sim_view.md OQ-LS-18 → live_viewer_terrain_frame.md IP-LV-5),
-# which is blocked on the triangulator-speed fix (IP-LV-4).  Left at the original 100× baseline until
-# that lands; a 6× coarse-LOD experiment (2026-07-02) confirmed a per-LOD multiplier cannot fix the
-# stacking (L4 at 6 km still stacked).
-_LOD_CELL_SIDE_DEG: list[float] = [
-    100 * lod_grid_spacing_deg(lod) for lod in range(5)
-] + [
-    100 * lod_grid_spacing_deg(4),  # L5: same as L4, ≥ 1 cell per region
-    100 * lod_grid_spacing_deg(4),  # L6: same as L4, ≥ 1 cell per region
-]
+# Per-LOD footprint tiling (OQ-LS-22 Alt 3 → IP-LV-5).  Each LOD tiles the whole region on its
+# own grid at a screen-space-error-scaled footprint f_l (lod_policy): small tiles for the fine
+# near-ground LODs, large tiles for the coarse backdrop LODs, so every tile is smaller than its
+# own LOD's culling band and per-node centroid-distance culling stays crisp everywhere.
+#
+# Degree-per-metre factors for the metre→degree footprint conversion (spherical approximation;
+# longitude shrinks with latitude).  The chunk assignment that drives culling uses exact ENU.
+_METERS_PER_DEG_LAT: float = 110_540.0
+_EQUATOR_METERS_PER_DEG_LON: float = 111_320.0
 
-# Geographic partitioning: export radius per LOD (m).
-# Equals the switch-to-coarser hysteresis threshold from terrain.md §LOD Hysteresis Band.
-# _select_display_tiles uses bbox intersection (not centroid distance) so tiles that
-# straddle the center are correctly included — see DEFECT-TB-1 fix.
-_LOD_EXPORT_RADIUS_M: list[float] = [
-    345.0,
-    1_035.0,
-    3_105.0,
-    9_315.0,
-    27_945.0,
-    83_835.0,
-    math.inf,   # L6 always exported
-]
+# Minimum grid points per axis a cell is triangulated with.  A small fixed footprint cannot hold
+# a coarse LOD's native spacing (e.g. a 400 m cell at L6's 10 km spacing < 2 points), so the
+# effective spacing is clamped so each cell yields at least this many points — a small tile
+# becomes a coarse mesh rather than degenerating.
+_MIN_CELL_POINTS: int = 3
 
-# Godot visibility range bounds per LOD (m).
-# From terrain.md §LOD Hysteresis Band.
+# Godot visibility range bounds per LOD (m).  From terrain.md §LOD Hysteresis Band.
 _VIS_BEGIN_M: list[float] = [0.0, 255.0, 765.0, 2_295.0, 6_885.0, 20_655.0, 61_965.0]
 _VIS_END_M: list[float | None] = [345.0, 1_035.0, 3_105.0, 9_315.0, 27_945.0, 83_835.0, None]
+
+# Chunk side, in tile footprints (OQ-LS-20).  The per-LOD tile footprints come from the
+# screen-space-error policy (lod_policy); this only sets how many footprints wide a chunk file is.
+# Tunable via the config ``terrain.chunk_footprints`` or the ``--chunk-footprints`` CLI flag.
+_DEFAULT_CHUNK_FOOTPRINTS: int = 4
 
 # Project root: parents[3] of python/tools/terrain/build_terrain.py = liteaero-sim/
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
@@ -126,17 +118,17 @@ def _get_sampler(path: str, multiband: bool) -> RasterSampler:
 
 
 def _build_cell(
-    task: tuple[str, str, str, int, tuple[float, float, float, float]],
+    task: tuple[str, str, str, int, tuple[float, float, float, float], float],
 ) -> TerrainTileData:
     """Triangulate + colorize + quality-check a single cell (ProcessPool worker).
 
-    ``task`` = (dem_path, imagery_path, imagery_source, lod, cell_bbox_deg).
+    ``task`` = (dem_path, imagery_path, imagery_source, lod, cell_bbox_deg, spacing_deg).
     Rasters are sampled from the process-local in-memory cache (see _get_sampler).
     """
-    dem_path, img_path, source, lod, cell_bbox = task
+    dem_path, img_path, source, lod, cell_bbox, spacing = task
     dem = _get_sampler(dem_path, multiband=False)
     img = _get_sampler(img_path, multiband=True)
-    tile = triangulate(dem, cell_bbox, lod=lod)
+    tile = triangulate(dem, cell_bbox, lod=lod, spacing_deg=spacing)
     tile = colorize(tile, img, source=source)
     check(tile)
     return tile
@@ -164,6 +156,7 @@ def build_terrain(
     imagery_source: str = "auto",
     force: bool = False,
     workers: int = 1,
+    chunk_footprints: int | None = None,
 ) -> Path:
     """Build a complete terrain dataset for a live-sim aircraft configuration.
 
@@ -198,12 +191,17 @@ def build_terrain(
         Number of processes used to triangulate/colorize tiles.  ``1`` (default)
         runs the per-cell loop in-process; a value ``> 1`` distributes cells over
         a ``ProcessPoolExecutor`` (each worker reads the DEM and imagery once).
+    chunk_footprints:
+        Chunk side as an integer number of tile footprints (OQ-LS-20).  ``None``
+        (default) reads ``terrain.chunk_footprints`` from the config, falling back to
+        the module default.  The per-LOD tile footprints themselves are fixed by the
+        screen-space-error policy (``lod_policy``), not this argument.
 
     Returns
     -------
     Path
-        Absolute path to the exported GLB file
-        (``data/terrain/<name>/derived/gltf/terrain.glb``).
+        Absolute path to the streamable-terrain descriptor
+        (``data/terrain/<name>/derived/terrain_tiles/descriptor.json``).
 
     Raises
     ------
@@ -248,6 +246,13 @@ def build_terrain(
     if radius_m is None:
         radius_m = _radius_from_config(config)
 
+    # Chunk side (in tile footprints): caller argument overrides config, config overrides default.
+    # The per-LOD tile footprints themselves come from the screen-space-error policy (lod_policy).
+    resolved_chunk_footprints = (
+        chunk_footprints if chunk_footprints is not None
+        else _chunk_footprints_from_config(config)
+    )
+
     bbox_deg = _bbox_from_center(center_lat_deg, center_lon_deg, radius_m)
 
     _log.info(
@@ -262,20 +267,21 @@ def build_terrain(
     s_dir = source_dir(dataset_name)
     d_dir = derived_dir(dataset_name)
     lt_dir = las_terrain_dir(dataset_name)
-    g_path = gltf_path(dataset_name)
+    tiles_dir = terrain_tiles_dir(dataset_name)
     m_path = metadata_path(dataset_name)
 
     s_dir.mkdir(parents=True, exist_ok=True)
     d_dir.mkdir(parents=True, exist_ok=True)
     lt_dir.mkdir(parents=True, exist_ok=True)
-    g_path.parent.mkdir(parents=True, exist_ok=True)
+    tiles_dir.mkdir(parents=True, exist_ok=True)
 
     if force:
         if lt_dir.exists():
             shutil.rmtree(lt_dir)
             lt_dir.mkdir(parents=True, exist_ok=True)
-        if g_path.exists():
-            g_path.unlink()
+        if tiles_dir.exists():
+            shutil.rmtree(tiles_dir)
+            tiles_dir.mkdir(parents=True, exist_ok=True)
         if m_path.exists():
             m_path.unlink()
 
@@ -373,15 +379,27 @@ def build_terrain(
     # -------------------------------------------------------------------
     all_tiles: list[TerrainTileData] = []
 
-    # Flatten every (lod, cell) across all 7 LODs into a single task list.
-    cell_tasks: list[tuple[int, tuple[float, float, float, float]]] = []
+    # Per-LOD footprint tiling (IP-LV-5, OQ-LS-22 Alt 3): each LOD is tiled on its OWN grid at
+    # its screen-space-error-scaled footprint f_l (small fine tiles, large coarse tiles), so a
+    # tile is smaller than its own LOD's culling band and per-node centroid-distance culling stays
+    # crisp.  Footprints are baked at the reference resolution (terrain_lod_rendering.md OQ-LR-1);
+    # the vertex spacing within a cell is the LOD's native spacing, clamped up if a (small) cell
+    # would otherwise hold too few points.
+    footprints_m = lod_footprints_m()  # per-LOD tile footprint (m), index = LOD
+
+    cell_tasks: list[tuple[int, tuple[float, float, float, float], float]] = []
     for lod in range(7):
-        cells = _compute_cell_grid(bbox_deg, lod=lod)
-        _log.info("%s: LOD %d  ->  %d cell(s)", dataset_name, lod, len(cells))
-        cell_tasks.extend((lod, cell_bbox) for _row, _col, cell_bbox in cells)
+        lon_side, lat_side = _cell_side_deg(footprints_m[lod], center_lat_rad)
+        cells_lod = _compute_cell_grid(bbox_deg, lon_side, lat_side)
+        spacing = _effective_spacing_deg(lod, lon_side, lat_side)
+        cell_tasks.extend((lod, cell_bbox, spacing) for _row, _col, cell_bbox in cells_lod)
+        _log.info(
+            "%s: LOD %d  footprint %.0f m  ->  %d cell(s)",
+            dataset_name, lod, footprints_m[lod], len(cells_lod),
+        )
 
     _log.info(
-        "%s: triangulating %d tile(s) across 7 LODs  (workers=%d) ...",
+        "%s: %d tiles across 7 per-LOD grids  (workers=%d) ...",
         dataset_name, len(cell_tasks), workers,
     )
 
@@ -389,18 +407,18 @@ def build_terrain(
         # Serial, in-process: read the DEM and imagery once, reuse for every cell.
         dem_sampler = RasterSampler.from_path(dem_ellipsoidal_path)
         img_sampler = RasterSampler.from_path(best_img_path, multiband=True)
-        for lod, cell_bbox in cell_tasks:
-            tile = triangulate(dem_sampler, cell_bbox, lod=lod)
+        for lod, cell_bbox, spacing in cell_tasks:
+            tile = triangulate(dem_sampler, cell_bbox, lod=lod, spacing_deg=spacing)
             tile = colorize(tile, img_sampler, source=best_img_source)
             check(tile)
             all_tiles.append(tile)
     else:
         # Parallel: each worker reads the rasters once (process-local cache) and
-        # processes a chunk of cells.  Only small (path, lod, bbox) tuples cross the
+        # processes a chunk of cells.  Only small (path, lod, bbox, spacing) tuples cross the
         # process boundary — the large raster arrays are never pickled.
         worker_args = [
-            (str(dem_ellipsoidal_path), str(best_img_path), best_img_source, lod, cell_bbox)
-            for lod, cell_bbox in cell_tasks
+            (str(dem_ellipsoidal_path), str(best_img_path), best_img_source, lod, cell_bbox, spacing)
+            for lod, cell_bbox, spacing in cell_tasks
         ]
         chunksize = max(1, len(worker_args) // (workers * 8))
         with ProcessPoolExecutor(max_workers=workers) as executor:
@@ -414,12 +432,13 @@ def build_terrain(
     write_las_terrain(lt_path, all_tiles)
 
     # -------------------------------------------------------------------
-    # Step 5: Select display tiles (geographic partitioning for Godot)
+    # Step 5: Display tiles = every tile.  Uniform-footprint tiling exports all LODs
+    # region-wide (no nested export-radius selection); chunking + streaming handle scale.
     # -------------------------------------------------------------------
-    display_tiles = _select_display_tiles(all_tiles, center_lat_rad, center_lon_rad)
+    display_tiles = all_tiles
     if not display_tiles:
         raise RuntimeError(
-            f"{dataset_name}: geographic partitioning produced no display tiles; "
+            f"{dataset_name}: triangulation produced no tiles; "
             "check that the coverage area contains the center position"
         )
 
@@ -457,15 +476,29 @@ def build_terrain(
         )
         tile_mosaics.append((tile, tile_mosaic))
 
-    _log.info("%s: exporting GLB  %d display tile(s) ...", dataset_name, len(display_tiles))
-
     # -------------------------------------------------------------------
-    # Step 6: Export GLB (per-tile embedded textures)
+    # Step 6: Export streamable chunk files + descriptor (OQ-LS-20 Alt 2)
+    #
+    # Tiles are grouped into per-(LOD, chunk) GLB files addressed by integer chunk
+    # coordinate, so the Godot streaming manager (OQ-LS-21) can page fine LODs by
+    # aircraft proximity.  Per-LOD chunk side = tile_footprints_m[lod] × chunk_footprints.
     # -------------------------------------------------------------------
-    export_gltf(
+    _log.info(
+        "%s: exporting %d display tile(s) as per-LOD chunks  (chunk = footprint × %d) ...",
+        dataset_name, len(display_tiles), resolved_chunk_footprints,
+    )
+    descriptor = export_chunked_terrain(
         tile_mosaics,
-        g_path,
+        tiles_dir,
         world_origin=(center_lat_rad, center_lon_rad, center_h_m),
+        tile_footprints_m=footprints_m,
+        chunk_footprints=resolved_chunk_footprints,
+        bounds_deg=bbox_deg,
+        lod_policy=lod_policy_dict(),
+    )
+    _log.info(
+        "%s: wrote %d chunk file(s)  →  %s",
+        dataset_name, len(descriptor.chunks), tiles_dir,
     )
 
     # -------------------------------------------------------------------
@@ -502,8 +535,9 @@ def build_terrain(
     }
     m_path.write_text(json.dumps(metadata, indent=4))
 
-    _log.info("%s: build complete → %s", dataset_name, g_path)
-    return g_path
+    descriptor_path = terrain_descriptor_path(dataset_name)
+    _log.info("%s: build complete → %s", dataset_name, descriptor_path)
+    return descriptor_path
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +569,12 @@ def _radius_from_config(config: dict) -> float:
             "aircraft config or pass --radius-km on the command line"
         )
     return float(terrain_section["radius_km"]) * 1000.0
+
+
+def _chunk_footprints_from_config(config: dict) -> int:
+    """Return the chunk side (in tile footprints) from ``terrain.chunk_footprints``, or the default."""
+    terrain_section = config.get("terrain") or {}
+    return int(terrain_section.get("chunk_footprints", _DEFAULT_CHUNK_FOOTPRINTS))
 
 
 def _bbox_from_center(
@@ -582,19 +622,40 @@ def _compute_chunk_grid(
     return chunks
 
 
+def _cell_side_deg(footprint_m: float, center_lat_rad: float) -> tuple[float, float]:
+    """Return (lon_side_deg, lat_side_deg) for a square ``footprint_m`` cell at a latitude."""
+    lat_side = footprint_m / _METERS_PER_DEG_LAT
+    lon_side = footprint_m / (_EQUATOR_METERS_PER_DEG_LON * max(0.01, math.cos(center_lat_rad)))
+    return lon_side, lat_side
+
+
+def _effective_spacing_deg(
+    lod: int, cell_side_lon_deg: float, cell_side_lat_deg: float
+) -> float:
+    """Grid spacing (deg) for a LOD within a fixed-footprint cell.
+
+    The LOD's native spacing is used when it fits; for coarse LODs whose native spacing is
+    larger than the small cell, it is clamped so the cell still yields ``_MIN_CELL_POINTS``
+    points per axis (a small tile becomes a coarse mesh instead of degenerating).
+    """
+    native = lod_grid_spacing_deg(lod)
+    cap = min(cell_side_lon_deg, cell_side_lat_deg) / (_MIN_CELL_POINTS - 1)
+    return min(native, cap)
+
+
 def _compute_cell_grid(
     bbox_deg: tuple[float, float, float, float],
-    lod: int,
+    cell_side_lon_deg: float,
+    cell_side_lat_deg: float,
 ) -> list[tuple[int, int, tuple[float, float, float, float]]]:
-    """Tile bbox_deg into LOD-appropriate cells.
+    """Tile bbox_deg into uniform cells of the given per-axis degree sizes.
 
-    Returns a list of (row, col, cell_bbox_deg).  Cell size is
-    _LOD_CELL_SIDE_DEG[lod]; all coverage is always included (≥ 1 cell).
+    Returns a list of (row, col, cell_bbox_deg).  The same grid is used for every LOD
+    (LOD varies vertex density within the fixed footprint); all coverage is included (≥ 1 cell).
     """
     lon_min, lat_min, lon_max, lat_max = bbox_deg
-    cell_side = _LOD_CELL_SIDE_DEG[lod]
-    n_lon = max(1, math.ceil((lon_max - lon_min) / cell_side))
-    n_lat = max(1, math.ceil((lat_max - lat_min) / cell_side))
+    n_lon = max(1, math.ceil((lon_max - lon_min) / cell_side_lon_deg))
+    n_lat = max(1, math.ceil((lat_max - lat_min) / cell_side_lat_deg))
     cell_w = (lon_max - lon_min) / n_lon
     cell_h = (lat_max - lat_min) / n_lat
     cells: list[tuple[int, int, tuple[float, float, float, float]]] = []
@@ -606,35 +667,6 @@ def _compute_cell_grid(
             clat_max = lat_min + (row + 1) * cell_h
             cells.append((row, col, (clon_min, clat_min, clon_max, clat_max)))
     return cells
-
-
-def _select_display_tiles(
-    tiles: list[TerrainTileData],
-    center_lat_rad: float,
-    center_lon_rad: float,
-) -> list[TerrainTileData]:
-    """Return the subset of tiles whose coverage overlaps the export radius for each LOD.
-
-    A tile is included if the minimum distance from (center_lat_rad, center_lon_rad)
-    to the tile's geographic bbox is within _LOD_EXPORT_RADIUS_M[tile.lod].
-    This correctly handles tiles that straddle the center point (centroid may be
-    outside the radius even though the tile covers the center).
-    L6 tiles are always included (export radius = infinity).
-    """
-    display: list[TerrainTileData] = []
-    for tile in tiles:
-        radius = _LOD_EXPORT_RADIUS_M[tile.lod]
-        if math.isinf(radius):
-            display.append(tile)
-            continue
-        min_dist_m = bbox_min_distance_m(
-            center_lat_rad, center_lon_rad,
-            tile.lat_min_rad, tile.lat_max_rad,
-            tile.lon_min_rad, tile.lon_max_rad,
-        )
-        if min_dist_m <= radius:
-            display.append(tile)
-    return display
 
 
 def _bbox_intersects_conus(bbox_deg: tuple[float, float, float, float]) -> bool:
@@ -710,12 +742,12 @@ def _build_terrain_config(
         tyre_r = float(wheel.get("tyre_radius_m", 0.0))
         gear_contact_height_m = max(gear_contact_height_m, attach_z + tyre_r)
 
-    glb_path_str = str(gltf_path(dataset_name).resolve())
+    descriptor_path_str = str(terrain_descriptor_path(dataset_name).resolve())
 
     return {
         "schema_version": 1,
         "dataset_name": dataset_name,
-        "glb_path": glb_path_str,
+        "terrain_descriptor_path": descriptor_path_str,
         "world_origin_lat_rad": center_lat_rad,
         "world_origin_lon_rad": center_lon_rad,
         "world_origin_height_m": center_h_m,
@@ -845,6 +877,17 @@ def _main() -> None:
             "(default: all CPU cores; use 1 for serial in-process)"
         ),
     )
+    parser.add_argument(
+        "--chunk-footprints",
+        metavar="N",
+        type=int,
+        default=None,
+        help=(
+            "chunk side as an integer number of tile footprints "
+            "(default: terrain.chunk_footprints from config, else "
+            f"{_DEFAULT_CHUNK_FOOTPRINTS})"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -857,7 +900,7 @@ def _main() -> None:
     radius_m = args.radius_km * 1000.0 if args.radius_km is not None else None
 
     try:
-        glb_path = build_terrain(
+        descriptor_path = build_terrain(
             args.config,
             name=args.name,
             center_lat_deg=args.center_lat,
@@ -867,11 +910,12 @@ def _main() -> None:
             imagery_source=args.imagery_source,
             force=args.force,
             workers=args.workers,
+            chunk_footprints=args.chunk_footprints,
         )
     except (FileNotFoundError, ValueError, DownloadError) as exc:
         parser.error(str(exc))
 
-    print(f"terrain ready -> {glb_path}")
+    print(f"terrain ready -> {descriptor_path}")
 
 
 if __name__ == "__main__":
