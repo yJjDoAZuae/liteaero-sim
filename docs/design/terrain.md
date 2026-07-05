@@ -135,6 +135,16 @@ scalars.  Callers need no knowledge of the internal local-grid encoding.
 
 ## Level-of-Detail (LOD) System
 
+> **⚠ Superseded model — see [OQ-T-2](#oq-t-2--reconcile-the-nested-slant-range-lod-model-with-the-per-lod-screen-space-error-footprints).**
+> The fixed target-spacing table, nested-cell sizing, and slant-range selection rule in this
+> section describe the LOD model as originally designed. The offline build pipeline
+> (`build_terrain.py` + `lod_policy.py`) no longer follows it: each LOD is now tiled on its
+> own grid at a **per-LOD footprint** derived from a screen-space-error policy
+> (footprints `[286, 668, 1909, 6682, 19092, 66822, 222739] m`; see
+> [terrain_lod_rendering.md](terrain_lod_rendering.md), OQ-LS-22 Alt 3). These sections are
+> retained for reference but must not be treated as authoritative for the tiling the physics
+> mesh actually loads. Do not write new code against the tables below until OQ-T-2 is resolved.
+
 ### LOD Levels and Target Spacings
 
 Seven discrete LOD levels span the required resolution range of 10 m to 10 km:
@@ -263,6 +273,15 @@ The cell extent in radians used by the internal spatial index (see §Internal Sp
 is computed from the cell side by dividing by the Earth's mean radius (6,371,000 m).
 At L4–L6 the cell side is clamped to the actual terrain region extent, which varies per
 mission.
+
+> **⚠ Known defect — the cell sides above no longer match the build.** The internal spatial
+> index uses these metric cell sides (`[1000, 3000, 10000, 30000, 100000, 100000, 100000] m`)
+> as its bucketing grid, but the build now emits per-LOD footprints of
+> `[286, 668, 1909, 6682, 19092, 66822, 222739] m`. Every footprint at L0–L5 is *smaller*
+> than its bucket, so many distinct tiles hash to one key and overwrite each other on load;
+> L6's footprint is *larger* than its bucket, mis-keying the other way. See the Issue note in
+> §Internal Spatial Index for the failure mechanism and [OQ-T-1](#oq-t-1--physics-terrain-index-and-cell-model-under-per-lod-footprint-tiling)
+> for the resolution.
 
 ### Tile Boundary Continuity
 
@@ -1685,6 +1704,31 @@ making brute-force iteration acceptable.
 `queryAABB()` and `querySphere()` follow the same O(N) pattern, collecting all cells
 whose bounds overlap the query region.
 
+### Issue — index bucketing collapses fine tiles under per-LOD footprint tiling
+
+**Observed (reproduced at KSBA).** With the aircraft visually ~50 ft above the runway, the
+AGL readout reads zero while the reported altitude is ~60–70 ft: the physics ground surface
+sits ~15 m above the surface the viewer draws. `Aircraft::agl_m()`, the landing-gear contact
+test, and the body-collider all read `TerrainMesh::elevation_m()`, so all three inherit the
+error; the live viewer does not use this index (it draws every tile from the chunk
+descriptor) and is correct.
+
+**Mechanism.** `cellKey()` quantizes each tile's centroid onto a per-LOD grid whose side is a
+compiled-in constant, `kCellSideM = [1000, 3000, 10000, 30000, 100000, 100000, 100000] m`.
+The build now emits per-LOD footprints of `[286, 668, 1909, 6682, 19092, 66822, 222739] m`.
+At L0, roughly `(1000 / 286)^2` ≈ 12 distinct 286 m tiles fall in one 1000 m bucket; because
+`TerrainCell` holds one optional tile per LOD slot and `addTile()` overwrites unconditionally,
+only the last of those ~12 survives the load — the other ~11 are silently dropped. The same
+one-survivor-per-bucket collapse occurs at L1–L5. `deserializeLasTerrain()` therefore reads all
+tiles but the in-memory index retains only a sparse (~8 % at L0) scattering. When
+`elevation_m()` queries a point not covered by a surviving fine tile, `cellAt()` falls back to
+a surviving coarser tile whose kilometre-spanning triangle floats above the true surface on any
+slope — the ~15 m error.
+
+**Scope.** This is a load-time indexing defect only; the `.las_terrain` file on disk is
+complete (all tiles present), so the fix is code-side and needs no re-tile. The design decision
+for the fix is [OQ-T-1](#oq-t-1--physics-terrain-index-and-cell-model-under-per-lod-footprint-tiling).
+
 ---
 
 ## Design Constraints and Open Questions
@@ -1700,3 +1744,142 @@ whose bounds overlap the query region.
 | LOD hysteresis | Implemented via `LodSelector` with default δ = 0.15 (see §LOD Hysteresis Band).  `TerrainMesh::selectLodBySlantRange()` remains available for stateless one-shot use. | — |
 | Collision accuracy | `lineOfSight()` resolution bounded by 10 m L0 vertex spacing.  Sub-10 m precision is not required. | — |
 | File format | `.las_terrain` is the primary simulation storage format (compact, C++ native).  **glTF 2.0 / GLB** is the standard rendering format: game engines load GLB natively with no custom reader.  Both formats are produced by the Python ingestion pipeline.  The local-grid float32 vertex encoding is directly compatible with glTF vertex buffers.  Per-facet color is baked to per-vertex `COLOR_0` during GLB export (vertex duplication: 3 per triangle). | — |
+
+---
+
+## Open Questions
+
+| ID | Summary | Status |
+| ---- | --------- | -------- |
+| OQ-T-1 | Physics `TerrainMesh` index and cell model under per-LOD footprint tiling | **Blocking** — ground-contact correctness |
+| OQ-T-2 | Reconcile the nested slant-range LOD model with the per-LOD screen-space-error footprints | Not blocking — design debt |
+
+### OQ-T-1 — Physics terrain index and cell model under per-LOD footprint tiling
+
+**Problem.**
+The C++ `TerrainMesh` indexes terrain tiles in a hash map keyed by the tile centroid quantized
+onto a per-LOD grid. The grid side per level is a compiled-in constant array,
+`kCellSideM = [1000, 3000, 10000, 30000, 100000, 100000, 100000] m`, and the `TerrainCell`
+container aggregates all seven LOD levels of one co-located ground patch into a single cell —
+both assume a **nested** LOD hierarchy in which level `ℓ` and level `ℓ+1` cover the same area at
+coarser resolution. The offline build no longer produces that hierarchy: it tiles each LOD on
+its own independent grid at a **per-LOD footprint**
+`f = [286, 668, 1909, 6682, 19092, 66822, 222739] m`, derived from a screen-space-error policy
+(`lod_policy.py`; adopted in [terrain_lod_rendering.md](terrain_lod_rendering.md) as OQ-LS-22
+Alt 3). Because every L0–L5 footprint is smaller than its hard-coded bucket, many distinct
+tiles quantize to the same key and overwrite one another when the file is loaded (`addTile()`
+overwrites the per-LOD slot unconditionally), so only about one tile per bucket survives — the
+in-memory index keeps a sparse scattering while the on-disk file holds every tile. The
+consequence is that `elevation_m()` returns a coarse-tile interpolation wherever no surviving
+fine tile covers the query point; measured impact is a ~15 m vertical error at the KSBA runway,
+with AGL reading zero while the aircraft is ~50 ft above the drawn surface. This corrupts every
+ground-contact consumer (UC-T1 elevation, UC-T2 height-above-ground, landing-gear contact, and
+the body collider). The viewer is unaffected — it does not use this index. The mechanism is
+detailed in the Issue note under §Internal Spatial Index. This question decides how the physics
+index should be made consistent with the build's tiling.
+
+**Alternatives.**
+
+1. **Sync the hard-coded cell sides.** Replace the `kCellSideM` values with the per-LOD
+   footprints so each grid side equals that LOD's footprint, restoring an injective
+   tile-to-key mapping.
+   - *Benefits:* one-line change; every tile is retained; no file-format change; no re-tile;
+     immediately unblocks the body-collider work.
+   - *Drawbacks:* the footprints are authored in Python (`lod_policy.py`); a hard-coded C++
+     copy re-drifts the moment the policy's `gamma` or transition-error schedule changes —
+     which is exactly the drift that produced the current defect. Leaves the nested-LOD
+     `TerrainCell` aggregation vestigial, since per-LOD grids no longer co-locate levels.
+   - *Prerequisites:* none.
+
+2. **Data-driven index from the `.las_terrain` header.** Write the per-LOD footprint array
+   (already known to the tiler) into the `.las_terrain` file header, and have
+   `deserializeLasTerrain()` build its index grid from those values instead of the compiled-in
+   constant.
+   - *Benefits:* removes the entire drift class — the index always matches the tiling that
+     produced the file it is reading; single source of truth (the build); robust to future
+     policy changes.
+   - *Drawbacks:* adds a header field to the `.las_terrain` format and its two readers
+     (C++ `deserializeLasTerrain`, Python `las_terrain.py`); marginally more load logic.
+   - *Prerequisites:* extend the format (§`.las_terrain` File Format) with a per-LOD footprint
+     array; update `write_las_terrain` / `read_las_terrain` and the C++ (de)serialize path.
+     Per the initial-development policy, `schema_version` stays 1 and all call sites are updated.
+
+3. **Tile-unique keying; retire the nested cell.** Key each tile by a globally unique
+   identifier (e.g. its per-LOD build grid indices, or a monotonic tile id) and store tiles
+   directly, one per map entry, instead of aggregating LODs into `TerrainCell`.
+   - *Benefits:* correct under any footprint scheme, present or future; removes the nested-LOD
+     assumption that per-LOD tiling already violates; simplest invariant — every tile is
+     retained by construction.
+   - *Drawbacks:* largest change — touches `TerrainCell`, the key scheme, and every query
+     method (`cellAt`, `queryLocalAABB`, `querySphere`, `selectLodBySlantRange`) that currently
+     relies on per-cell LOD aggregation; care needed that finest-LOD-at-a-point selection still
+     works from a flat tile store.
+   - *Prerequisites:* redesign the index and cell container; revisit all spatial-query methods;
+     overlaps with OQ-T-2.
+
+**Recommendation.**
+Alternative 2. It removes the root cause — a compiled-in constant drifting away from the build —
+at modest cost, keeps a single source of truth, and avoids the broad query-method redesign of
+Alternative 3. Alternative 1 is an acceptable *stopgap* to unblock the deferred body-collider
+work if that is urgent, but it must not be the final state because it re-creates the drift that
+caused this defect. Alternative 3 is the cleanest long-term model; if the nested-LOD
+`TerrainCell` is retired under OQ-T-2, fold Alternative 3 into that effort rather than doing it
+twice.
+
+### OQ-T-2 — Reconcile the nested slant-range LOD model with the per-LOD screen-space-error footprints
+
+**Problem.**
+§Level-of-Detail System and §Geographic Cell Size describe a LOD model with fixed target vertex
+spacings (10 m to 10 km), nested cells (one `TerrainCell` holds L0–L6 of one co-located patch),
+and a slant-range selection rule (boundary `r0 = 300 m`, growing by 3× per level). The build
+pipeline no longer follows this: it tiles each LOD independently at a per-LOD footprint derived
+from a screen-space-error policy (OQ-LS-22 Alt 3; see
+[terrain_lod_rendering.md](terrain_lod_rendering.md) and
+[screen_space_lod_selection.md](../algorithms/screen_space_lod_selection.md)), with footprints
+`[286, 668, 1909, 6682, 19092, 66822, 222739] m` and SSE-derived spacing. The two descriptions
+now disagree about what a tile at level `ℓ` covers and how levels relate spatially. For
+ground-contact queries only the finest tile at a point matters, so once OQ-T-1 is resolved the
+disagreement does not by itself corrupt elevation; but the doc's LOD section, cell-size table,
+and slant-range rule describe a superseded design, and the sensor-facing queries (`querySphere`,
+`queryLocalAABB`, `selectLodBySlantRange`) still assume the nested model. No sensor model that
+consumes these queries exists yet.
+
+**Alternatives.**
+
+1. **Adopt the SSE per-LOD footprint model as the single terrain LOD authority.** Rewrite
+   §LOD System and §Geographic Cell Size against the `lod_policy` footprints and bands; retire
+   the fixed target-spacing tables and the slant-range rule, re-expressing sensor LOD selection
+   in terms of the SSE bands.
+   - *Benefits:* one coherent LOD model across build, physics, and viewer; deletes the obsolete
+     tables that already caused a stale-constant defect.
+   - *Drawbacks:* the sensor query methods' LOD semantics must be reworked; a screen-space
+     tolerance is a rendering concept and may be a poor basis for a *physical* sensor query.
+   - *Prerequisites:* decide whether sensor LOD selection uses the SSE bands or its own
+     physical (metres-of-surface-deviation) tolerance — a follow-up already flagged in
+     §Slant-Range Selection Rule.
+
+2. **Keep two explicit LOD notions with a defined boundary.** Document that the tiling/footprint
+   model is SSE-based (build + physics index + viewer) while sensor-query LOD selection retains
+   a physical slant-range basis, and specify the mapping between "footprint level" and
+   "sensor LOD level".
+   - *Benefits:* preserves a physically-motivated sensor LOD basis independent of screen
+     resolution; smaller documentation change.
+   - *Drawbacks:* two coexisting meanings of "LOD `ℓ`"; ongoing risk of the confusion that
+     produced OQ-T-1.
+   - *Prerequisites:* define the physical tolerance for sensor LOD (the open follow-up in
+     §Slant-Range Selection Rule).
+
+3. **Defer.** Leave the LOD section as-is behind the superseded-model banner until a sensor
+   model that needs LOD selection actually exists.
+   - *Benefits:* no effort now; avoids designing sensor LOD before there is a consumer to
+     constrain it.
+   - *Drawbacks:* the document keeps describing a superseded model; higher chance of another
+     stale-constant defect against the obsolete tables.
+   - *Prerequisites:* none.
+
+**Recommendation.**
+Alternative 1, sequenced after OQ-T-1 and after a sensor consumer exists to pin down the physical
+tolerance. A final choice depends on information that does not yet exist — the sensor-side
+metres-of-deviation tolerance — so it should wait for the first sensor model that needs LOD
+selection. Until then the affected sections carry the superseded-model banner (added in this
+update) so that no new code is written against the obsolete slant-range tables.
