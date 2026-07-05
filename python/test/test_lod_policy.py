@@ -48,6 +48,25 @@ def test_footprints_are_per_lod_and_increasing() -> None:
     assert f[4] > 10000.0
 
 
+def test_texture_resolution_is_sse_bounded_and_small_for_coarse_lods() -> None:
+    from lod_policy import lod_texture_max_px
+
+    tex = lod_texture_max_px()
+    assert len(tex) == 7
+    # L0 renders to zero range → near-field cap (source-native, capped).
+    assert tex[0] == 2048
+    # Coarse LODs are ~200 px, far below the superseded 4096-8192 px ceilings.
+    for lod in range(1, 7):
+        assert 64 <= tex[lod] <= 400, f"L{lod} texture {tex[lod]} px out of expected ~200 px range"
+    # A texel projects to ~1 px at the LOD's near edge: side ≈ footprint / (R_near/540) at the ref.
+    from lod_policy import lod_band_edges_m, lod_footprints_m
+    edges = lod_band_edges_m()
+    f = lod_footprints_m()
+    for lod in range(1, 7):
+        expected = f[lod] / (edges[lod] / 540.0)  # tau_tex=1, H=1080, tan45=1 → texel = R/540
+        assert abs(tex[lod] - expected) <= 2.0
+
+
 def test_policy_dict_roundtrips_and_reproduces_thresholds() -> None:
     from lod_policy import adequacy_range_m, lod_policy_dict
 

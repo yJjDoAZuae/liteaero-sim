@@ -134,3 +134,44 @@ def test_out_of_bounds_points_clip_to_edge(tmp_path: Path) -> None:
 
     far = sampler.sample(np.array([lon_max + 5.0]), np.array([lat_min - 5.0]))
     assert np.isfinite(far).all()
+
+
+def test_windowed_sampler_matches_rasterio_multiband(tmp_path: Path) -> None:
+    """WindowedRasterSampler must match rasterio.sample for a small (undecimated) query window."""
+    import rasterio
+    from raster_sample import WindowedRasterSampler
+
+    img = tmp_path / "img.tif"
+    lon_min, lat_min, lon_max, lat_max = _write_multiband(img, n=40, bands=4)
+
+    # A spatially clustered query (small window, no decimation) → exact match.
+    rng = np.random.default_rng(3)
+    span = 0.2 * (lon_max - lon_min)
+    lons = rng.uniform(lon_min, lon_min + span, 150)
+    lats = rng.uniform(lat_min, lat_min + span, 150)
+
+    sampler = WindowedRasterSampler(img, multiband=True)
+    got = sampler.sample(lons, lats)  # (B, N)
+    assert got.shape == (4, 150)
+
+    with rasterio.open(img) as src:
+        ref = np.array(list(src.sample(list(zip(lons.tolist(), lats.tolist()))))).T
+    np.testing.assert_array_equal(got, ref)
+    sampler.close()
+
+
+def test_windowed_sampler_bounds_memory_on_full_span(tmp_path: Path) -> None:
+    """A query spanning the whole raster is decimation-capped (no crash, sane values)."""
+    from raster_sample import WindowedRasterSampler
+
+    img = tmp_path / "img.tif"
+    lon_min, lat_min, lon_max, lat_max = _write_multiband(img, n=64, bands=4)
+    sampler = WindowedRasterSampler(img, multiband=True)
+
+    # Corners of the raster → window = whole raster (would decimate if larger than the cap).
+    lons = np.array([lon_min, lon_max, lon_min, lon_max])
+    lats = np.array([lat_min, lat_min, lat_max, lat_max])
+    got = sampler.sample(lons, lats)
+    assert got.shape == (4, 4)
+    assert np.isfinite(got).all()
+    sampler.close()

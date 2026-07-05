@@ -35,6 +35,8 @@ reproduces their results without re-deriving them:
 | UC-LR-2 | Choose each LOD's tile footprint | Purity bound $h_\ell \le \tfrac12\gamma(R_{\ell+1}-R_\ell)$ |
 | UC-LR-3 | Blend adjacent LODs without popping | Hysteresis dead-band $\delta$ → crossfade width $B_\ell = 2\delta R_\ell$ |
 | UC-LR-4 | Keep behavior correct as the region grows | Per-LOD footprints bound the tile count (scales to large operating areas) |
+| UC-LR-5 | Choose each LOD's texture resolution | Texel screen-space budget $n^\text{tex}_\ell = f_\ell / (\tau_\text{tex}\,2R_\ell\tan(\phi/2)/H)$ (§4) |
+| UC-LR-6 | Render the far LODs at all | Camera far clip $\ge$ dataset extent, not a fixed constant (§5) |
 
 Class hierarchy, interface, and serialization sections of the canonical design format are **not
 applicable**: this is a parameter-and-policy document realized in existing components (the Python
@@ -62,6 +64,7 @@ not placeholders.
 | $\phi$ | Vertical field of view | $90^\circ$ (from the viewer camera) | $\tan(\phi/2)=1$; runtime bands track the live FOV (OQ-LR-1 Alt 2) |
 | $\gamma$ | Tile-size purity fraction (impure share of a band) | $0.25$ | OQ-LR-2 Alt 1; fraction of each LOD band allowed single-LOD-impure |
 | $\delta$ | Hysteresis half-width (fractional range dead-band) | $0.15$ | Inherited anti-flicker value; crossfade width $B_\ell = 2\delta R_\ell$ |
+| `near_field_cap` | Max texture side for the near-field LOD (L0), and per-tile ceiling | $2048$ px | §4; L0 texel budget diverges at zero range, so it falls back to source-native, capped here |
 
 The **per-LOD geometric error** $\varepsilon_\ell$ is the maximum vertical deviation of LOD
 $\ell$'s mesh from the true surface, taken from the simplification error schedule
@@ -160,6 +163,47 @@ per-LOD tiling is committed. Should it prove impossible to make the per-LOD cros
 achievable $\gamma,\delta$, that is a design escalation back to OQ-LS-22 (the uniform shared-grid
 scheme has zero alignment offset and would be reconsidered there) — not a silent fallback.
 
+### §4 Per-LOD texture resolution (UC-LR-5)
+
+The same screen-space-error principle that sizes the mesh sizes the **texture**: a texel need only
+project to $\tau_\text{tex}$ pixels at the *closest* range a LOD renders — its lower band edge
+$R_\ell$ (beyond that the tile is farther and texels project sub-pixel, handled by mipmapping). The
+texel ground size and the texture side (pixels) are
+
+$$
+t_\ell = \tau_\text{tex}\,\frac{2\,R_\ell\,\tan(\phi/2)}{H_\text{ref}}, \qquad
+n^\text{tex}_\ell = \Bigl\lceil \frac{f_\ell}{t_\ell} \Bigr\rceil .
+$$
+
+Because $f_\ell$ and $R_\ell$ both grow geometrically, $n^\text{tex}_\ell$ is **roughly constant
+across LODs** — about $200$ px per tile at the reference parameters. This is the key VRAM control:
+one texel per screen pixel at the near edge, self-similar per LOD. The finest LOD (L0) renders down
+to zero range, where the budget diverges, so it uses the imagery-native resolution capped at
+`near_field_cap` (2048 px).
+
+A fixed per-LOD ceiling (the superseded `_LOD_MAX_PIXEL_DIM`, 2048–8192 px) is ~20× too large for
+the coarse LODs under the per-LOD footprints: an L3 tile viewed from 16 km needs ~17 m/px (~400 px)
+but was rendered at 8192 px (~0.8 m/px), so 16 resident L3 tiles alone were ≈ 3 GB of VRAM. The SSE
+texel budget replaces it, shrinking coarse-LOD textures by ~$400\times$ in area.
+
+### §5 Render distance (far clip) vs. the LOD bands (UC-LR-6)
+
+The visibility bands only take effect within the camera's far-clip distance. With per-LOD SSE
+thresholds the coarse LODs live far out ($R_3 \approx 16$ km, $R_4 \approx 54$ km, …), so a fixed
+small far clip silently clips them — and any terrain — beyond it. The far clip must therefore reach
+the maximum observer-to-terrain distance for **any** camera pose in the region, which is the full
+bounding-box **diagonal** (camera at one corner, terrain at the opposite corner — not the
+center-to-edge distance): $\text{far} \ge \lVert(\Delta x,\Delta y)\rVert \cdot m$, where
+$(\Delta x,\Delta y)$ is the region's full metric extent and $m>1$ a margin covering aircraft
+altitude ($\text{slant}=\sqrt{\text{diag}^2+\text{alt}^2}$). For a square region of half-side
+$r_\text{region}$ the diagonal is $2\sqrt2\,r_\text{region}$, not $2 r_\text{region}$. Read from the
+descriptor's `bounds`, not a fixed constant. A corollary of the SSE thresholds is that **LODs whose near edge $R_\ell$ exceeds
+the region diameter never render** — for a 12 km-radius UAS dataset (max terrain range ~24 km) only
+L0–L3 are ever drawn, and L4–L6 are built but unused; a future refinement may skip building LODs
+beyond the region extent. For the several-hundred-km fast-jet coverage the far clip and the used-LOD
+range both extend accordingly (and a large far clip will need reversed-Z / log-depth for precision —
+a separate concern).
+
 ---
 
 ## Integration Contract
@@ -172,18 +216,19 @@ scheme has zero alignment offset and would be reconsidered there) — not a sile
   descriptor records the parameters ($\varepsilon_\ell$, $H_\text{ref}$, $\tau$, $\phi_\text{ref}$,
   $\gamma$, $\delta$) so the viewer can recompute bands. The current build uses a single uniform
   footprint and the convention thresholds — updating it is IP-LV-5/9.
+  Per-LOD **texture resolution** is baked at $n^\text{tex}_\ell$ (§4), not a fixed ceiling.
 - **Viewer** (`TerrainLoader.gd`, Godot). Per OQ-LR-1 Alternative 2, **recomputes** each LOD's
   visibility band each frame (or on viewport/FOV change) from the *live* viewport height $H$ and
   FOV $\phi$: $R_\ell = \varepsilon_\ell H/(2\tau\tan(\phi/2))$, then sets the node band to
   $[\,R_\ell(1-\delta)-h_\ell,\ R_{\ell+1}(1+\delta)+h_\ell\,]$ (padded by the tile radius per
   [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md)) with a crossfade over
   $B_\ell = 2\delta R_\ell$; the streaming radii `R_fetch`/`R_unload`
-  ([live_sim_view.md OQ-LS-21](live_sim_view.md)) derive from the same live $R_\ell$. The baked
-  footprints stay fixed at $H_\text{ref}$. The current viewer sets frozen bands from the
-  convention table — updating it is IP-LV-10.
+  ([live_sim_view.md OQ-LS-21](live_sim_view.md)) derive from the same live $R_\ell$. It also sets
+  the camera **far clip from the dataset extent** (§5), not a fixed constant. The baked footprints
+  and textures stay fixed at $H_\text{ref}$.
 - **Parameter provenance.** $\varepsilon_\ell$ is owned by the simplification schedule
   ([terrain.md](terrain.md)); $\phi$ by the viewer camera; $H_\text{ref}$, $\tau$, $\tau_\text{tex}$,
-  $\gamma$, $\delta$ by this document.
+  $\gamma$, $\delta$, `near_field_cap` by this document.
 
 ---
 

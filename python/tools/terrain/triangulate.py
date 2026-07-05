@@ -1,7 +1,11 @@
-"""triangulate.py — Build an L0 TIN from a DEM raster using Delaunay triangulation.
+"""triangulate.py — Build a terrain TIN from a DEM raster.
 
-Boundary points shared with adjacent tiles are injected before triangulation to
-guarantee crack-free joins between tile edges.
+Every tile is a regular lat/lon grid, whose triangulation is a fixed index pattern (each cell
+splits into two upward-facing triangles) computed analytically in pure numpy — no general
+triangulator, and critically no ``scipy``/OpenBLAS import in the build's parallel workers (that
+import's per-thread buffers were a memory-scaling hazard).  Only the optional ``boundary_points``
+path (crack-free stitching of an irregular point set) needs a general Delaunay, which is imported
+lazily there.
 """
 
 from __future__ import annotations
@@ -9,11 +13,29 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from scipy.spatial import Delaunay
 
 from geodesy import enu_from_geodetic
 from las_terrain import TerrainTileData
 from raster_sample import RasterSampler
+
+
+def _grid_triangulation(nx: int, ny: int) -> np.ndarray:
+    """Triangle indices for a regular ``nx``×``ny`` grid in row-major point order.
+
+    Point index is ``lat_row * nx + lon_col`` (matching ``np.meshgrid(lons, lats).ravel()``).
+    Each of the ``(nx-1)·(ny-1)`` cells splits into two triangles wound counter-clockwise in the
+    east-north plane, so their normals face up.  Returns a ``(2·(nx-1)·(ny-1), 3)`` uint32 array.
+    """
+    i = np.arange(ny - 1)
+    j = np.arange(nx - 1)
+    ii, jj = np.meshgrid(i, j, indexing="ij")
+    a = (ii * nx + jj).ravel()          # (i,   j)
+    b = (ii * nx + jj + 1).ravel()      # (i,   j+1)  — east of a
+    c = ((ii + 1) * nx + jj).ravel()    # (i+1, j)    — north of a
+    d = ((ii + 1) * nx + jj + 1).ravel()  # (i+1, j+1)
+    tri1 = np.stack([a, b, c], axis=1)
+    tri2 = np.stack([b, d, c], axis=1)
+    return np.concatenate([tri1, tri2], axis=0).astype(np.uint32)
 
 # Approximate grid sampling interval in degrees for each LOD level.
 # LOD 0 ≈ 10 m vertex spacing; LOD 6 ≈ 10 km vertex spacing.
@@ -46,18 +68,17 @@ def triangulate(
     1. Sample DEM at a regular grid with spacing ``spacing_deg`` (or, if None, the
        LOD's native ``lod_grid_spacing_deg(lod)``).  A coarser-than-native spacing is
        clamped by the caller so a small fixed-footprint cell still yields a valid mesh.
-    2. Inject boundary_points (if provided) without modification.
-    3. Run scipy.spatial.Delaunay on the (lon, lat) 2D projection.
-    4. Convert all points to ENU float32 offsets from the tile centroid.
-    5. Assign default grey color {128, 128, 128} to all facets.
-    6. Return TerrainTileData.
+    2. Triangulate: for a regular grid, the analytic two-triangles-per-cell pattern
+       (:func:`_grid_triangulation`); when ``boundary_points`` are injected (irregular set),
+       a lazily-imported ``scipy.spatial.Delaunay``.
+    3. Convert all points to ENU float32 offsets from the tile centroid.
+    4. Assign default grey color {128, 128, 128} to all facets; return TerrainTileData.
 
-    ``dem`` is a :class:`RasterSampler` (read once, reused across all cells) so that
-    the per-cell cost is the Delaunay triangulation, not per-point raster I/O.
+    ``dem`` is a :class:`RasterSampler` sampled by vectorized fancy-index, so the per-cell cost
+    is negligible.
 
     Raises:
-        ValueError: if the DEM does not cover bbox_deg.
-        ValueError: if the triangulation produces fewer than 2 facets.
+        ValueError: if the DEM does not cover bbox_deg or the grid is smaller than 2×2.
     """
     lon_min, lat_min, lon_max, lat_max = bbox_deg
     spacing = spacing_deg if spacing_deg is not None else lod_grid_spacing_deg(lod)
@@ -78,6 +99,7 @@ def triangulate(
             f"need at least 2 points per axis"
         )
 
+    nx, ny = len(lons), len(lats)
     lon_grid, lat_grid = np.meshgrid(lons, lats)
     lon_flat = lon_grid.ravel().astype(np.float64)
     lat_flat = lat_grid.ravel().astype(np.float64)
@@ -86,25 +108,25 @@ def triangulate(
     if dem.nodata is not None:
         heights_flat[heights_flat == dem.nodata] = 0.0
 
-    # Inject boundary points.
     if boundary_points is not None and len(boundary_points) > 0:
+        # Irregular point set (grid + injected boundary verts) → general Delaunay.  Imported
+        # lazily so the regular-grid build path never pulls in scipy/OpenBLAS.
+        from scipy.spatial import Delaunay
+
         bp_heights = dem.sample(boundary_points[:, 0], boundary_points[:, 1]).astype(np.float64)
         if dem.nodata is not None:
             bp_heights[bp_heights == dem.nodata] = 0.0
         lon_flat = np.concatenate([lon_flat, boundary_points[:, 0]])
         lat_flat = np.concatenate([lat_flat, boundary_points[:, 1]])
         heights_flat = np.concatenate([heights_flat, bp_heights])
+        indices = Delaunay(np.column_stack([lon_flat, lat_flat])).simplices.astype(np.uint32)
+    else:
+        # Regular grid → analytic two-triangles-per-cell pattern (no triangulator).
+        indices = _grid_triangulation(nx, ny)
 
-    if len(lon_flat) < 3:
-        raise ValueError("Triangulation requires at least 3 points")
-
-    # Delaunay triangulation on (lon, lat) 2D projection.
-    points_2d = np.column_stack([lon_flat, lat_flat])
-    tri = Delaunay(points_2d)
-
-    if len(tri.simplices) < 2:
+    if len(indices) < 2:
         raise ValueError(
-            f"Triangulation produced {len(tri.simplices)} facet(s); need at least 2"
+            f"Triangulation produced {len(indices)} facet(s); need at least 2"
         )
 
     # Tile centroid = geographic center of bbox.
@@ -119,7 +141,6 @@ def triangulate(
     lon_rad = np.radians(lon_flat)
     vertices = enu_from_geodetic(lat_rad, lon_rad, heights_flat, clat, clon, centroid_height)
 
-    indices = tri.simplices.astype(np.uint32)
     colors = np.full((len(indices), 3), 128, dtype=np.uint8)
 
     return TerrainTileData(

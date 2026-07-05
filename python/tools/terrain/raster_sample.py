@@ -9,9 +9,16 @@ per-point I/O thousands of times — the dominant cost of the terrain build.
 lon/lat points by flooring to the pixel that contains each point (the same cell
 ``DatasetReader.sample()`` selects).  Sampling is a single vectorized fancy-index,
 so the per-cell cost drops from hundreds of milliseconds to well under a millisecond.
+It is bit-identical to ``DatasetReader.sample()`` for points inside the raster; points
+outside clamp to the nearest edge pixel.  Reading the whole raster is ideal for a small
+raster (a DEM), but for a large one (multi-gigabyte NAIP imagery) it holds the entire
+array in memory — and with one copy per parallel worker that exhausts RAM.
 
-The result is bit-identical to ``DatasetReader.sample()`` for points inside the
-raster; points outside clamp to the nearest edge pixel.
+``WindowedRasterSampler`` addresses that: it keeps the dataset handle open and, per
+``sample()`` call, reads only the bounding **window** of the query points (with a
+decimation cap so a query spanning the whole raster still reads a bounded block).  Memory
+is bounded by the window, not the raster, so it scales to large imagery and many workers.
+Use ``RasterSampler`` for the DEM and ``WindowedRasterSampler`` for imagery.
 """
 
 from __future__ import annotations
@@ -21,6 +28,11 @@ from pathlib import Path
 
 import numpy as np
 from affine import Affine
+
+# When a query window exceeds this many pixels per axis, the windowed read is decimated to
+# this cap (rasterio ``out_shape``) so a region-spanning coarse tile reads a bounded block
+# rather than the whole raster.  2048 px keeps the read ≤ ~16 MB at 4 bands.
+_WINDOW_DECIMATE_CAP: int = 2048
 
 
 @dataclass(frozen=True)
@@ -85,3 +97,84 @@ class RasterSampler:
             and lon_max <= right + eps
             and lat_max <= top + eps
         )
+
+
+class WindowedRasterSampler:
+    """Samples a raster by reading only the window covering each query, holding the dataset open.
+
+    Unlike :class:`RasterSampler`, the whole raster is never loaded into memory — each
+    ``sample()`` reads the bounding pixel window of its query points (decimated to
+    ``_WINDOW_DECIMATE_CAP`` per axis when the window is larger), so memory is bounded by the
+    window rather than the raster.  This scales to multi-gigabyte imagery and many parallel
+    workers, at the cost of a small per-call windowed read.  The ``sample`` / ``bounds`` /
+    ``nodata`` interface matches :class:`RasterSampler` so it is a drop-in for colorization.
+
+    Holds an open ``rasterio`` dataset handle; construct one per process (it is not picklable).
+    """
+
+    def __init__(self, path: Path, *, multiband: bool = False) -> None:
+        import rasterio
+
+        self._src = rasterio.open(path)
+        self._multiband = multiband
+        self._inverse_transform: Affine = ~self._src.transform
+        self.width: int = self._src.width
+        self.height: int = self._src.height
+        self.nodata: float | None = self._src.nodata
+        b = self._src.bounds
+        self.bounds: tuple[float, float, float, float] = (b.left, b.bottom, b.right, b.top)
+
+    def sample(self, lon_deg: np.ndarray, lat_deg: np.ndarray) -> np.ndarray:
+        """Sample by reading only the bounding window of the query points.
+
+        Returns ``(N,)`` for a single-band raster or ``(bands, N)`` for multiband — matching
+        :meth:`RasterSampler.sample`.  Points outside the raster clamp to the nearest edge pixel.
+        """
+        from rasterio.windows import Window
+
+        lon = np.asarray(lon_deg, dtype=np.float64)
+        lat = np.asarray(lat_deg, dtype=np.float64)
+        cols, rows = self._inverse_transform * (lon, lat)
+        col_idx = np.clip(np.floor(cols).astype(np.intp), 0, self.width - 1)
+        row_idx = np.clip(np.floor(rows).astype(np.intp), 0, self.height - 1)
+
+        c0 = int(col_idx.min())
+        r0 = int(row_idx.min())
+        win_w = int(col_idx.max()) - c0 + 1
+        win_h = int(row_idx.max()) - r0 + 1
+        window = Window(c0, r0, win_w, win_h)
+
+        # Cap the read size: decimate a large window to at most the cap per axis.
+        out_w = min(win_w, _WINDOW_DECIMATE_CAP)
+        out_h = min(win_h, _WINDOW_DECIMATE_CAP)
+        local_c = col_idx - c0
+        local_r = row_idx - r0
+        if out_w != win_w or out_h != win_h:
+            # Read the window decimated to (out_h, out_w); remap query indices to the smaller grid.
+            local_c = np.clip((local_c * out_w) // win_w, 0, out_w - 1)
+            local_r = np.clip((local_r * out_h) // win_h, 0, out_h - 1)
+            out_shape_2d = (out_h, out_w)
+        else:
+            out_shape_2d = (win_h, win_w)
+
+        if self._multiband:
+            n_bands = self._src.count
+            block = self._src.read(window=window, out_shape=(n_bands, *out_shape_2d))
+            return block[:, local_r, local_c]
+        block = self._src.read(1, window=window, out_shape=out_shape_2d)
+        return block[local_r, local_c]
+
+    def covers(self, bbox_deg: tuple[float, float, float, float], eps: float = 1e-8) -> bool:
+        """Return True if ``bbox_deg`` (lon_min, lat_min, lon_max, lat_max) is within bounds."""
+        lon_min, lat_min, lon_max, lat_max = bbox_deg
+        left, bottom, right, top = self.bounds
+        return (
+            lon_min >= left - eps
+            and lat_min >= bottom - eps
+            and lon_max <= right + eps
+            and lat_max <= top + eps
+        )
+
+    def close(self) -> None:
+        """Close the underlying dataset handle."""
+        self._src.close()

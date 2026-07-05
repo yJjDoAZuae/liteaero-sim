@@ -80,6 +80,59 @@ VRAM).
 
 ## Notes
 
+- **Windowed imagery reads (build memory fix).** The first per-LOD re-tile OOM'd: IP-LV-4's
+  `RasterSampler` reads the whole raster into memory, and with a ~0.5 GB NAIP tile held per parallel
+  worker (`--workers 12`), the 34 GB machine hit Windows' commit limit ("paging file too small") during
+  worker startup. Fix: a new [`WindowedRasterSampler`](../../python/tools/terrain/raster_sample.py) keeps
+  the imagery dataset open and reads only each tile's bounding window (decimation-capped for
+  region-spanning coarse tiles), so imagery memory is bounded by the window, not the raster × workers.
+  The DEM stays whole-read (small). Wired into `build_terrain` (serial + `ProcessPoolExecutor`); tested in
+  `test_raster_sample.py` (bit-exact to `rasterio.sample` for undecimated windows) and validated on the
+  real 0.5 GB NAIP tile (open 0.002 s, no full read). Design decision recorded in
+  [terrain_build.md §Design Decisions](../design/terrain_build.md).
+- **LOD budget audit (three fixes).** A texture-clamp warning during the first re-tile prompted an audit
+  of per-LOD budgets stale relative to the SSE per-LOD design: (1) **texture resolution** — `_LOD_MAX_PIXEL_DIM`
+  (fixed 2048–8192 px) was ~20× too large for coarse LODs (an L3 tile viewed from 16 km rendered at 8192 px;
+  16 resident L3 tiles ≈ 3 GB VRAM). Replaced by [`lod_policy.lod_texture_max_px`](../../python/tools/terrain/lod_policy.py)
+  (SSE texel budget → ~200 px/tile; coarse resident textures 4.7 GB → 4.2 MB). (2) **Camera far clip** —
+  fixed at 20 km, but the SSE bands put L3 at 16–54 km etc., so terrain and the whole coarse backdrop past
+  20 km were clipped; `TerrainLoader.gd` now sets the far clip from the descriptor's dataset extent
+  (region diagonal × 1.5). (3) **Dead constants** — build_terrain's `_VIS_BEGIN_M`/`_VIS_END_M` (the old
+  convention bands, superseded by the runtime SSE bands) removed. Documented in
+  [terrain_lod_rendering.md §4/§5](../design/terrain_lod_rendering.md) (+ UC-LR-5/6) and terrain_build.md.
+- **Analytic grid triangulation + parallel render (build speed & robustness).** Two follow-ups after the
+  re-tile ran: (1) the per-tile texture-render loop was still **serial** — it historically processed only
+  the ~13 nested display tiles, but IP-LV-5 made it process all 8,543, turning it into the wall-clock long
+  pole. Parallelized over the same `ProcessPoolExecutor` (`render_mosaic` reads only each tile's window and
+  imports no scipy, so it parallelizes cleanly). (2) The tiles are regular grids, so
+  [`triangulate`](../../python/tools/terrain/triangulate.py) now emits the two-triangles-per-cell pattern
+  **analytically** (`_grid_triangulation`, pure numpy, consistent up-winding) instead of `scipy.Delaunay`
+  — validated that scipy is no longer imported on the build path (only lazily on the unused `boundary_points`
+  path). That removes scipy/OpenBLAS from the workers **at the root**, so the thread-cap below is now only a
+  minor safety margin (numpy still bundles OpenBLAS). Both loops emit count/rate/ETA progress. Recorded in
+  [terrain_build.md §Design Decisions](../design/terrain_build.md) and the OQ-TB-4 note.
+- **BLAS thread cap (second build memory fix).** After windowing the imagery, the re-tile still OOM'd —
+  but at *scipy import* in the workers (`DLL load failed … paging file is too small`), before any imagery
+  is touched. Cause: scipy/numpy's bundled OpenBLAS reserves per-thread scratch buffers sized to the CPU
+  count, so 12 worker processes each importing it blew the Windows commit limit. Fix: `build_terrain`
+  sets `OPENBLAS_NUM_THREADS`/`OMP_NUM_THREADS`/`MKL_NUM_THREADS`/`NUMEXPR_NUM_THREADS` = 1 at module top
+  (before scipy loads, inherited by each spawned worker) — the triangulation is single-threaded and
+  parallelised at the process level, so no speed loss. With both fixes the re-tile is memory-safe at full
+  parallelism.
+- **Crossfade margins (IP-LV-10 fix).** `_apply_visibility_ranges` now sets
+  `visibility_range_begin_margin` / `visibility_range_end_margin` to the hysteresis-overlap width
+  `2·δ·edge`, not just `fade_mode = FADE_SELF`. Without the margins the fade distance is zero (a hard
+  cut), so the band overlap would render two opaque LOD surfaces at once — stacking. The exact Godot
+  margin semantics (fade direction/extent) still need in-engine confirmation at IP-LV-6.
+- **Transition-alignment gate (analytical, pre-re-tile).** With the adopted $\gamma=0.25$, $\delta=0.15$
+  and the SSE band edges, the per-LOD crossfade-alignment ratio is **marginal**: under the
+  coarser-tile-dominates approximation $h_{\ell+1}/B_{\ell+1} \approx 0.83$–$0.97$ (passes), but under
+  the full worst-case offset $(h_\ell+h_{\ell+1})/B_{\ell+1} \approx 1.1$–$1.4$ (exceeds) at every
+  transition. So per-LOD crossfades may seam under worst-case grazing geometry — exactly the risk
+  [lod_culling_geometry.md](../algorithms/lod_culling_geometry.md) flagged. **Mitigation knobs** if IP-LV-6
+  shows seams: raise $\delta$ (wider crossfade $B=2\delta R$) or lower $\gamma$ (smaller tiles → smaller
+  offset); both are `lod_policy.py` constants, no structural change. If neither suffices, escalate to
+  OQ-LS-22.
 - **IP-LV-1 implementation (done).** The per-tile rotation is emitted in
   [`export_gltf.py`](../../python/tools/terrain/export_gltf.py): `R = R_originᵀ·R_centroid` conjugated
   by the ENU→glTF axis permutation `P` (`R_gltf = P·R·Pᵀ`) and written as a node quaternion.

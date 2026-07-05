@@ -13,19 +13,31 @@ import logging
 import math
 import os
 import shutil
+import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+
+# scipy/numpy's bundled BLAS/LAPACK (OpenBLAS) reserves large per-thread scratch buffers on import,
+# sized to the CPU count.  With one worker process per core each importing scipy, the *committed*
+# virtual memory can exceed the Windows page-file commit limit ("paging file too small") before any
+# work starts.  The per-cell triangulation is single-threaded and parallelised at the process level,
+# so cap the native math thread pools to 1 — this slashes per-worker commit with no speed loss.
+# Must run before scipy is first imported (below and in each spawned worker's re-import of this module).
+for _blas_threads_var in (
+    "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(_blas_threads_var, "1")
 
 import _bootstrap  # noqa: F401  # inserts tools/ on sys.path; must precede shared imports
 from colorize import colorize
 from download import DownloadError, default_cache_dir, download_dem, download_imagery
 from geoid_correct import apply_geoid_correction
 from las_terrain import TerrainTileData, write_las_terrain
-from lod_policy import lod_footprints_m, lod_policy_dict
+from lod_policy import lod_footprints_m, lod_policy_dict, lod_texture_max_px
 from mosaic import mosaic_dem, mosaic_imagery
 from mosaic_render import render_mosaic
-from raster_sample import RasterSampler
+from raster_sample import RasterSampler, WindowedRasterSampler
 from terrain_chunks import export_chunked_terrain
 from terrain_paths import (
     derived_dir, las_terrain_dir, metadata_path, source_dir,
@@ -46,6 +58,21 @@ _DEM_SOURCE_GEOID: dict[str, str] = {
 
 _log = logging.getLogger("build_terrain")
 
+
+def _log_progress(
+    dataset_name: str, label: str, done: int, total: int, t_start: float, every: int = 250
+) -> None:
+    """Log an INFO progress line every ``every`` items (and at completion) with rate + ETA."""
+    if done % every != 0 and done != total:
+        return
+    elapsed = time.perf_counter() - t_start
+    rate = done / elapsed if elapsed > 0 else 0.0
+    eta = (total - done) / rate if rate > 0 else 0.0
+    _log.info(
+        "%s: %s %d/%d (%.0f%%)  %.1f/s  elapsed %.0fs  ETA %.0fs",
+        dataset_name, label, done, total, 100.0 * done / max(total, 1), rate, elapsed, eta,
+    )
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -54,19 +81,11 @@ _log = logging.getLogger("build_terrain")
 _L0_RESOLUTION_DEG: float = 0.000090  # native Copernicus GLO-30 resolution
 _MAX_CHUNK_SIDE_DEG: float = 2500 * _L0_RESOLUTION_DEG  # = 0.225 deg ≈ 25 km
 
-# Per-LOD GPU texture ceiling (pixels per axis).
-# L0 tiles are ~1 km wide; at NAIP 0.6 m/pixel the native count is ~1667 px, which fits
-# in 2048 with no clamping.  Coarser LODs cover larger footprints — caps are chosen so
-# that the effective ground resolution degrades gracefully as the viewer moves farther away.
-_LOD_MAX_PIXEL_DIM: list[int] = [
-    2048,   # L0  ~1 km  → NAIP native ~1667 px, fits without clamping
-    4096,   # L1  ~3 km  → NAIP native ~5000 px → 4096 cap (~0.73 m/px)
-    8192,   # L2  ~10 km → NAIP native ~16 k px → 8192 cap (~1.2 m/px)
-    8192,   # L3  ~30 km → 8192 cap (~3.7 m/px); Sentinel-2 at 10 m is adequate here
-    4096,   # L4  ~100 km → Sentinel-2 native ~10 k px → 4096 cap
-    4096,   # L5  same as L4
-    4096,   # L6  same as L4
-]
+# Per-LOD texture resolution comes from the screen-space-error texel budget
+# (lod_policy.lod_texture_max_px), not a fixed per-LOD ceiling: a texel projects to ~1 px at the
+# LOD's near render range, giving ~200 px per tile (finest LOD source-native, capped).  The old
+# fixed 2048–8192 px ceiling was ~20× too large for the coarse LODs under the per-LOD footprints
+# (VRAM blowout) — see terrain_lod_rendering.md §4.
 
 # Per-LOD footprint tiling (OQ-LS-22 Alt 3 → IP-LV-5).  Each LOD tiles the whole region on its
 # own grid at a screen-space-error-scaled footprint f_l (lod_policy): small tiles for the fine
@@ -84,10 +103,6 @@ _EQUATOR_METERS_PER_DEG_LON: float = 111_320.0
 # becomes a coarse mesh rather than degenerating.
 _MIN_CELL_POINTS: int = 3
 
-# Godot visibility range bounds per LOD (m).  From terrain.md §LOD Hysteresis Band.
-_VIS_BEGIN_M: list[float] = [0.0, 255.0, 765.0, 2_295.0, 6_885.0, 20_655.0, 61_965.0]
-_VIS_END_M: list[float | None] = [345.0, 1_035.0, 3_105.0, 9_315.0, 27_945.0, 83_835.0, None]
-
 # Chunk side, in tile footprints (OQ-LS-20).  The per-LOD tile footprints come from the
 # screen-space-error policy (lod_policy); this only sets how many footprints wide a chunk file is.
 # Tunable via the config ``terrain.chunk_footprints`` or the ``--chunk-footprints`` CLI flag.
@@ -100,19 +115,30 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[3]
 # Per-cell triangulation worker (used by the parallel build path)
 # ---------------------------------------------------------------------------
 
-# Process-local cache of in-memory raster samplers, keyed by (path, multiband).
-# Each ProcessPoolExecutor worker reads the DEM and imagery once, then reuses the
-# in-memory arrays for every cell it processes — so the raster read cost is paid
-# once per worker, not once per cell.
-_SAMPLER_CACHE: dict[tuple[str, bool], RasterSampler] = {}
+# Process-local cache of raster samplers, keyed by (path, multiband, windowed).
+# The DEM is small, so each worker reads it once into memory (RasterSampler).  The imagery
+# can be multi-gigabyte NAIP, so it is sampled with bounded per-tile windowed reads
+# (WindowedRasterSampler) rather than loaded whole — otherwise one full copy per worker
+# exhausts RAM.  Either way the handle/array is created once per worker.
+_SAMPLER_CACHE: dict[tuple[str, bool, bool], RasterSampler | WindowedRasterSampler] = {}
 
 
-def _get_sampler(path: str, multiband: bool) -> RasterSampler:
-    """Return a cached (per-process) RasterSampler for path, reading it once."""
-    key = (path, multiband)
+def _get_sampler(
+    path: str, multiband: bool, windowed: bool
+) -> RasterSampler | WindowedRasterSampler:
+    """Return a cached (per-process) sampler for path.
+
+    ``windowed=False`` reads the whole raster into memory (RasterSampler, for the small DEM);
+    ``windowed=True`` keeps the dataset open and reads bounded windows (WindowedRasterSampler,
+    for large imagery).
+    """
+    key = (path, multiband, windowed)
     sampler = _SAMPLER_CACHE.get(key)
     if sampler is None:
-        sampler = RasterSampler.from_path(Path(path), multiband=multiband)
+        if windowed:
+            sampler = WindowedRasterSampler(Path(path), multiband=multiband)
+        else:
+            sampler = RasterSampler.from_path(Path(path), multiband=multiband)
         _SAMPLER_CACHE[key] = sampler
     return sampler
 
@@ -123,15 +149,27 @@ def _build_cell(
     """Triangulate + colorize + quality-check a single cell (ProcessPool worker).
 
     ``task`` = (dem_path, imagery_path, imagery_source, lod, cell_bbox_deg, spacing_deg).
-    Rasters are sampled from the process-local in-memory cache (see _get_sampler).
+    The DEM is sampled from an in-memory cache; the imagery via bounded windowed reads.
     """
     dem_path, img_path, source, lod, cell_bbox, spacing = task
-    dem = _get_sampler(dem_path, multiband=False)
-    img = _get_sampler(img_path, multiband=True)
+    dem = _get_sampler(dem_path, multiband=False, windowed=False)
+    img = _get_sampler(img_path, multiband=True, windowed=True)
     tile = triangulate(dem, cell_bbox, lod=lod, spacing_deg=spacing)
     tile = colorize(tile, img, source=source)
     check(tile)
     return tile
+
+
+def _render_tile_texture(
+    task: "tuple[tuple[float, float, float, float], list, int]",
+):
+    """Render one tile's mosaic texture (ProcessPool worker).
+
+    ``task`` = (tile_bbox_deg, img_mosaic_paths, max_pixel_dim).  ``render_mosaic`` reads only
+    the tile's imagery window, so memory is bounded and no scipy/BLAS is imported.
+    """
+    tile_bbox_deg, img_mosaic_paths, max_pixel_dim = task
+    return render_mosaic(tile_bbox_deg, img_mosaic_paths, max_pixel_dim=max_pixel_dim)
 
 # Approximate bounding box of the contiguous United States (CONUS).
 # Used to decide whether NAIP imagery is available as a high-resolution source.
@@ -403,15 +441,18 @@ def build_terrain(
         dataset_name, len(cell_tasks), workers,
     )
 
+    n_tiles = len(cell_tasks)
+    t_tri = time.perf_counter()
     if workers == 1:
-        # Serial, in-process: read the DEM and imagery once, reuse for every cell.
+        # Serial, in-process: DEM read once into memory; imagery via bounded windowed reads.
         dem_sampler = RasterSampler.from_path(dem_ellipsoidal_path)
-        img_sampler = RasterSampler.from_path(best_img_path, multiband=True)
-        for lod, cell_bbox, spacing in cell_tasks:
+        img_sampler = WindowedRasterSampler(best_img_path, multiband=True)
+        for i, (lod, cell_bbox, spacing) in enumerate(cell_tasks, 1):
             tile = triangulate(dem_sampler, cell_bbox, lod=lod, spacing_deg=spacing)
             tile = colorize(tile, img_sampler, source=best_img_source)
             check(tile)
             all_tiles.append(tile)
+            _log_progress(dataset_name, "triangulated", i, n_tiles, t_tri)
     else:
         # Parallel: each worker reads the rasters once (process-local cache) and
         # processes a chunk of cells.  Only small (path, lod, bbox, spacing) tuples cross the
@@ -422,7 +463,9 @@ def build_terrain(
         ]
         chunksize = max(1, len(worker_args) // (workers * 8))
         with ProcessPoolExecutor(max_workers=workers) as executor:
-            all_tiles.extend(executor.map(_build_cell, worker_args, chunksize=chunksize))
+            for i, tile in enumerate(executor.map(_build_cell, worker_args, chunksize=chunksize), 1):
+                all_tiles.append(tile)
+                _log_progress(dataset_name, "triangulated", i, n_tiles, t_tri)
 
     # -------------------------------------------------------------------
     # Step 4: Write .las_terrain (all LODs)
@@ -445,36 +488,47 @@ def build_terrain(
     # -------------------------------------------------------------------
     # Step 5b: Render per-tile JPEG mosaic textures
     #
-    # Each display tile gets its own texture covering only its geographic
-    # footprint, at the native resolution of the highest-priority imagery
-    # source capped at the per-LOD GPU texture ceiling (_LOD_MAX_PIXEL_DIM).
-    # This delivers NAIP at or near its native 0.6 m/pixel for close-in
-    # LOD tiles (L0, L1) while staying within VRAM budget on the reference
-    # GPU (GTX 1050 Ti, 4 GB).
+    # Each display tile gets its own texture covering only its geographic footprint, at the
+    # source-native resolution capped at the LOD's screen-space-error texel budget
+    # (lod_texture_max_px): a texel projects to ~1 px at the LOD's near render range, so coarse
+    # LODs get small textures rather than a fixed multi-thousand-px ceiling that would blow the
+    # VRAM budget.  See terrain_lod_rendering.md §4.
     # -------------------------------------------------------------------
+    n_display = len(display_tiles)
+    tex_max_px = lod_texture_max_px()  # per-LOD texture side (px)
     _log.info(
-        "%s: rendering per-tile textures  %d tile(s) ...",
-        dataset_name, len(display_tiles),
+        "%s: rendering per-tile textures  %d tile(s)  (workers=%d, tex px per LOD=%s) ...",
+        dataset_name, n_display, workers, tex_max_px,
     )
+    t_tex = time.perf_counter()
+    render_args = [
+        (
+            (
+                math.degrees(tile.lon_min_rad),
+                math.degrees(tile.lat_min_rad),
+                math.degrees(tile.lon_max_rad),
+                math.degrees(tile.lat_max_rad),
+            ),
+            img_mosaic_paths,
+            tex_max_px[tile.lod],
+        )
+        for tile in display_tiles
+    ]
     tile_mosaics: list[tuple[TerrainTileData, MosaicDescriptor]] = []
-    for tile in display_tiles:
-        tile_bbox_deg = (
-            math.degrees(tile.lon_min_rad),
-            math.degrees(tile.lat_min_rad),
-            math.degrees(tile.lon_max_rad),
-            math.degrees(tile.lat_max_rad),
-        )
-        tile_mosaic = render_mosaic(
-            tile_bbox_deg, img_mosaic_paths,
-            max_pixel_dim=_LOD_MAX_PIXEL_DIM[tile.lod],
-        )
-        _log.debug(
-            "%s: LOD %d tile texture %d×%d px  %.1f kB JPEG",
-            dataset_name, tile.lod,
-            tile_mosaic.width_pixels, tile_mosaic.height_pixels,
-            len(tile_mosaic.jpeg_bytes) / 1024.0,
-        )
-        tile_mosaics.append((tile, tile_mosaic))
+    if workers == 1:
+        for i, args in enumerate(render_args, 1):
+            tile_mosaics.append((display_tiles[i - 1], _render_tile_texture(args)))
+            _log_progress(dataset_name, "textures", i, n_display, t_tex)
+    else:
+        # render_mosaic reads only each tile's imagery window (bounded memory) and imports no
+        # scipy, so it parallelizes cleanly across the same worker pool as the triangulation.
+        chunksize = max(1, n_display // (workers * 8))
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for i, mosaic in enumerate(
+                executor.map(_render_tile_texture, render_args, chunksize=chunksize), 1
+            ):
+                tile_mosaics.append((display_tiles[i - 1], mosaic))
+                _log_progress(dataset_name, "textures", i, n_display, t_tex)
 
     # -------------------------------------------------------------------
     # Step 6: Export streamable chunk files + descriptor (OQ-LS-20 Alt 2)

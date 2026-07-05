@@ -174,9 +174,17 @@ var _lod_edges_m:           Array              = []
 ## Per-LOD visibility begin/end (m) before per-node tile-radius padding; end 0 = infinite (coarsest).
 var _lod_begin_base:        Array              = []
 var _lod_end_base:          Array              = []
+## Per-LOD crossfade margins (m) — the hysteresis-overlap width at each band edge, over which
+## VISIBILITY_RANGE_FADE_SELF fades the tile so adjacent LODs crossfade instead of double-drawing.
+var _lod_begin_margin:      Array              = []
+var _lod_end_margin:        Array              = []
 ## Viewport height / vertical FOV at the last band recompute (recompute only on change).
 var _last_view_h:           float              = -1.0
 var _last_view_fov:         float              = -1.0
+## Minimum camera far-clip (m) to see all terrain in the dataset, from the descriptor bounds.
+## The SSE coarse-LOD bands sit far out (tens–hundreds of km), so a fixed small far clip would
+## silently clip the backdrop; the far clip must reach the dataset extent (terrain_lod_rendering.md §5).
+var _region_far_m:          float              = 0.0
 
 # ---------------------------------------------------------------------------
 
@@ -267,7 +275,8 @@ func _update_camera() -> void:
 	_camera.fov = 90.0
 	_camera.keep_aspect = Camera3D.KEEP_WIDTH
 	_camera.near = camera_near_m
-	_camera.far  = camera_far_m
+	# Reach the whole dataset (SSE coarse-LOD bands sit far out); a larger manual export wins.
+	_camera.far  = maxf(camera_far_m, _region_far_m)
 	var vehicle := _find_vehicle(get_tree().root)
 	if vehicle == null:
 		return
@@ -441,6 +450,15 @@ func _load_chunked_terrain(descriptor_path: String) -> bool:
 	_lod_policy = descriptor.get("lod_policy", {})
 	_recompute_lod_bands()
 
+	# Far clip must reach the whole dataset (terrain_lod_rendering.md §5): the worst-case
+	# observer-to-terrain distance is the region diagonal; add margin for aircraft altitude.
+	var bounds: Array = descriptor.get("bounds_deg", [])
+	if bounds.size() == 4:
+		var origin_lat: float = float(descriptor.get("world_origin_lat_rad", 0.0))
+		var lon_m := deg_to_rad(float(bounds[2]) - float(bounds[0])) * 6378137.0 * cos(origin_lat)
+		var lat_m := deg_to_rad(float(bounds[3]) - float(bounds[1])) * 6378137.0
+		_region_far_m = sqrt(lon_m * lon_m + lat_m * lat_m) * 1.5
+
 	_terrain_root = Node3D.new()
 	_terrain_root.name = "TerrainChunks"
 	add_child(_terrain_root)
@@ -603,15 +621,23 @@ func _recompute_lod_bands() -> void:
 		_lod_edges_m.append(_lod_edges_m[n - 1] * 4.0)
 
 	# Per-LOD δ-adjusted band [edges[l]*(1-δ), edges[l+1]*(1+δ)]; coarsest end = 0 (infinite).
+	# The crossfade margin at each edge is the hysteresis overlap width 2·δ·edge, over which
+	# FADE_SELF fades the tile — so in a band overlap the finer LOD fades out as the coarser fades
+	# in (one opaque LOD per location) instead of both drawing (stacking).
 	_lod_begin_base = []
 	_lod_end_base = []
+	_lod_begin_margin = []
+	_lod_end_margin = []
 	var lod_count := _lod_edges_m.size() - 1
 	for lod in range(lod_count):
 		_lod_begin_base.append(float(_lod_edges_m[lod]) * (1.0 - delta))
+		_lod_begin_margin.append(2.0 * delta * float(_lod_edges_m[lod]))  # 0 for L0 (edge 0)
 		if lod == lod_count - 1:
 			_lod_end_base.append(0.0)  # coarsest LOD renders to the horizon
+			_lod_end_margin.append(0.0)
 		else:
 			_lod_end_base.append(float(_lod_edges_m[lod + 1]) * (1.0 + delta))
+			_lod_end_margin.append(2.0 * delta * float(_lod_edges_m[lod + 1]))
 
 
 ## Recompute the bands and re-apply them to every resident chunk when the viewport height or
@@ -809,10 +835,11 @@ func _apply_visibility_ranges(node: Node) -> void:
 			var end_base: float = _lod_end_base[lod]
 			mi.visibility_range_begin = max(0.0, float(_lod_begin_base[lod]) - radius)
 			mi.visibility_range_end   = (end_base + radius) if end_base > 0.0 else 0.0
-			# Cross-fade self out (not in) at both edges so only one LOD level is
-			# opaque at a time.  Without this, the hysteresis overlap band shows two
-			# terrain meshes simultaneously — the coarser LOD visible as a second
-			# ground layer below the finer one.
+			# Fade over the hysteresis-overlap margins so adjacent LODs crossfade (one opaque LOD
+			# per location) instead of both drawing.  Without margins FADE_SELF is a hard cut and
+			# the overlap band shows two stacked terrain surfaces.
+			mi.visibility_range_begin_margin = float(_lod_begin_margin[lod])
+			mi.visibility_range_end_margin   = float(_lod_end_margin[lod])
 			mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
 
 	for child: Node in node.get_children():
