@@ -16,7 +16,7 @@ Add a fully documented open question to a design document.
 
 1. **Reads the target document** to understand its current open questions (to assign the next ID) and the subsystem context (to write a self-contained description).
 2. **Drafts the open question** following the canonical structure below.
-3. **Inserts the new entry** — both a one-line row in the Open Questions summary table and a full subsection in the Open Questions section.
+3. **Inserts the new entry in numerical order** — both a one-line row in the Open Questions summary table and a full subsection in the Open Questions section. The new entry goes in its numerically-correct position by `<N>` (a new `OQ-XX-7` is placed after `OQ-XX-6` and before `OQ-XX-8`), **never** at the top of the section or table. Both the summary-table rows and the full subsections are always kept in ascending `<N>` order.
 4. **Does not implement anything.** The skill only adds documentation. Implementation begins only when the user explicitly instructs it.
 
 ## Canonical structure for each open question
@@ -64,8 +64,8 @@ State a specific recommended alternative and the reasoning. The recommendation i
 
 When the user provides a design choice and instructs a documentation update to close the open question:
 
-1. Remove the row from the summary table.
-2. Replace the full subsection with a concise **Resolution note** that records:
+1. Remove the row from the summary table (the table lists only currently-open questions).
+2. Replace the full subsection with a concise **Resolution note** **in the subsection's existing numerical position** — do not move it, re-sort it, or relocate it to a separate "resolved" list. The subsection order stays ascending by `<N>` with resolved and open questions interleaved by number. Record:
    - The chosen alternative.
    - The rationale given by the user (or inferred from context if clear).
    - Any constraints or caveats attached to the choice.
@@ -74,6 +74,7 @@ When the user provides a design choice and instructs a documentation update to c
 
 ## Style rules
 
+- **Numerical order is mandatory.** The summary table and the full subsections are always sorted ascending by `<N>`. Insert a new question in its numerical slot, never at the top. Do not maintain separate "open" and "resolved" tables or sections that break the numerical order — there is one summary table (open questions only) in ascending order, and one run of subsections (open + resolved notes, interleaved) in ascending order. If a document's questions are found out of order, re-sort them as part of the edit.
 - The problem description must stand alone — no "as described in §3b" or "as noted above" references for the core problem statement. Cross-references to other sections are permitted for supporting detail only.
 - Use SI units and the project naming conventions (`snake_case` for identifiers, American English spellings).
 - Quantify impacts with numbers where possible. Vague statements like "may cause issues" are not acceptable.

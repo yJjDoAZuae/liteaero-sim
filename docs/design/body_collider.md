@@ -545,254 +545,132 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
+Open questions (ascending by ID). OQ-BC-1 through OQ-BC-10 are resolved; their resolution notes are
+retained in numerical order in the subsections below.
+
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| OQ-BC-12 | **Root cause.** The velocity-slaved attitude model has no angular-momentum state, so an off-center inelastic contact (wingtip / tail / single gear leg) — an angular-momentum exchange — cannot be represented; it is faked by a CM-arresting §5a force and a compliant §5c $\Delta\theta$, which catapult the airframe (a 3.8° touchdown rolls to 177° and launches 7.9 m). Add a rigid-body rotational DOF for contact (Alt A) or approximate it in the velocity-slaved model (Alt B). **Subsumes OQ-BC-10 and OQ-BC-11**; shares its root with OQ-LG-15 | **Blocks** the wingtip-graze gear-landing regression |
 | OQ-BC-11 | *(Subsumed by OQ-BC-12)* Steep/inverted pitch limit cycle — the "lift-into-ground fight." A facet of the missing rotational DOF; the scoped aero-lift suppression is at most a velocity-slaved patch (Alt B territory), not the fix | Deferred to OQ-BC-12 |
+| OQ-BC-12 | **Root cause.** The velocity-slaved attitude model has no angular-momentum state, so an off-center inelastic contact (wingtip / tail / single gear leg) — an angular-momentum exchange — cannot be represented; it is faked by a CM-arresting §5a force and a compliant §5c $\Delta\theta$, which catapult the airframe (a 3.8° touchdown rolls to 177° and launches 7.9 m). Add a rigid-body rotational DOF for contact (Alt A) or approximate it in the velocity-slaved model (Alt B). **Subsumes OQ-BC-10 and OQ-BC-11**; shares its root with OQ-LG-15 | **Blocks** the wingtip-graze gear-landing regression |
 
-OQ-BC-8 and OQ-BC-9 are resolved to Alternative 1. **OQ-BC-10's resolution (IP-BC-13) was shown ineffective** for the reported defect — the driver is the §5a force and the missing rotational DOF, not the §5c moment channel — and is subsumed by OQ-BC-12 (resolution notes below).
+### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
 
-| ID | Summary | Blocking |
-| --- | --- | --- |
-| OQ-BC-8 | *(Resolved — Alt 1)* Weight-on-wheels for **reporting**: a hysteretic geometric latch (engage at contact, release at clearance $>\delta_\text{off}=V_\text{stall}\Delta t$ — a *derived* band, $V_\text{stall}$ provisional). Reporting-only after OQ-BC-9. Implemented as IP-BC-11 | — |
-| OQ-BC-9 | *(Resolved — Alt 1)* Envelope-wide post-impact limit cycle: the FBW lift-shaping loop coupled to body-collider contact oscillated in shallow/steep/inverted impacts. Resolved by decoupling body-collider contact from the lift-shaping loop (IP-BC-12) | — |
-| OQ-BC-10 | *(Resolved → Alt 1, but ineffective — subsumed by OQ-BC-12)* Body-collider rotational reaction through the compliant §5c $\Delta\theta$ channel catapults roll. IP-BC-13 (inelastic §5c arrest) was prototyped and shown **not** to fix the reported gear-landing catapult (it cut the launch but left the 177° roll-over): the dominant driver is the §5a CM-arresting force, not the §5c channel | — |
+**Resolution (Alternative 3 — dissipation-dominated velocity-arrest).** The normal contact is a purely
+dissipative velocity-arrest force (no spring), giving $e=0$ by construction; the decided design, its
+force forms, parameterization, and the full numerical/dynamical stability verification are in §5a.
+**Rationale (user):** the design target is a coefficient of restitution of zero or near zero, and a
+penalty spring is an energy-storage device whose restitution can only be driven to zero in an
+ill-conditioned regime (Hunt–Crossley's $a\!\leftrightarrow\!e$ map diverges as $e\to0$; over-damped
+Kelvin–Voigt leaves a speed-dependent, only-approximate $e$ with a contact-onset force step). A
+dissipative arrest encodes $e=0$ directly and is consistent with the resolved OQ-BC-2, where restitution
+is owned by the $e=0$ hard constraint. **Verification:** numerical and dynamical stability confirmed in
+§5a — first-order non-oscillatory decay that is strictly dissipative (cannot bounce or limit-cycle); a
+single explicit-scheme bound $b\,dt/m_\text{eff}\lesssim1$; non-expansive composition with the $e=0$
+projection; no re-excitation of the gear/attitude loop. **Caveats / prerequisites carried into
+implementation:** the stability bound applies to the aggregate corner damping with a conservative
+effective mass; the §5c moment filter must be parameterized as in the gear; the §5b constraint must hold
+static belly-rest position with no normal spring; and the §5a stability analysis should be promoted to a
+`docs/algorithms/` numerical-analysis document. Implemented.
 
-### OQ-BC-12 — Contact Rotation Requires an Angular-Momentum State (Velocity-Slaved Model Root Cause)
+### OQ-BC-2 — Penalty / Hard-Constraint Role Split *(Resolved)*
 
-**Problem.**
-The load-factor `Aircraft` is **velocity-slaved**: `KinematicState::stepPV` integrates position and
-velocity from forces, then `commitAttitude` derives the attitude (`q_nw`) and the body rates from the
-velocity-vector change plus a commanded roll rate. There is **no integrated angular-momentum ($I\boldsymbol{\omega}$)
-state** — `rates_body_rps` is an output, not a dynamic state. An off-center inelastic contact (a
-wingtip, a tail corner, a single gear leg) is fundamentally an angular-momentum exchange: the contact
-impulse $J$ that drives the contact point's normal velocity to zero gives $\Delta\mathbf{v}_\text{cm} =
-J\hat{\mathbf{n}}/m$ (small for a long lever) and $\Delta\boldsymbol{\omega} = I^{-1}(\mathbf{r}\times J\hat{\mathbf{n}})
-\approx v_{c,n}/r$ (the pivot). The velocity-slaved model cannot represent this — it has no $\boldsymbol{\omega}$
-to exchange — so contact rotation is faked two ways, both wrong: the **§5a penalty force lands on the CM**
-(arresting CM velocity, which is physically impossible for an off-center contact), and the **§5c $\Delta\theta$
-channel injects a compliant attitude deviation** (which stores and returns energy → catapult). Reproduced
-(`GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`): a normal 3.8° touchdown rolls to 177° and is thrown
-7.9 m airborne, driven by a measured −266 N / ±140 N wing-tip §5a force on a 5 kg airframe. This one root
-cause underlies **OQ-BC-10** (roll catapult), **OQ-BC-11** (steep/inverted pitch lift-fight), and
-**OQ-LG-15** (the gear touchdown bounce) — the last is the same defect at the gear's *small* lever arm,
-where the §5c $\Delta\theta$ kludge is just barely adequate; the 1.38 m wing lever is where it diverges.
+**Resolution (Alternative 2 — constraint-primary, restitution-consistent).** The post-integration
+terrain hard constraint (§3) is the primary non-penetration mechanism and becomes
+restitution-consistent: instead of hard-zeroing the corner normal velocity it removes $(1+e)$ of the
+normal approach component with a configured restitution $e\approx0$, bounding penetration every step.
+The penalty force (§2/§5a) is demoted to supplying in-contact damping and the contact moment that
+drives the §5c rotation deviation; it no longer has to be stiff enough to arrest the impact before
+penetration. **Rationale (user):** bound penetration every step without a stiff-spring step-size
+penalty, and concentrate restitution in one explicit parameter. **Caveat:** the restitution-consistent
+projection still acts on the kinematic, near-zero-inertia attitude, so it must be shown not to excite
+it — the acceptance test `Aircraft_BodyCollider_NoRelaunch` in the Test Strategy. Implementation
+requires extending `applyTerrainHardConstraint` to carry a restitution coefficient, remains gated on
+§5a (the normal-force law that supplies the residual damping/moment). Implemented.
 
-**Diagnostic confirmation (the gear is not a safe baseline — it diverges).** With the body collider
-removed, the flight landing gear *alone* (`GearLanding_WithRollAndYaw_GearOnly_Settles`):
-- **wings-level, coordinated:** settles cleanly (0° roll, rests at the 0.29 m gear reach);
-- **banked 3.8°:** catapults to 180° of roll and launches the airframe 3.1 m;
-- **banked 3.8° + crabbed 7.9° sideslip** (a routine crosswind landing): **diverges numerically to NaN**,
-  the state reaching ~$2.6\times10^{8}$ m.
+### OQ-BC-3 — Gear-Style Rotational Reaction $\Delta\theta$ *(Resolved)*
 
-The gear's §5c rotational kludge fails on any off-center (rolled and/or yawed) contact exactly as the body
-collider does — it worked in the gear notebook only because the notebook tested only wings-level,
-coordinated touchdowns. This **refutes** the framing that the gear model is sound and the body collider is
-the isolated defect: the missing rotational DOF breaks *both*, and under combined off-center load the
-velocity-slaved gear response is not merely wrong but unstable. A velocity-slaved approximation (Alt B) must
-therefore be applied to the **gear** as well as the collider — it cannot leave the gear untouched — and it
-inherits this divergence risk.
+**Resolution (Alternative 1 — dedicated, *attributed* body-collider $\Delta\theta$ channel).** The
+gear and body-collider rotational contributions are separated so each is independently inspectable,
+driven by their own contact moment through the §2a low-pass $H_2$ on $M/I$ (properties P1–P4) and
+summed into the kinematic attitude. **Rationale (user):** establish the formality of a self-contained,
+attributable rotational source rather than the shared sum. **Design status (refined after
+implementation review):** the body-collider force/moment **already** flow through the *shared*,
+ungated gear $\Delta\theta$ block today, so the rotational reaction already functions (the OQ-BC-3
+Alternative 2 form) — Alternative 1 separates **both** the moment **and** force channels for
+attribution, which is behavior-preserving by the **linearity** of the $H_2$ moment filters, the stance
+low-pass, and the $G(s)$ force channel (all share the same airframe rotational-mode $\omega_n,\zeta$ —
+config ratios `dtheta_*_ratio`$\times(g/V_\text{stall})$ and `dtheta_zeta_nd`; the inertia tensor
+enters only as the $M/I$ forcing — the earlier "$\omega_n,\zeta$ from the inertia tensor" phrasing was
+imprecise). The supporting mechanics are resolved: filters live as a **parallel set in `Aircraft`**
+(**OQ-BC-6** → Alt 2) and **both** channels are attributed (**OQ-BC-7** → Alt 2; the earlier claim that
+the force channel "does not separate by linearity" was wrong — the stance low-pass superposes). The
+full design and the regression-protection strategy are in §5c. This is the labeled nice-to-have; it
+depends on §5a/§5b (in place). Implemented.
 
-**Implications for the landing-gear model (the effort already spent).** The gear work splits cleanly:
-- **Preserved in both alternatives — the wheel *force* physics:** strut spring-damper, tyre
-  cornering/longitudinal stiffness, rolling resistance, brakes, and spindown (OQ-LG-5/6). This is correct
-  force generation applied at the contact points and is reused unchanged; a rigid-body integrator consumes
-  exactly these forces.
-- **At stake — the gear's *rotational-coupling* machinery:** the §5c $\Delta\theta$ force channel
-  (OQ-LG-15/18/19/20) and the low-speed `commitAttitude` handling (OQ-LG-21) exist *only* to fake
-  gear-induced rotation in the velocity-slaved model. Under **Alt B** they are untouched. Under **Alt A**
-  they are **superseded** — a rigid-body integrator produces the gear-induced pitch/roll naturally from the
-  wheel forces ($\mathbf{r}\times\mathbf{F}$), so the $\Delta\theta$ kludge is removed and the tuned
-  touchdown behavior (no bounce, H₁ $n_z$ relaxation, settle terms) is re-validated in the rigid-body
-  regime rather than re-tuned inside the kludge. The gear effort was not wasted — it made contact usable in
-  the interim — but the rotational-coupling portion was patching the very limitation OQ-BC-12 removes.
+### OQ-BC-4 — Tangential Scrape Friction *(Resolved)*
 
-**Alternatives.**
+**Resolution (Alternative 1, extended with a velocity-proportional momentum-transfer term).**
+Penetrating corners get a tangential force combining (a) regularized Coulomb friction
+$-\mu\,F_\text{pen}\,\hat{\mathbf{v}}_{t,\text{reg}}$ opposing the corner's tangential ground velocity
+$\mathbf{v}_t$ (regularized near zero slip to avoid chatter), **and** (b) a velocity-proportional
+viscous term $-c_t\,\mathbf{v}_t$ that emulates the momentum the airframe transfers into the ground as
+it plows/scrapes — total $\mathbf{F}_t = -\mu\,F_\text{pen}\,\hat{\mathbf{v}}_{t,\text{reg}} -
+c_t\,\mathbf{v}_t$, active only while the corner penetrates. **Rationale (user):** a frictionless
+slide is unphysical for an inelastic crash, and a pure Coulomb cap under-represents the momentum lost
+plowing into terrain; the viscous term captures that sink, bleeding tangential momentum at a rate set
+by $c_t$ rather than capping at the Coulomb friction alone. Both coefficients are non-dimensionalized
+— $\mu$ from the surface-friction parameterization shared with the gear, $c_t$ scaled to the airframe
+so it is mass-independent. The stick–slip and contact-onset discontinuities are acceptable under the
+contact/friction exemption to the smooth-dynamics standard. Implementation depends on §5a
+(a stable normal force $F_\text{pen}$ to scale the Coulomb term). Implemented.
 
-1. **Rigid-body angular-momentum state for contact (Alt A — physically correct).** Give the airframe a
-   real $\boldsymbol{\omega}$/angular-momentum state while in contact; resolve each contact by the impulse
-   that zeroes the contact-point normal velocity, splitting into $\Delta\mathbf{v}_\text{cm}=J/m$ and
-   $\Delta\boldsymbol{\omega}=I^{-1}(\mathbf{r}\times J)$.
-   - *Benefits:* correct off-center response (pivot, $\omega\approx v_{c,n}/r$, CM preserved); **one**
-     mechanism heals OQ-BC-10, OQ-BC-11, and OQ-LG-15; the gear/collider §5c $\Delta\theta$ kludges are
-     retired; the wheel force/tyre physics is reused unchanged.
-   - *Drawbacks:* must **reconcile with the velocity-slaved load-factor *flight* model** — a hybrid or mode
-     (rigid-body while in contact, velocity-slaved in free flight) with a defined hand-back at liftoff, or a
-     rigid-body attitude the load-factor loop drives; all tuned gear/contact behavior is re-validated;
-     largest change.
-   - *Prerequisites:* define the in-contact ↔ free-flight attitude reconciliation and the liftoff hand-back;
-     a rigid-body contact-resolution formulation; re-run the full gear + impact regression suites.
+### OQ-BC-5 — §5a Velocity-Arrest Coefficient Parameterization *(Resolved)*
 
-2. **Velocity-slaved approximation (Alt B).** Compute the pivot rate $\omega\approx v_{c,n}/r$ from the
-   contact geometry and inject it through the one rotational input the model accepts (the roll rate into
-   `commitAttitude`), while **suppressing the §5a CM-arresting force for off-center contacts** (§5b
-   non-penetration retained).
-   - *Benefits:* no reconciliation with the flight model; reuses the existing roll-rate injection path;
-     smaller than a full rigid-body integrator.
-   - *Drawbacks:* still a **kinematic fake** — no momentum is carried, so the induced rotation does not
-     propagate correctly through the subsequent gear contact or into free flight; **the diagnostic above
-     shows it must be applied to the gear as well as the collider** (the gear alone catapults on a rolled
-     touchdown), so it is *not* contained and it re-touches the gear model rather than leaving it untouched;
-     the per-axis currency mismatch (roll/yaw as rates, pitch as an α deviation) persists; likely needs
-     case-by-case tuning — the same pattern that produced OQ-BC-10 and OQ-BC-11.
-   - *Prerequisites:* a contact-geometry pivot-rate estimate for both gear and collider contacts; an
-     off-center-vs-flat contact discriminator to decide when to suppress the §5a / gear rotational force.
+**Resolution (single non-dimensional user knob — coefficient of restitution $e$ alone).** The body
+collider exposes **exactly one user-facing contact parameter, a non-dimensional coefficient of
+restitution $e$** (`restitution_nd`, default $0$, clamped to $[0,1)$), consumed by the §5b hard
+constraint. There is **no per-volume and no per-corner user parameter**; `CollisionVolumeParams` is
+reduced to geometry. `Aircraft` supplies the airframe mass, outer step $dt$, and inertia tensor to
+`BodyCollider::initialize` (the architectural correction — the inertia also serves §5c), and the §5a
+velocity-arrest damping is **derived internally and independently of $e$** from a fixed arrest factor
+$N_\text{arr}\approx3$: $b_\text{total}=m/(N_\text{arr}\,dt)$, distributed across the live penetrating
+corners. The full design and the parameter derivation are documented in §5a. **Rationale (user):** the
+collider is a non-penetration backstop, not a tuned suspension; its one parameter must be
+non-dimensional and tuning-free with a wide robust range, and the config-only architecture (no airframe
+properties) is an architectural error to fix, not a constraint to design around. **Verification:** the
+§5a stability analysis is extended to prove that **all reasonable $e$** give reasonable behavior — for
+every $e\in[0,1)$ the contact is dynamically stable (per-contact normal energy $\times e^2$, monotone
+decay) and computationally stable ($e$ enters only an algebraic projection, no CFL; the derived damper
+is $e$-independent and stable by construction), graded smoothly from plastic ($e=0$) toward the
+excluded elastic limit ($e\to1$). **Not yet implemented** (tracked in
+[body_collider_dynamics.md](../implementation/body_collider_dynamics.md)).
 
-3. **Status quo — keep patching per symptom.** Not recommended: each patch (IP-BC-13 arrest, OQ-BC-11
-   lift-suppression) relocates the symptom because none supplies the missing degree of freedom.
+### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
 
-**Recommendation.**
-Alternative A. Three separately-filed defects (roll catapult, pitch lift-fight, gear touchdown bounce) are
-one missing rotational degree of freedom. The gear-alone diagnostic also answers the reasonable concern
-that Alt A would merely reconverge on the existing gear model: the existing gear model is **itself broken**
-on off-center contact (it catapults any rolled touchdown), so reconverging on it is not a safe outcome, and
-the velocity-slaved gear model is not a sound baseline to approximate against. Alt A reuses the gear *force*
-physics and retires only the $\Delta\theta$ rotational kludge — a workaround for this exact limitation. Its
-real cost, and the design work it must scope, is reconciling contact rigid-body rotation with the
-velocity-slaved load-factor *flight* model at the in-contact ↔ free-flight boundary. Alt B is no longer a
-contained body-collider stopgap — the diagnostic forces it onto the gear too, so it remains a momentum-less
-approximation applied in *two* places with the per-case-tuning burden that produced OQ-BC-10/11. The
-decision turns on whether the Alt A flight-model reconciliation is affordable now; if it is not, Alt B is a
-larger-than-hoped stopgap covering both gear and collider.
+**Resolution (Alternative 2 — parallel filter set in `Aircraft`).** The body-collider rotation filters
+live in `Aircraft` as a parallel set mirroring the gear's — `_bc_dtheta_{pitch,roll,yaw}_filter`
+(`FilterSS2Clip` per axis) plus a collider force-channel $G(s)$/stance state — reusing the gear's
+$\omega_n,\zeta$ (config ratios $\times g/V_\text{stall}$, `dtheta_zeta_nd`) and serialization patterns,
+and driven by the **body-collider** contact moment/force separated from the gear's at step 5a.
+**Rationale (user):** keep the delicate attitude integration in one place and reuse the validated gear
+machinery; the collider's contribution is still a separate, attributable term. **Consequence:** the
+body collider itself stays stateless (its rotational state lives in `Aircraft`), a deliberate departure
+from the OQ-BC-3 "self-contained" wording, accepted for the lower refactor risk. Implemented.
 
-### OQ-BC-11 — Scoped Aero-Lift Suppression for the Lift-Into-Ground Fight
+### OQ-BC-7 — §5c Force / Descent-Arrest Channel Attribution *(Resolved)*
 
-*(Subsumed by OQ-BC-12 — retained for the lift-fight analysis. The scoped aero-lift suppression is a
-velocity-slaved patch (Alt B territory); the root fix is the rotational DOF of OQ-BC-12.)*
-
-**Problem.**
-After IP-BC-12 decoupled body-collider contact from the FBW lift-shaping loop (OQ-BC-9 Alt 1), the
-shallow belly case settles, but the **steep** (−53°) and **inverted** impacts still limit-cycle in
-**pitch**: measured `BodyColliderOnly_SteepDiveImpact` = 41 pitch reversals / 10.5° settled p2p,
-`BodyColliderOnly_InvertedImpact` = 616 reversals / 6.9° p2p (thresholds 30 / 2°). OQ-BC-9's
-resolution anticipated this exactly (§ "Inverted case — note for implementation"): a *steady*
-$n_z=+1$ command still directs the wing's lift toward the ground when the airframe is pitched/rolled
-into terrain, and the §5b constraint fights it every step — a lift-vs-backstop force-fight the
-kinematic, velocity-slaved model cannot win. The scoped aero-lift suppression (OQ-BC-9's Alternative
-3 — clamp aero lift toward zero while body-collider contact, not gear, is the active contact) was
-left as a **conditional follow-up** to be "decided empirically." The regressions are that empirical
-test, and they still fail, so the decision is now forced. Verified that this residual is **not** the
-OQ-BC-10 rotational-energy path: routing the collider moment through a dissipative rate-arrest
-instead of the compliant §5c filter shifted only the reversal count, not the pitch p2p — the
-oscillator is the lift path, not the moment channel. UC affected: steep and inverted crash impacts
-(the body collider's reason to exist); the shallow, upright, and Vne-vertical cases are unaffected.
-
-**Alternatives.**
-
-1. **Adopt the scoped aero-lift suppression (OQ-BC-9 Alt 3).** Clamp the commanded/produced aero lift
-   toward zero while body-collider contact (not gear) is the active contact, keyed off contact state
-   (not the oscillating `n_z_shaped`), so the wing stops flying the airframe into the backstop.
-   - *Benefits:* directly ends the lift-vs-backstop force-fight, including the inverted case; keyed
-     off contact state it does not regress gear rollout or go-around; the smallest change that
-     addresses the actual driver.
-   - *Drawbacks:* introduces a "crash-contact" mode predicate that must be defined cleanly; overlaps
-     the existing `F_z_aero` lift clamp, which must be re-keyed off contact state rather than the
-     shaped command.
-   - *Prerequisites:* define the crash-contact predicate (body-collider-active-and-not-gear); the
-     four-case impact envelope + gear regressions as the guard.
-
-2. **Accept a bounded steady lift-into-ground and relax the steep/inverted pitch thresholds.** Treat
-   the residual as acceptable crash behavior and widen the regression tolerances.
-   - *Benefits:* no code change; the airframe is held out of terrain (non-penetration already holds).
-   - *Drawbacks:* the motion is a genuine per-step limit cycle (41–616 reversals), not a steady
-     lean — visually and physically non-physical; relaxing the guard hides the defect rather than
-     fixing it.
-   - *Prerequisites:* none.
-
-3. **Full 6DOF rigid-body contact (OQ-BC-9 Alt 4).** Replace the kinematic velocity-slaved attitude +
-   lift-shaping model with rigid-body dynamics for contact, so an inelastic impact resolves into
-   translational and rotational momentum without any lift-loop coupling.
-   - *Benefits:* physically correct across the entire envelope; removes the coupling by construction;
-     also subsumes OQ-BC-10.
-   - *Drawbacks:* a large architectural change well beyond this defect; a separate design effort.
-   - *Prerequisites:* a rigid-body contact architecture decision.
-
-**Recommendation.**
-Alternative 1 — the scoped aero-lift suppression. OQ-BC-9 already identified it as the pairing Alt 1
-"likely needs," and the failing regressions confirm it empirically. It is the smallest change that
-targets the actual oscillator (the commanded lift flying the airframe into the backstop), and keyed
-off contact state it leaves gear-equipped behavior untouched. Alternative 3 is the correct long-term
-model but is out of proportion to this defect. Alternative 2 hides the defect and is not recommended.
-This question **blocks** the steep/inverted pitch regressions; IP-BC-13 (the OQ-BC-10 rotational
-arrest) is independent and does not resolve it.
-
-### OQ-BC-10 — Body-Collider Rotational Reaction Adds Energy; Make It Inelastic *(Resolved — Alternative 1)*
-
-**Resolution (Alternative 1 — inelastic rotational velocity-arrest).** The body collider gets its own
-**dissipative** rotational reaction — the rotational analog of the §5a translational velocity-arrest —
-replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes only the body
-angular-rate component that drives penetrating corners *into* the terrain, with a `max(0, ...)` floor so
-it does no work on rebound (no energy storage or return), yielding a roll/pitch/yaw **rate reduction
-toward zero** at contact rather than a compliant deflection. The **gear keeps its compliant §5c channel
-unchanged** (the OQ-BC-6/7 per-source split already separates the two). The arrest coefficient is
-**derived** (non-magic), with its own CFL bound analogous to §5a's $1/N_\text{arr}$. Acceptance guard:
-a wingtip-strike roll-energy regression (a level wingtip strike must *lose* roll energy, not gain it)
-plus the impact-envelope and landing-gear regressions. Tracked as IP-BC-13. *(Problem analysis and the
-rejected alternatives follow as rationale.)*
-
-**Problem.** The §5c rotational-reaction channel routes the body-collider contact moment through the
-**same compliant second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
-with the per-step change applied to the attitude as a rate (roll via `commitAttitude`, yaw as lateral
-specific force). That path is correct for the **gear**, a compliant spring-damper that stores and
-returns elastic energy. The **body collider is an inelastic backstop** (§5a/§5b), so feeding its contact
-moment through the compliant channel is the wrong physics and **injects rotational energy**.
-
-Observed in the live viewer (small-UAS config with a wide `wing` collision volume, half-extent
-$y = 1.38$ m): when a wingtip box corner touches terrain at a few degrees of roll, the airframe **rolls
-violently away from the contact and keeps rolling after the wingtip has cleared** — energy is added, not
-dissipated. Mechanism:
-
-- The wing box's $1.38$ m lever arm makes the roll moment $M_x = (\mathbf{r}\times\mathbf{F})_x$ large for
-  even a small §5a arrest force.
-- The §5a velocity-arrest force is **half-wave** (`max(0, ...)`, active only while a corner sinks), so
-  contact delivers a one-sided roll **impulse**, not a symmetric arrest.
-- The compliant §5c channel turns that impulse into a $\Delta\theta_\text{roll}$ deflection whose rate is
-  applied to the inertia-free, undamped kinematic attitude. With no rotational inertia or damping to
-  absorb it, the induced roll rate **persists** — the airframe is catapulted in roll.
-
-A true inelastic contact should **arrest** the contact point's rotational velocity (remove the roll
-energy driving the corner into the ground), leaving the airframe at most resting against the surface —
-never accelerating away.
-
-**Alternatives:**
-
-1. **Inelastic rotational velocity-arrest for the collider channel (recommended).** Give the body
-   collider its own **dissipative** rotational reaction — the rotational analog of the §5a translational
-   velocity-arrest — replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes
-   only the body angular-rate component that drives penetrating corners *into* the terrain, with a
-   `max(0, ...)` floor so it does no work on rebound (no energy storage or return). The result is a roll
-   / pitch / yaw **rate reduction toward zero** at contact, not a compliant deflection. The gear keeps
-   its compliant §5c channel unchanged (the OQ-BC-6/7 per-source split already separates the two).
-   - **Benefits:** physically inelastic (cannot add rotational energy); matches the §5a/§5b inelastic
-     character; bounded by construction (the arrest cannot exceed the offending rate); leaves gear
-     behavior untouched; reuses the per-source channel split already in place.
-   - **Drawbacks:** introduces a second rotational mechanism (dissipative) distinct from the gear's
-     compliant one — the §5c shared-linearity invariant no longer covers the collider; needs its own
-     stability/CFL bound (analogous to §5a's $1/N_\text{arr}$).
-   - **Prerequisites:** define the arrest discretization and its **derived** (non-magic) coefficient; a
-     wingtip-strike roll-arrest regression (a level wingtip strike must *lose* roll energy, not gain it)
-     plus the impact-envelope and landing-gear regressions as guards.
-
-2. **Keep the compliant channel but damp/clip the collider rotational contribution.** Add roll-rate
-   damping or a clip so the induced rate decays.
-   - **Benefits:** small change to the existing channel.
-   - **Drawbacks:** still elastic in character (stores then bleeds energy); tuning-dependent; the
-     wide-lever-arm impulse can still overshoot within a step; does not express the intended inelasticity.
-   - **Prerequisites:** a damping/clip coefficient (risks being a magic value).
-
-3. **Suppress the collider rotational channel entirely (translation-only backstop).** Drop the §5c
-   collider moment contribution; the collider arrests translation only (§5a/§5b).
-   - **Benefits:** simplest; cannot add rotational energy.
-   - **Drawbacks:** loses the legitimate attitude response to an off-center strike (a wingtip strike
-     *should* produce some arrest-consistent roll, just not an energy-adding one).
-   - **Prerequisites:** none.
-
-**Recommendation.** Alternative 1 — an inelastic rotational velocity-arrest for the body collider,
-mirroring §5a for rotation and kept separate from the gear's compliant §5c channel. It is the only option
-that makes the contact genuinely inelastic (the stated requirement: "inelastic or nearly so"), with the
-wingtip-strike roll-energy test plus the impact-envelope and gear regressions as the acceptance guard.
-Alternative 3 is the conservative fallback if a stable inelastic rotational arrest proves hard to
-parameterize.
+**Resolution (Alternative 2 — the collider gets its own force channel; behavior-preserving).** Both
+rotation channels are attributed per source: the collider gets its own force channel (a second
+$G(s)$ + stance filter on the **collider** vertical load) alongside its own moment channels, and the
+gear channels are driven by the **gear** load/moment only. **Correction:** the OQ-BC-7 problem statement
+originally asserted the force channel "does not separate by linearity" because the stance destancing
+couples the sources — **that was wrong.** The stance low-pass is linear and superposes
+($\operatorname{LP}(f_\text{gear})+\operatorname{LP}(f_\text{bc})=\operatorname{LP}(f_\text{gear}+f_\text{bc})$),
+and the remaining force-channel operators ($a_\text{arrest}$, the $\cos\gamma/V$ and $\Phi(V)$
+aircraft-state scalings, and $G(s)$) are linear or common-factor, so the separated force channels sum
+**exactly** to the combined one — behavior-preserving like the moment channels, modulo float rounding
+and `FilterSS2Clip` saturation (which the §5c equivalence test guards). **Rationale (user):** full
+attribution of both channels, now established to carry no behavior penalty. Implemented.
 
 ### OQ-BC-8 — Weight-on-Wheels Detection (Reporting) *(Resolved — Alternative 1)*
 
@@ -1039,124 +917,242 @@ see the resolution note above.)*
 
 </details>
 
-### OQ-BC-6 — §5c Δθ Filter State Location *(Resolved)*
+### OQ-BC-10 — Body-Collider Rotational Reaction Adds Energy; Make It Inelastic *(Resolved — Alternative 1)*
 
-**Resolution (Alternative 2 — parallel filter set in `Aircraft`).** The body-collider rotation filters
-live in `Aircraft` as a parallel set mirroring the gear's — `_bc_dtheta_{pitch,roll,yaw}_filter`
-(`FilterSS2Clip` per axis) plus a collider force-channel $G(s)$/stance state — reusing the gear's
-$\omega_n,\zeta$ (config ratios $\times g/V_\text{stall}$, `dtheta_zeta_nd`) and serialization patterns,
-and driven by the **body-collider** contact moment/force separated from the gear's at step 5a.
-**Rationale (user):** keep the delicate attitude integration in one place and reuse the validated gear
-machinery; the collider's contribution is still a separate, attributable term. **Consequence:** the
-body collider itself stays stateless (its rotational state lives in `Aircraft`), a deliberate departure
-from the OQ-BC-3 "self-contained" wording, accepted for the lower refactor risk. Implemented.
+**Resolution (Alternative 1 — inelastic rotational velocity-arrest).** The body collider gets its own
+**dissipative** rotational reaction — the rotational analog of the §5a translational velocity-arrest —
+replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes only the body
+angular-rate component that drives penetrating corners *into* the terrain, with a `max(0, ...)` floor so
+it does no work on rebound (no energy storage or return), yielding a roll/pitch/yaw **rate reduction
+toward zero** at contact rather than a compliant deflection. The **gear keeps its compliant §5c channel
+unchanged** (the OQ-BC-6/7 per-source split already separates the two). The arrest coefficient is
+**derived** (non-magic), with its own CFL bound analogous to §5a's $1/N_\text{arr}$. Acceptance guard:
+a wingtip-strike roll-energy regression (a level wingtip strike must *lose* roll energy, not gain it)
+plus the impact-envelope and landing-gear regressions. Tracked as IP-BC-13. *(Superseded by OQ-BC-12:
+IP-BC-13 was prototyped and shown ineffective — the reported gear-landing catapult is driven by the §5a
+force and the missing rotational DOF, not this §5c moment channel. Problem analysis retained below.)*
 
-### OQ-BC-7 — §5c Force / Descent-Arrest Channel Attribution *(Resolved)*
+**Problem.** The §5c rotational-reaction channel routes the body-collider contact moment through the
+**same compliant second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
+with the per-step change applied to the attitude as a rate (roll via `commitAttitude`, yaw as lateral
+specific force). That path is correct for the **gear**, a compliant spring-damper that stores and
+returns elastic energy. The **body collider is an inelastic backstop** (§5a/§5b), so feeding its contact
+moment through the compliant channel is the wrong physics and **injects rotational energy**.
 
-**Resolution (Alternative 2 — the collider gets its own force channel; behavior-preserving).** Both
-rotation channels are attributed per source: the collider gets its own force channel (a second
-$G(s)$ + stance filter on the **collider** vertical load) alongside its own moment channels, and the
-gear channels are driven by the **gear** load/moment only. **Correction:** the OQ-BC-7 problem statement
-originally asserted the force channel "does not separate by linearity" because the stance destancing
-couples the sources — **that was wrong.** The stance low-pass is linear and superposes
-($\operatorname{LP}(f_\text{gear})+\operatorname{LP}(f_\text{bc})=\operatorname{LP}(f_\text{gear}+f_\text{bc})$),
-and the remaining force-channel operators ($a_\text{arrest}$, the $\cos\gamma/V$ and $\Phi(V)$
-aircraft-state scalings, and $G(s)$) are linear or common-factor, so the separated force channels sum
-**exactly** to the combined one — behavior-preserving like the moment channels, modulo float rounding
-and `FilterSS2Clip` saturation (which the §5c equivalence test guards). **Rationale (user):** full
-attribution of both channels, now established to carry no behavior penalty. Implemented.
+Observed in the live viewer (small-UAS config with a wide `wing` collision volume, half-extent
+$y = 1.38$ m): when a wingtip box corner touches terrain at a few degrees of roll, the airframe **rolls
+violently away from the contact and keeps rolling after the wingtip has cleared** — energy is added, not
+dissipated. Mechanism:
 
-### OQ-BC-5 — §5a Velocity-Arrest Coefficient Parameterization *(Resolved)*
+- The wing box's $1.38$ m lever arm makes the roll moment $M_x = (\mathbf{r}\times\mathbf{F})_x$ large for
+  even a small §5a arrest force.
+- The §5a velocity-arrest force is **half-wave** (`max(0, ...)`, active only while a corner sinks), so
+  contact delivers a one-sided roll **impulse**, not a symmetric arrest.
+- The compliant §5c channel turns that impulse into a $\Delta\theta_\text{roll}$ deflection whose rate is
+  applied to the inertia-free, undamped kinematic attitude. With no rotational inertia or damping to
+  absorb it, the induced roll rate **persists** — the airframe is catapulted in roll.
 
-**Resolution (single non-dimensional user knob — coefficient of restitution $e$ alone).** The body
-collider exposes **exactly one user-facing contact parameter, a non-dimensional coefficient of
-restitution $e$** (`restitution_nd`, default $0$, clamped to $[0,1)$), consumed by the §5b hard
-constraint. There is **no per-volume and no per-corner user parameter**; `CollisionVolumeParams` is
-reduced to geometry. `Aircraft` supplies the airframe mass, outer step $dt$, and inertia tensor to
-`BodyCollider::initialize` (the architectural correction — the inertia also serves §5c), and the §5a
-velocity-arrest damping is **derived internally and independently of $e$** from a fixed arrest factor
-$N_\text{arr}\approx3$: $b_\text{total}=m/(N_\text{arr}\,dt)$, distributed across the live penetrating
-corners. The full design and the parameter derivation are documented in §5a. **Rationale (user):** the
-collider is a non-penetration backstop, not a tuned suspension; its one parameter must be
-non-dimensional and tuning-free with a wide robust range, and the config-only architecture (no airframe
-properties) is an architectural error to fix, not a constraint to design around. **Verification:** the
-§5a stability analysis is extended to prove that **all reasonable $e$** give reasonable behavior — for
-every $e\in[0,1)$ the contact is dynamically stable (per-contact normal energy $\times e^2$, monotone
-decay) and computationally stable ($e$ enters only an algebraic projection, no CFL; the derived damper
-is $e$-independent and stable by construction), graded smoothly from plastic ($e=0$) toward the
-excluded elastic limit ($e\to1$). **Not yet implemented** (tracked in
-[body_collider_dynamics.md](../implementation/body_collider_dynamics.md)).
+A true inelastic contact should **arrest** the contact point's rotational velocity (remove the roll
+energy driving the corner into the ground), leaving the airframe at most resting against the surface —
+never accelerating away.
 
-### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
+**Alternatives:**
 
-**Resolution (Alternative 3 — dissipation-dominated velocity-arrest).** The normal contact is a purely
-dissipative velocity-arrest force (no spring), giving $e=0$ by construction; the decided design, its
-force forms, parameterization, and the full numerical/dynamical stability verification are in §5a.
-**Rationale (user):** the design target is a coefficient of restitution of zero or near zero, and a
-penalty spring is an energy-storage device whose restitution can only be driven to zero in an
-ill-conditioned regime (Hunt–Crossley's $a\!\leftrightarrow\!e$ map diverges as $e\to0$; over-damped
-Kelvin–Voigt leaves a speed-dependent, only-approximate $e$ with a contact-onset force step). A
-dissipative arrest encodes $e=0$ directly and is consistent with the resolved OQ-BC-2, where restitution
-is owned by the $e=0$ hard constraint. **Verification:** numerical and dynamical stability confirmed in
-§5a — first-order non-oscillatory decay that is strictly dissipative (cannot bounce or limit-cycle); a
-single explicit-scheme bound $b\,dt/m_\text{eff}\lesssim1$; non-expansive composition with the $e=0$
-projection; no re-excitation of the gear/attitude loop. **Caveats / prerequisites carried into
-implementation:** the stability bound applies to the aggregate corner damping with a conservative
-effective mass; the §5c moment filter must be parameterized as in the gear; the §5b constraint must hold
-static belly-rest position with no normal spring; and the §5a stability analysis should be promoted to a
-`docs/algorithms/` numerical-analysis document. Implemented.
+1. **Inelastic rotational velocity-arrest for the collider channel (recommended).** Give the body
+   collider its own **dissipative** rotational reaction — the rotational analog of the §5a translational
+   velocity-arrest — replacing its share of the compliant §5c $\Delta\theta$ path. The contact opposes
+   only the body angular-rate component that drives penetrating corners *into* the terrain, with a
+   `max(0, ...)` floor so it does no work on rebound (no energy storage or return). The result is a roll
+   / pitch / yaw **rate reduction toward zero** at contact, not a compliant deflection. The gear keeps
+   its compliant §5c channel unchanged (the OQ-BC-6/7 per-source split already separates the two).
+   - **Benefits:** physically inelastic (cannot add rotational energy); matches the §5a/§5b inelastic
+     character; bounded by construction (the arrest cannot exceed the offending rate); leaves gear
+     behavior untouched; reuses the per-source channel split already in place.
+   - **Drawbacks:** introduces a second rotational mechanism (dissipative) distinct from the gear's
+     compliant one — the §5c shared-linearity invariant no longer covers the collider; needs its own
+     stability/CFL bound (analogous to §5a's $1/N_\text{arr}$).
+   - **Prerequisites:** define the arrest discretization and its **derived** (non-magic) coefficient; a
+     wingtip-strike roll-arrest regression (a level wingtip strike must *lose* roll energy, not gain it)
+     plus the impact-envelope and landing-gear regressions as guards.
 
-### OQ-BC-2 — Penalty / Hard-Constraint Role Split *(Resolved)*
+2. **Keep the compliant channel but damp/clip the collider rotational contribution.** Add roll-rate
+   damping or a clip so the induced rate decays.
+   - **Benefits:** small change to the existing channel.
+   - **Drawbacks:** still elastic in character (stores then bleeds energy); tuning-dependent; the
+     wide-lever-arm impulse can still overshoot within a step; does not express the intended inelasticity.
+   - **Prerequisites:** a damping/clip coefficient (risks being a magic value).
 
-**Resolution (Alternative 2 — constraint-primary, restitution-consistent).** The post-integration
-terrain hard constraint (§3) is the primary non-penetration mechanism and becomes
-restitution-consistent: instead of hard-zeroing the corner normal velocity it removes $(1+e)$ of the
-normal approach component with a configured restitution $e\approx0$, bounding penetration every step.
-The penalty force (§2/§5a) is demoted to supplying in-contact damping and the contact moment that
-drives the §5c rotation deviation; it no longer has to be stiff enough to arrest the impact before
-penetration. **Rationale (user):** bound penetration every step without a stiff-spring step-size
-penalty, and concentrate restitution in one explicit parameter. **Caveat:** the restitution-consistent
-projection still acts on the kinematic, near-zero-inertia attitude, so it must be shown not to excite
-it — the acceptance test `Aircraft_BodyCollider_NoRelaunch` in the Test Strategy. Implementation
-requires extending `applyTerrainHardConstraint` to carry a restitution coefficient, remains gated on
-§5a (the normal-force law that supplies the residual damping/moment). Implemented.
+3. **Suppress the collider rotational channel entirely (translation-only backstop).** Drop the §5c
+   collider moment contribution; the collider arrests translation only (§5a/§5b).
+   - **Benefits:** simplest; cannot add rotational energy.
+   - **Drawbacks:** loses the legitimate attitude response to an off-center strike (a wingtip strike
+     *should* produce some arrest-consistent roll, just not an energy-adding one).
+   - **Prerequisites:** none.
 
-### OQ-BC-3 — Gear-Style Rotational Reaction $\Delta\theta$ *(Resolved)*
+**Recommendation.** Alternative 1 — an inelastic rotational velocity-arrest for the body collider,
+mirroring §5a for rotation and kept separate from the gear's compliant §5c channel. It is the only option
+that makes the contact genuinely inelastic (the stated requirement: "inelastic or nearly so"), with the
+wingtip-strike roll-energy test plus the impact-envelope and gear regressions as the acceptance guard.
+Alternative 3 is the conservative fallback if a stable inelastic rotational arrest proves hard to
+parameterize.
 
-**Resolution (Alternative 1 — dedicated, *attributed* body-collider $\Delta\theta$ channel).** The
-gear and body-collider rotational contributions are separated so each is independently inspectable,
-driven by their own contact moment through the §2a low-pass $H_2$ on $M/I$ (properties P1–P4) and
-summed into the kinematic attitude. **Rationale (user):** establish the formality of a self-contained,
-attributable rotational source rather than the shared sum. **Design status (refined after
-implementation review):** the body-collider force/moment **already** flow through the *shared*,
-ungated gear $\Delta\theta$ block today, so the rotational reaction already functions (the OQ-BC-3
-Alternative 2 form) — Alternative 1 separates **both** the moment **and** force channels for
-attribution, which is behavior-preserving by the **linearity** of the $H_2$ moment filters, the stance
-low-pass, and the $G(s)$ force channel (all share the same airframe rotational-mode $\omega_n,\zeta$ —
-config ratios `dtheta_*_ratio`$\times(g/V_\text{stall})$ and `dtheta_zeta_nd`; the inertia tensor
-enters only as the $M/I$ forcing — the earlier "$\omega_n,\zeta$ from the inertia tensor" phrasing was
-imprecise). The supporting mechanics are resolved: filters live as a **parallel set in `Aircraft`**
-(**OQ-BC-6** → Alt 2) and **both** channels are attributed (**OQ-BC-7** → Alt 2; the earlier claim that
-the force channel "does not separate by linearity" was wrong — the stance low-pass superposes). The
-full design and the regression-protection strategy are in §5c. This is the labeled nice-to-have; it
-depends on §5a/§5b (in place). Implemented.
+### OQ-BC-11 — Scoped Aero-Lift Suppression for the Lift-Into-Ground Fight
 
-### OQ-BC-4 — Tangential Scrape Friction *(Resolved)*
+*(Subsumed by OQ-BC-12 — retained for the lift-fight analysis. The scoped aero-lift suppression is a
+velocity-slaved patch (Alt B territory); the root fix is the rotational DOF of OQ-BC-12.)*
 
-**Resolution (Alternative 1, extended with a velocity-proportional momentum-transfer term).**
-Penetrating corners get a tangential force combining (a) regularized Coulomb friction
-$-\mu\,F_\text{pen}\,\hat{\mathbf{v}}_{t,\text{reg}}$ opposing the corner's tangential ground velocity
-$\mathbf{v}_t$ (regularized near zero slip to avoid chatter), **and** (b) a velocity-proportional
-viscous term $-c_t\,\mathbf{v}_t$ that emulates the momentum the airframe transfers into the ground as
-it plows/scrapes — total $\mathbf{F}_t = -\mu\,F_\text{pen}\,\hat{\mathbf{v}}_{t,\text{reg}} -
-c_t\,\mathbf{v}_t$, active only while the corner penetrates. **Rationale (user):** a frictionless
-slide is unphysical for an inelastic crash, and a pure Coulomb cap under-represents the momentum lost
-plowing into terrain; the viscous term captures that sink, bleeding tangential momentum at a rate set
-by $c_t$ rather than capping at the Coulomb friction alone. Both coefficients are non-dimensionalized
-— $\mu$ from the surface-friction parameterization shared with the gear, $c_t$ scaled to the airframe
-so it is mass-independent. The stick–slip and contact-onset discontinuities are acceptable under the
-contact/friction exemption to the smooth-dynamics standard. Implementation depends on §5a
-(a stable normal force $F_\text{pen}$ to scale the Coulomb term). Implemented.
+**Problem.**
+After IP-BC-12 decoupled body-collider contact from the FBW lift-shaping loop (OQ-BC-9 Alt 1), the
+shallow belly case settles, but the **steep** (−53°) and **inverted** impacts still limit-cycle in
+**pitch**: measured `BodyColliderOnly_SteepDiveImpact` = 41 pitch reversals / 10.5° settled p2p,
+`BodyColliderOnly_InvertedImpact` = 616 reversals / 6.9° p2p (thresholds 30 / 2°). OQ-BC-9's
+resolution anticipated this exactly (§ "Inverted case — note for implementation"): a *steady*
+$n_z=+1$ command still directs the wing's lift toward the ground when the airframe is pitched/rolled
+into terrain, and the §5b constraint fights it every step — a lift-vs-backstop force-fight the
+kinematic, velocity-slaved model cannot win. The scoped aero-lift suppression (OQ-BC-9's Alternative
+3 — clamp aero lift toward zero while body-collider contact, not gear, is the active contact) was
+left as a **conditional follow-up** to be "decided empirically." The regressions are that empirical
+test, and they still fail, so the decision is now forced. Verified that this residual is **not** the
+OQ-BC-10 rotational-energy path: routing the collider moment through a dissipative rate-arrest
+instead of the compliant §5c filter shifted only the reversal count, not the pitch p2p — the
+oscillator is the lift path, not the moment channel. UC affected: steep and inverted crash impacts
+(the body collider's reason to exist); the shallow, upright, and Vne-vertical cases are unaffected.
+
+**Alternatives.**
+
+1. **Adopt the scoped aero-lift suppression (OQ-BC-9 Alt 3).** Clamp the commanded/produced aero lift
+   toward zero while body-collider contact (not gear) is the active contact, keyed off contact state
+   (not the oscillating `n_z_shaped`), so the wing stops flying the airframe into the backstop.
+   - *Benefits:* directly ends the lift-vs-backstop force-fight, including the inverted case; keyed
+     off contact state it does not regress gear rollout or go-around; the smallest change that
+     addresses the actual driver.
+   - *Drawbacks:* introduces a "crash-contact" mode predicate that must be defined cleanly; overlaps
+     the existing `F_z_aero` lift clamp, which must be re-keyed off contact state rather than the
+     shaped command.
+   - *Prerequisites:* define the crash-contact predicate (body-collider-active-and-not-gear); the
+     four-case impact envelope + gear regressions as the guard.
+
+2. **Accept a bounded steady lift-into-ground and relax the steep/inverted pitch thresholds.** Treat
+   the residual as acceptable crash behavior and widen the regression tolerances.
+   - *Benefits:* no code change; the airframe is held out of terrain (non-penetration already holds).
+   - *Drawbacks:* the motion is a genuine per-step limit cycle (41–616 reversals), not a steady
+     lean — visually and physically non-physical; relaxing the guard hides the defect rather than
+     fixing it.
+   - *Prerequisites:* none.
+
+3. **Full 6DOF rigid-body contact (OQ-BC-9 Alt 4).** Replace the kinematic velocity-slaved attitude +
+   lift-shaping model with rigid-body dynamics for contact, so an inelastic impact resolves into
+   translational and rotational momentum without any lift-loop coupling.
+   - *Benefits:* physically correct across the entire envelope; removes the coupling by construction;
+     also subsumes OQ-BC-10.
+   - *Drawbacks:* a large architectural change well beyond this defect; a separate design effort.
+   - *Prerequisites:* a rigid-body contact architecture decision.
+
+**Recommendation.**
+Alternative 1 — the scoped aero-lift suppression. OQ-BC-9 already identified it as the pairing Alt 1
+"likely needs," and the failing regressions confirm it empirically. It is the smallest change that
+targets the actual oscillator (the commanded lift flying the airframe into the backstop), and keyed
+off contact state it leaves gear-equipped behavior untouched. Alternative 3 is the correct long-term
+model but is out of proportion to this defect. Alternative 2 hides the defect and is not recommended.
+This question **blocks** the steep/inverted pitch regressions; IP-BC-13 (the OQ-BC-10 rotational
+arrest) is independent and does not resolve it.
+
+### OQ-BC-12 — Contact Rotation Requires an Angular-Momentum State (Velocity-Slaved Model Root Cause)
+
+**Problem.**
+The load-factor `Aircraft` is **velocity-slaved**: `KinematicState::stepPV` integrates position and
+velocity from forces, then `commitAttitude` derives the attitude (`q_nw`) and the body rates from the
+velocity-vector change plus a commanded roll rate. There is **no integrated angular-momentum ($I\boldsymbol{\omega}$)
+state** — `rates_body_rps` is an output, not a dynamic state. An off-center inelastic contact (a
+wingtip, a tail corner, a single gear leg) is fundamentally an angular-momentum exchange: the contact
+impulse $J$ that drives the contact point's normal velocity to zero gives $\Delta\mathbf{v}_\text{cm} =
+J\hat{\mathbf{n}}/m$ (small for a long lever) and $\Delta\boldsymbol{\omega} = I^{-1}(\mathbf{r}\times J\hat{\mathbf{n}})
+\approx v_{c,n}/r$ (the pivot). The velocity-slaved model cannot represent this — it has no $\boldsymbol{\omega}$
+to exchange — so contact rotation is faked two ways, both wrong: the **§5a penalty force lands on the CM**
+(arresting CM velocity, which is physically impossible for an off-center contact), and the **§5c $\Delta\theta$
+channel injects a compliant attitude deviation** (which stores and returns energy → catapult). Reproduced
+(`GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`): a normal 3.8° touchdown rolls to 177° and is thrown
+7.9 m airborne, driven by a measured −266 N / ±140 N wing-tip §5a force on a 5 kg airframe. This one root
+cause underlies **OQ-BC-10** (roll catapult), **OQ-BC-11** (steep/inverted pitch lift-fight), and
+**OQ-LG-15** (the gear touchdown bounce) — the last is the same defect at the gear's *small* lever arm,
+where the §5c $\Delta\theta$ kludge is just barely adequate; the 1.38 m wing lever is where it diverges.
+
+**Diagnostic confirmation (the gear is not a safe baseline — it diverges).** With the body collider
+removed, the flight landing gear *alone* (`GearLanding_WithRollAndYaw_GearOnly_Settles`):
+- **wings-level, coordinated:** settles cleanly (0° roll, rests at the 0.29 m gear reach);
+- **banked 3.8°:** catapults to 180° of roll and launches the airframe 3.1 m;
+- **banked 3.8° + crabbed 7.9° sideslip** (a routine crosswind landing): **diverges numerically to NaN**,
+  the state reaching ~$2.6\times10^{8}$ m.
+
+The gear's §5c rotational kludge fails on any off-center (rolled and/or yawed) contact exactly as the body
+collider does — it worked in the gear notebook only because the notebook tested only wings-level,
+coordinated touchdowns. This **refutes** the framing that the gear model is sound and the body collider is
+the isolated defect: the missing rotational DOF breaks *both*, and under combined off-center load the
+velocity-slaved gear response is not merely wrong but unstable. A velocity-slaved approximation (Alt B) must
+therefore be applied to the **gear** as well as the collider — it cannot leave the gear untouched — and it
+inherits this divergence risk.
+
+**Implications for the landing-gear model (the effort already spent).** The gear work splits cleanly:
+- **Preserved in both alternatives — the wheel *force* physics:** strut spring-damper, tyre
+  cornering/longitudinal stiffness, rolling resistance, brakes, and spindown (OQ-LG-5/6). This is correct
+  force generation applied at the contact points and is reused unchanged; a rigid-body integrator consumes
+  exactly these forces.
+- **At stake — the gear's *rotational-coupling* machinery:** the §5c $\Delta\theta$ force channel
+  (OQ-LG-15/18/19/20) and the low-speed `commitAttitude` handling (OQ-LG-21) exist *only* to fake
+  gear-induced rotation in the velocity-slaved model. Under **Alt B** they are untouched. Under **Alt A**
+  they are **superseded** — a rigid-body integrator produces the gear-induced pitch/roll naturally from the
+  wheel forces ($\mathbf{r}\times\mathbf{F}$), so the $\Delta\theta$ kludge is removed and the tuned
+  touchdown behavior (no bounce, H₁ $n_z$ relaxation, settle terms) is re-validated in the rigid-body
+  regime rather than re-tuned inside the kludge. The gear effort was not wasted — it made contact usable in
+  the interim — but the rotational-coupling portion was patching the very limitation OQ-BC-12 removes.
+
+**Alternatives.**
+
+1. **Rigid-body angular-momentum state for contact (Alt A — physically correct).** Give the airframe a
+   real $\boldsymbol{\omega}$/angular-momentum state while in contact; resolve each contact by the impulse
+   that zeroes the contact-point normal velocity, splitting into $\Delta\mathbf{v}_\text{cm}=J/m$ and
+   $\Delta\boldsymbol{\omega}=I^{-1}(\mathbf{r}\times J)$.
+   - *Benefits:* correct off-center response (pivot, $\omega\approx v_{c,n}/r$, CM preserved); **one**
+     mechanism heals OQ-BC-10, OQ-BC-11, and OQ-LG-15; the gear/collider §5c $\Delta\theta$ kludges are
+     retired; the wheel force/tyre physics is reused unchanged.
+   - *Drawbacks:* must **reconcile with the velocity-slaved load-factor *flight* model** — a hybrid or mode
+     (rigid-body while in contact, velocity-slaved in free flight) with a defined hand-back at liftoff, or a
+     rigid-body attitude the load-factor loop drives; all tuned gear/contact behavior is re-validated;
+     largest change.
+   - *Prerequisites:* define the in-contact ↔ free-flight attitude reconciliation and the liftoff hand-back;
+     a rigid-body contact-resolution formulation; re-run the full gear + impact regression suites.
+
+2. **Velocity-slaved approximation (Alt B).** Compute the pivot rate $\omega\approx v_{c,n}/r$ from the
+   contact geometry and inject it through the one rotational input the model accepts (the roll rate into
+   `commitAttitude`), while **suppressing the §5a CM-arresting force for off-center contacts** (§5b
+   non-penetration retained).
+   - *Benefits:* no reconciliation with the flight model; reuses the existing roll-rate injection path;
+     smaller than a full rigid-body integrator.
+   - *Drawbacks:* still a **kinematic fake** — no momentum is carried, so the induced rotation does not
+     propagate correctly through the subsequent gear contact or into free flight; **the diagnostic above
+     shows it must be applied to the gear as well as the collider** (the gear alone catapults on a rolled
+     touchdown), so it is *not* contained and it re-touches the gear model rather than leaving it untouched;
+     the per-axis currency mismatch (roll/yaw as rates, pitch as an α deviation) persists; likely needs
+     case-by-case tuning — the same pattern that produced OQ-BC-10 and OQ-BC-11.
+   - *Prerequisites:* a contact-geometry pivot-rate estimate for both gear and collider contacts; an
+     off-center-vs-flat contact discriminator to decide when to suppress the §5a / gear rotational force.
+
+3. **Status quo — keep patching per symptom.** Not recommended: each patch (IP-BC-13 arrest, OQ-BC-11
+   lift-suppression) relocates the symptom because none supplies the missing degree of freedom.
+
+**Recommendation.**
+Alternative A. Three separately-filed defects (roll catapult, pitch lift-fight, gear touchdown bounce) are
+one missing rotational degree of freedom. The gear-alone diagnostic also answers the reasonable concern
+that Alt A would merely reconverge on the existing gear model: the existing gear model is **itself broken**
+on off-center contact (it catapults any rolled touchdown), so reconverging on it is not a safe outcome, and
+the velocity-slaved gear model is not a sound baseline to approximate against. Alt A reuses the gear *force*
+physics and retires only the $\Delta\theta$ rotational kludge — a workaround for this exact limitation. Its
+real cost, and the design work it must scope, is reconciling contact rigid-body rotation with the
+velocity-slaved load-factor *flight* model at the in-contact ↔ free-flight boundary. Alt B is no longer a
+contained body-collider stopgap — the diagnostic forces it onto the gear too, so it remains a momentum-less
+approximation applied in *two* places with the per-case-tuning burden that produced OQ-BC-10/11. The
+decision turns on whether the Alt A flight-model reconciliation is affordable now; if it is not, Alt B is a
+larger-than-hoped stopgap covering both gear and collider.
 
 ---
 
