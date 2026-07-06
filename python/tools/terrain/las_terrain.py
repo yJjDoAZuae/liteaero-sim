@@ -7,6 +7,12 @@ File format (little-endian):
     [4 bytes]   magic = 0x4C415354 ("LAST")
     [4 bytes]   format_version = 1  (uint32)
     [4 bytes]   tile_count          (uint32)
+    [7*4 bytes] lod_footprints_m    (7 × float32, L0..L6 — nominal per-LOD tile footprint (m), the
+                                     build's target grid pitch; realized tiles are <= this after
+                                     grid rounding / edge clipping.  All-zero means "not recorded".
+                                     The C++ TerrainMesh cross-checks its bounds-derived per-LOD
+                                     grid side against this record on load — see terrain.md
+                                     OQ-T-1 / OQ-T-3.)
     For each tile:
         [4 bytes]   metadata_length (uint32)
         [N bytes]   metadata JSON   (UTF-8, no BOM)
@@ -72,19 +78,35 @@ class TerrainTileData:
     colors: np.ndarray  # (F, 3) uint8   — R8G8B8 representative color per facet
 
 
-def write_las_terrain(path: Path, tiles: list[TerrainTileData]) -> None:
+def write_las_terrain(
+    path: Path,
+    tiles: list[TerrainTileData],
+    lod_footprints_m: list[float] | None = None,
+) -> None:
     """Write one or more tiles to a .las_terrain binary file.
 
+    Args:
+        path:  output path.
+        tiles: tiles to serialize (must be non-empty).
+        lod_footprints_m: 7 per-LOD tile footprints (m), L0..L6, recorded in the file header
+            for the C++ index to validate against its bounds-derived grid side. When None, an
+            all-zero record is written, which the reader interprets as "not recorded".
+
     Raises:
-        ValueError: if tiles is empty.
+        ValueError: if tiles is empty, or lod_footprints_m is given with != 7 entries.
         IOError:    on write failure.
     """
     if not tiles:
         raise ValueError("tiles must not be empty")
 
+    footprints = [0.0] * 7 if lod_footprints_m is None else [float(x) for x in lod_footprints_m]
+    if len(footprints) != 7:
+        raise ValueError(f"lod_footprints_m must have 7 entries, got {len(footprints)}")
+
     with open(path, "wb") as f:
-        # File header: magic, format_version, tile_count
+        # File header: magic, format_version, tile_count, per-LOD footprints (7 × float32).
         f.write(struct.pack("<III", _MAGIC, _FORMAT_VERSION, len(tiles)))
+        f.write(struct.pack("<7f", *footprints))
 
         for tile in tiles:
             # Metadata JSON — nested schema matching C++ TerrainMesh::serializeLasTerrain.
@@ -134,11 +156,12 @@ def read_las_terrain(path: Path) -> list[TerrainTileData]:
         IOError:    on read failure.
     """
     with open(path, "rb") as f:
-        # File header
-        header = f.read(12)
-        if len(header) < 12:
+        # File header: magic, format_version, tile_count, then 7 × float32 per-LOD footprints.
+        header = f.read(40)
+        if len(header) < 40:
             raise ValueError("File too short to contain a valid .las_terrain header")
-        magic, version, tile_count = struct.unpack("<III", header)
+        magic, version, tile_count = struct.unpack("<III", header[:12])
+        # header[12:40] holds the per-LOD footprints; use read_las_terrain_footprints() for them.
 
         if magic != _MAGIC:
             raise ValueError(
@@ -191,3 +214,26 @@ def read_las_terrain(path: Path) -> list[TerrainTileData]:
             )
 
     return tiles
+
+
+def read_las_terrain_footprints(path: Path) -> list[float]:
+    """Return the 7 per-LOD tile footprints (m, L0..L6) recorded in the file header.
+
+    An all-zero result means the file was written without footprints (the C++ index then relies
+    solely on its bounds-derived grid side with no cross-check).
+
+    Raises:
+        ValueError: if magic bytes != LAST or format_version != 1, or the header is truncated.
+    """
+    with open(path, "rb") as f:
+        header = f.read(40)
+    if len(header) < 40:
+        raise ValueError("File too short to contain a valid .las_terrain header")
+    magic, version, _tile_count = struct.unpack("<III", header[:12])
+    if magic != _MAGIC:
+        raise ValueError(
+            f"Invalid magic bytes: expected {_MAGIC:#010x} ('LAST'), got {magic:#010x}"
+        )
+    if version != _FORMAT_VERSION:
+        raise ValueError(f"Unsupported format_version {version}; expected {_FORMAT_VERSION}")
+    return list(struct.unpack("<7f", header[12:40]))

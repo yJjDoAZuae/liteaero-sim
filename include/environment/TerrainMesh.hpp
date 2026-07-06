@@ -116,12 +116,32 @@ public:
 
 private:
     // Spatial index keyed by encoded (lat_idx, lon_idx, lod).
-    // See §Internal Spatial Index in docs/architecture/terrain.md.
+    // See §Internal Spatial Index in docs/design/terrain.md.
     std::unordered_map<uint64_t, TerrainCell> cells_;
 
-    static uint64_t cellKey(double lat_rad, double lon_rad,
-                            liteaero::terrain::TerrainLod lod);
-    static double   cellExtentRad(liteaero::terrain::TerrainLod lod);
+    // Per-LOD index grid side (radians), derived from tile bounds so the index stays
+    // consistent with the build's per-LOD footprint tiling (terrain.md OQ-T-1 / OQ-T-3).
+    // Element l is the max over that LOD's tiles of min(lat_span, lon_span); zero if the LOD
+    // has no tiles.  This replaces the former compiled-in per-LOD cell-side constant.
+    std::array<double, 7> lod_extent_rad_{};
+
+    // Per-LOD tile footprint (m, L0..L6) as recorded in a loaded file header/field; zero for a
+    // LOD with no recorded value.  Echoed on serialize; validated against lod_extent_rad_ on load
+    // (terrain.md OQ-T-1 / OQ-T-3, Alternative 4).
+    std::array<double, 7> lod_footprint_m_{};
+
+    // Rebuild the whole index from a flat tile list: pass 1 computes lod_extent_rad_ from the
+    // tile bounds, pass 2 keys and inserts every tile.  Used by the deserialize paths.
+    void indexTiles(std::vector<liteaero::terrain::TerrainTile> tiles);
+
+    // Validate a recorded per-LOD metric footprint against the bounds-derived grid side
+    // (lod_extent_rad_).  Throws std::runtime_error on a gross mismatch; skips LODs with a zero
+    // recorded value or no tiles.  Must be called after indexTiles().
+    void validateStoredFootprints(const std::array<double, 7>& stored_footprint_m) const;
+
+    uint64_t cellKey(double lat_rad, double lon_rad,
+                     liteaero::terrain::TerrainLod lod) const;
+    double   cellExtentRad(liteaero::terrain::TerrainLod lod) const;
 };
 
 } // namespace liteaero::simulation

@@ -1475,10 +1475,11 @@ Each file contains one or more serialized `TerrainTile` objects.  The format is:
 [4 bytes]    magic = 0x4C415354  ("LAST")
 [4 bytes]    format_version = 1   (uint32)
 [4 bytes]    tile_count           (uint32)
-[7*4 bytes]  lod_footprints_m     (7 × float32 — per-LOD tile footprint (m) the build used,
-                                    L0..L6; the load-time spatial index derives its per-LOD grid
-                                    side from these instead of a compiled-in constant — see
-                                    §Internal Spatial Index and OQ-T-1)
+[7*4 bytes]  lod_footprints_m     (7 × float32 — nominal per-LOD tile footprint (m), L0..L6, i.e.
+                                    the build's target grid pitch; realized tiles are ≤ this after
+                                    grid rounding / edge clipping.  The index derives its grid side
+                                    from the tile bounds and cross-checks it against this record —
+                                    see §Internal Spatial Index and OQ-T-1 / OQ-T-3)
 For each tile:
     [4 bytes]   metadata_length (uint32)
     [N bytes]   metadata JSON   (UTF-8, no BOM)
@@ -1775,8 +1776,13 @@ The per-LOD footprint array is stored in every serialized format — the `.las_t
 OQ-T-1 decided) plus new JSON and proto fields — and the `TerrainMesh` spatial index derives each
 LOD's grid side from the **tile bounds** at index-build time (the mechanism works identically for
 every construction path, including `addCell`). On any load that carries both tiles and a stored
-array, the derived footprint is compared against the stored value and a mismatch beyond tolerance
-is a hard load-time error. Where no array is stored (an `addCell`-built mesh with no explicit
+array, the bounds-derived footprint is cross-checked against the record. The recorded value is the
+build's **nominal** per-LOD grid pitch; because the build rounds the region into an integer number
+of cells (cell size = region / ceil(region / footprint)) and clips edge tiles, the realized tiles
+are always **≤** the nominal — for a small region a coarse LOD's tiles can be far smaller than its
+nominal footprint, which is expected. The check therefore flags only the impossible/corrupt
+direction — realized tiles materially **larger** than the record — as a hard load-time error. Where
+no array is stored (an `addCell`-built mesh with no explicit
 setter call) the derived value is used directly, so the `addCell` path needs no mandatory setter
 and the existing `TerrainMesh_test.cpp` cases are unaffected. This keeps the OQ-T-1 `.las_terrain`
 header field as decided, makes footprint drift a loud load-time failure rather than silent

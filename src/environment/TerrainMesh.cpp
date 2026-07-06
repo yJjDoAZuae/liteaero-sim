@@ -3,11 +3,14 @@
 #include "geodesy/Wgs84.hpp"
 #include "liteaerosim.pb.h"
 #include "tiny_gltf.h"
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace liteaero::simulation {
 
@@ -21,33 +24,83 @@ using namespace liteaero::terrain;
 // liteaero::geodesy module — see include/geodesy/Wgs84.hpp.  Only the cell-
 // extent constants specific to TerrainMesh remain here.
 // ---------------------------------------------------------------------------
-static constexpr double kEarthMeanR   = 6371000.0;        // mean radius for cell extent (m)
 static constexpr int    kLodCount     = 7;
+static constexpr double kEarthRadiusM = 6371000.0;  // mean radius, for the footprint-record cross-check
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// Metric cell side per LOD level (m).  L4–L6 share 100 km.
-static constexpr double kCellSideM[kLodCount] = {
-    1000.0,    // L0
-    3000.0,    // L1
-    10000.0,   // L2
-    30000.0,   // L3
-    100000.0,  // L4
-    100000.0,  // L5
-    100000.0,  // L6
-};
-
-double TerrainMesh::cellExtentRad(TerrainLod lod) {
-    return kCellSideM[static_cast<int>(lod)] / kEarthMeanR;
+// Single-tile index grid side (rad): the smaller of the tile's two angular spans.  Using the
+// smaller span keeps the packed (lat_idx, lon_idx) key injective in both dimensions — a coarser
+// grid could map two distinct tiles to one bucket in the finer dimension.
+static double tileExtentRad(const GeodeticAABB& b) {
+    const double lat_span = b.lat_max_rad - b.lat_min_rad;
+    const double lon_span = b.lon_max_rad - b.lon_min_rad;
+    return std::min(lat_span, lon_span);
 }
 
-uint64_t TerrainMesh::cellKey(double lat_rad, double lon_rad, TerrainLod lod) {
+double TerrainMesh::cellExtentRad(TerrainLod lod) const {
+    return lod_extent_rad_[static_cast<int>(lod)];
+}
+
+uint64_t TerrainMesh::cellKey(double lat_rad, double lon_rad, TerrainLod lod) const {
     const double extent = cellExtentRad(lod);
     const auto lat_idx = static_cast<uint64_t>(std::floor((lat_rad + M_PI / 2.0) / extent));
     const auto lon_idx = static_cast<uint64_t>(std::floor((lon_rad + M_PI)       / extent));
     return (lat_idx << 48) | (lon_idx << 32) | (static_cast<uint64_t>(static_cast<int>(lod)) << 16);
+}
+
+// Rebuild the index from a flat tile list.  Pass 1 sets the per-LOD grid side to the largest
+// single-tile extent at that LOD (so a clipped boundary tile does not shrink the grid below the
+// true spacing); pass 2 keys and inserts every tile.  This is the OQ-T-1 / OQ-T-3 derive-from-
+// bounds mechanism that replaces the former compiled-in per-LOD cell-side constant.
+void TerrainMesh::indexTiles(std::vector<TerrainTile> tiles) {
+    cells_.clear();
+    lod_extent_rad_.fill(0.0);
+    for (const auto& t : tiles) {
+        double& slot = lod_extent_rad_[static_cast<int>(t.lod())];
+        slot = std::max(slot, tileExtentRad(t.bounds()));
+    }
+    for (auto& t : tiles) {
+        const GeodeticAABB& b = t.bounds();
+        const double lat_c = (b.lat_min_rad + b.lat_max_rad) * 0.5;
+        const double lon_c = (b.lon_min_rad + b.lon_max_rad) * 0.5;
+        const uint64_t key = cellKey(lat_c, lon_c, t.lod());
+        auto it = cells_.find(key);
+        if (it != cells_.end()) {
+            it->second.addTile(std::move(t));
+        } else {
+            TerrainCell cell;
+            cell.addTile(std::move(t));
+            cells_[key] = std::move(cell);
+        }
+    }
+}
+
+// Cross-check a recorded per-LOD metric footprint against the bounds-derived grid side (OQ-T-3
+// Alternative 4).  The recorded value is the build's NOMINAL per-LOD grid pitch; the build rounds
+// the region into an integer number of cells (cell = region / ceil(region / footprint)) and clips
+// edge tiles, so the realized tiles are ALWAYS ≤ the nominal — for a small region a coarse LOD's
+// tiles can be much smaller than its nominal footprint, and that is expected, not an error.  The
+// derived extent is min(lat_span, lon_span) ≈ footprint / R, so extent * R recovers the realized
+// footprint in meters (to within the mean-vs-meridian radius, ~0.3%).  We therefore flag only the
+// impossible/corrupt direction: tiles materially LARGER than the record, which means the record
+// does not describe these tiles.  LODs with a zero record or no tiles are skipped.
+void TerrainMesh::validateStoredFootprints(const std::array<double, 7>& stored_footprint_m) const {
+    constexpr double kTolerance = 0.25;  // 25% headroom over the nominal for the radius approximation
+    for (int l = 0; l < kLodCount; ++l) {
+        const double stored     = stored_footprint_m[l];
+        const double extent_rad = lod_extent_rad_[l];
+        if (stored <= 0.0 || extent_rad <= 0.0) continue;
+        const double derived_m = extent_rad * kEarthRadiusM;
+        if (derived_m > stored * (1.0 + kTolerance)) {
+            throw std::runtime_error(
+                "TerrainMesh: tiles at LOD " + std::to_string(l) + " (~" + std::to_string(derived_m) +
+                " m) are larger than the recorded per-LOD footprint (" + std::to_string(stored) +
+                " m); the footprint record does not describe these tiles");
+        }
+    }
 }
 
 // Geodesy helpers now live in liteaero::geodesy (see include/geodesy/Wgs84.hpp).
@@ -71,9 +124,13 @@ static std::optional<TerrainLod> selectTileLod(const TerrainCell& cell, TerrainL
 
 void TerrainMesh::addCell(TerrainCell cell) {
     const GeodeticAABB& b = cell.bounds();
+    const TerrainLod lod = cell.finestAvailableLod();
+    // Derive this LOD's grid side from the cell's own bounds (OQ-T-1 / OQ-T-3), widening the
+    // per-LOD extent if this is the largest tile seen at that LOD so far.
+    double& slot = lod_extent_rad_[static_cast<int>(lod)];
+    slot = std::max(slot, tileExtentRad(b));
     const double lat_c = (b.lat_min_rad + b.lat_max_rad) * 0.5;
     const double lon_c = (b.lon_min_rad + b.lon_max_rad) * 0.5;
-    const TerrainLod lod = cell.finestAvailableLod();
     cells_[cellKey(lat_c, lon_c, lod)] = std::move(cell);
 }
 
@@ -448,6 +505,7 @@ nlohmann::json TerrainMesh::serializeJson() const {
         }
     }
     j["tiles"] = std::move(tiles_array);
+    j["lod_footprints_m"] = lod_footprint_m_;  // per-LOD footprint record (OQ-T-3 Alt 4)
     return j;
 }
 
@@ -455,28 +513,21 @@ void TerrainMesh::deserializeJson(const nlohmann::json& j) {
     if (j.at("schema_version").get<int>() != 1) {
         throw std::runtime_error("TerrainMesh::deserializeJson: unsupported schema_version");
     }
-    cells_.clear();
+    std::vector<TerrainTile> tiles;
     for (const auto& jt : j.at("tiles")) {
-        TerrainTile tile = TerrainTile::deserializeJson(jt);
-        const GeodeticAABB& b = tile.bounds();
-        const TerrainLod lod = tile.lod();
+        tiles.push_back(TerrainTile::deserializeJson(jt));
+    }
+    indexTiles(std::move(tiles));
 
-        // Find or create a cell for this tile's bounds centroid at this LOD.
-        const double lat_c = (b.lat_min_rad + b.lat_max_rad) * 0.5;
-        const double lon_c = (b.lon_min_rad + b.lon_max_rad) * 0.5;
-        const uint64_t key = cellKey(lat_c, lon_c, lod);
-
-        // If an existing cell with compatible bounds exists, add the tile to it.
-        // Otherwise create a new cell.
-        auto it = cells_.find(key);
-        if (it != cells_.end()) {
-            it->second.addTile(std::move(tile));
-        } else {
-            TerrainCell cell;
-            cell.addTile(std::move(tile));
-            cells_[key] = std::move(cell);
+    std::array<double, 7> stored{};
+    if (j.contains("lod_footprints_m")) {
+        const auto& arr = j.at("lod_footprints_m");
+        for (int l = 0; l < kLodCount && l < static_cast<int>(arr.size()); ++l) {
+            stored[l] = arr[l].get<double>();
         }
     }
+    lod_footprint_m_ = stored;
+    validateStoredFootprints(stored);
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +547,9 @@ std::vector<uint8_t> TerrainMesh::serializeProto() const {
             *proto.add_tiles() = tile_proto;
         }
     }
+    for (int l = 0; l < kLodCount; ++l) {
+        proto.add_lod_footprints_m(static_cast<float>(lod_footprint_m_[l]));
+    }
     std::string buf;
     proto.SerializeToString(&buf);
     return {buf.begin(), buf.end()};
@@ -509,28 +563,20 @@ void TerrainMesh::deserializeProto(const std::vector<uint8_t>& bytes) {
     if (proto.schema_version() != 1) {
         throw std::runtime_error("TerrainMesh::deserializeProto: unsupported schema_version");
     }
-    cells_.clear();
+    std::vector<TerrainTile> tiles;
     for (const auto& tile_proto : proto.tiles()) {
         std::string buf;
         tile_proto.SerializeToString(&buf);
         const std::vector<uint8_t> tile_bytes(buf.begin(), buf.end());
-        TerrainTile tile = TerrainTile::deserializeProto(tile_bytes);
-
-        const GeodeticAABB& b = tile.bounds();
-        const TerrainLod lod = tile.lod();
-        const double lat_c = (b.lat_min_rad + b.lat_max_rad) * 0.5;
-        const double lon_c = (b.lon_min_rad + b.lon_max_rad) * 0.5;
-        const uint64_t key = cellKey(lat_c, lon_c, lod);
-
-        auto it = cells_.find(key);
-        if (it != cells_.end()) {
-            it->second.addTile(std::move(tile));
-        } else {
-            TerrainCell cell;
-            cell.addTile(std::move(tile));
-            cells_[key] = std::move(cell);
-        }
+        tiles.push_back(TerrainTile::deserializeProto(tile_bytes));
     }
+    indexTiles(std::move(tiles));
+
+    std::array<double, 7> stored{};
+    const int n = std::min(kLodCount, proto.lod_footprints_m_size());
+    for (int l = 0; l < n; ++l) stored[l] = proto.lod_footprints_m(l);
+    lod_footprint_m_ = stored;
+    validateStoredFootprints(stored);
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +640,8 @@ std::vector<uint8_t> TerrainMesh::serializeLasTerrain() const {
     writeU32LE(buf, kMagic);
     writeU32LE(buf, kFormatVersion);
     writeU32LE(buf, tile_count);
+    // Per-LOD footprint record (7 × float32, L0..L6); echoed from what was loaded, else zeros.
+    for (int l = 0; l < kLodCount; ++l) writeF32LE(buf, static_cast<float>(lod_footprint_m_[l]));
 
     for (const auto& [key, cell] : cells_) {
         for (int lod_i = 0; lod_i < kLodCount; ++lod_i) {
@@ -646,7 +694,7 @@ std::vector<uint8_t> TerrainMesh::serializeLasTerrain() const {
 }
 
 void TerrainMesh::deserializeLasTerrain(const std::vector<uint8_t>& data) {
-    if (data.size() < 12) {
+    if (data.size() < 40) {
         throw std::runtime_error("TerrainMesh::deserializeLasTerrain: data too short");
     }
     const uint8_t* p = data.data();
@@ -661,11 +709,29 @@ void TerrainMesh::deserializeLasTerrain(const std::vector<uint8_t>& data) {
         throw std::runtime_error("TerrainMesh::deserializeLasTerrain: unsupported format_version");
     }
 
-    cells_.clear();
+    // Per-LOD footprint record (7 × float32, L0..L6).
+    std::array<double, 7> stored_footprint_m{};
+    for (int l = 0; l < kLodCount; ++l) { stored_footprint_m[l] = readF32LE(p); p += 4; }
+
+    // Bounds guard: reject a truncated or misaligned buffer with a clear error instead of reading
+    // past the end.  A file written before the per-LOD footprint header (12-byte header) trips this.
+    const uint8_t* const end = data.data() + data.size();
+    auto require = [&](std::size_t n) {
+        if (static_cast<std::size_t>(end - p) < n) {
+            throw std::runtime_error(
+                "TerrainMesh::deserializeLasTerrain: truncated or malformed data — the file may "
+                "predate the per-LOD footprint header; regenerate it with build_terrain.py");
+        }
+    };
+
+    std::vector<TerrainTile> tiles;
+    tiles.reserve(n_tiles);
 
     for (uint32_t ti = 0; ti < n_tiles; ++ti) {
         // Metadata JSON.
+        require(4);
         const uint32_t meta_len = readU32LE(p); p += 4;
+        require(meta_len);
         const std::string meta_str(reinterpret_cast<const char*>(p), meta_len);
         p += meta_len;
         const nlohmann::json meta = nlohmann::json::parse(meta_str);
@@ -688,7 +754,9 @@ void TerrainMesh::deserializeLasTerrain(const std::vector<uint8_t>& data) {
         };
 
         // Vertices.
+        require(4);
         const uint32_t n_verts = readU32LE(p);  p += 4;
+        require(static_cast<std::size_t>(n_verts) * 12);
         std::vector<TerrainVertex> vertices;
         vertices.reserve(n_verts);
         for (uint32_t vi = 0; vi < n_verts; ++vi) {
@@ -699,7 +767,9 @@ void TerrainMesh::deserializeLasTerrain(const std::vector<uint8_t>& data) {
         }
 
         // Facets.
+        require(4);
         const uint32_t n_facets = readU32LE(p); p += 4;
+        require(static_cast<std::size_t>(n_facets) * 15);
         std::vector<TerrainFacet> facets;
         facets.reserve(n_facets);
         for (uint32_t fi = 0; fi < n_facets; ++fi) {
@@ -713,20 +783,12 @@ void TerrainMesh::deserializeLasTerrain(const std::vector<uint8_t>& data) {
             facets.push_back(f);
         }
 
-        TerrainTile tile(lod, centroid, bounds, std::move(vertices), std::move(facets));
-        const double lat_c = (bounds.lat_min_rad + bounds.lat_max_rad) * 0.5;
-        const double lon_c = (bounds.lon_min_rad + bounds.lon_max_rad) * 0.5;
-        const uint64_t key = cellKey(lat_c, lon_c, lod);
-
-        auto it = cells_.find(key);
-        if (it != cells_.end()) {
-            it->second.addTile(std::move(tile));
-        } else {
-            TerrainCell cell;
-            cell.addTile(std::move(tile));
-            cells_[key] = std::move(cell);
-        }
+        tiles.emplace_back(lod, centroid, bounds, std::move(vertices), std::move(facets));
     }
+
+    indexTiles(std::move(tiles));
+    lod_footprint_m_ = stored_footprint_m;
+    validateStoredFootprints(stored_footprint_m);
 }
 
 // ---------------------------------------------------------------------------

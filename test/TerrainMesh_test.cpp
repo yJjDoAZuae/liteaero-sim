@@ -64,6 +64,52 @@ TEST(TerrainMeshTest, CellAt_OutsideAllCells_ReturnsNullptr) {
     EXPECT_EQ(mesh.cellAt(1.0, 1.0), nullptr);
 }
 
+// Regression for the §Internal Spatial Index defect (OQ-T-1): a dense block of fine L0 tiles
+// whose footprint (~286 m ≈ 4.5e-5 rad) is far below the legacy 1 km index cell must not
+// collide in the index.  A 3×3 block spans ~9e-5 rad, well inside one legacy 1 km bucket, so
+// under the old fixed grid the tiles overwrote one another and were lost.  With per-LOD
+// footprint keying derived from tile bounds, every tile is retained and each centroid returns
+// its own height.
+TEST(TerrainMeshTest, DenseFineL0Tiles_AllRetained_NoBucketCollision) {
+    constexpr double f = 4.5e-5;        // ~286 m footprint in radians
+    constexpr double base_lat = 0.6;    // near KSBA — keeps the packed index within range
+    constexpr double base_lon = -2.09;
+
+    TerrainMesh mesh;
+    int h = 0;
+    for (int i = 0; i < 3; ++i) {
+        for (int k = 0; k < 3; ++k, ++h) {
+            const GeodeticPoint c{base_lat + i * f, base_lon + k * f, 0.f};
+            const GeodeticAABB bounds{
+                c.latitude_rad  - f / 2, c.latitude_rad  + f / 2,
+                c.longitude_rad - f / 2, c.longitude_rad + f / 2,
+                -1.f, 1000.f,
+            };
+            const float height = static_cast<float>(100 + h);  // distinct, flat per tile
+            std::vector<TerrainVertex> verts{
+                { 0.f,  0.f, height},
+                {10.f,  0.f, height},
+                { 0.f, 10.f, height},
+            };
+            std::vector<TerrainFacet> facets{{{0, 1, 2}, {128, 128, 128}}};
+            TerrainCell cell;
+            cell.addTile(TerrainTile(TerrainLod::L0_Finest, c, bounds,
+                                     std::move(verts), std::move(facets)));
+            mesh.addCell(std::move(cell));
+        }
+    }
+
+    h = 0;
+    for (int i = 0; i < 3; ++i) {
+        for (int k = 0; k < 3; ++k, ++h) {
+            const double lat = base_lat + i * f;
+            const double lon = base_lon + k * f;
+            EXPECT_NEAR(mesh.elevation_m(lat, lon), 100.0 + h, 0.5)
+                << "tile (" << i << "," << k << ") lost to an index bucket collision";
+        }
+    }
+}
+
 // elevation_m at centroid lat/lon: query maps to ENU (0,0) = V0 → height = 100 m.
 TEST(TerrainMeshTest, ElevationM_AtCentroid_ReturnsVertexHeight) {
     const TerrainMesh mesh = makeEquatorMesh();
@@ -346,6 +392,69 @@ TEST(TerrainMeshTest, TerrainTile_LasTerrain_BinaryRoundTrip) {
     ASSERT_EQ(tile.vertices().size(), 3u);
     EXPECT_NEAR(tile.vertices()[0].up_m, 100.f, 1e-4f);
     EXPECT_NEAR(tile.vertices()[1].east_m, 1000.f, 1e-4f);
+}
+
+// .las_terrain header footprint record is validated against the tile geometry on load
+// (OQ-T-3 Alternative 4).  The record is the nominal grid pitch, so realized tiles are always
+// ≤ it: a record ≥ the realized footprint loads (coarse LOD over a small region), a record that
+// claims tiles are finer than they actually are (tiles larger than the record) is rejected, and
+// an all-zero record ("not recorded") is skipped.
+TEST(TerrainMeshTest, LasTerrain_FootprintRecord_ValidatedAgainstGeometry) {
+    // One L0 tile with a ~0.001 rad footprint → bounds-derived extent ≈ 6371 m.
+    const GeodeticPoint c{0.5, 1.0, 0.f};
+    constexpr double f = 0.001;
+    const GeodeticAABB bounds{
+        c.latitude_rad - f / 2, c.latitude_rad + f / 2,
+        c.longitude_rad - f / 2, c.longitude_rad + f / 2, 0.f, 10.f,
+    };
+    std::vector<TerrainVertex> verts{{0.f, 0.f, 5.f}, {10.f, 0.f, 5.f}, {0.f, 10.f, 5.f}};
+    std::vector<TerrainFacet> facets{{{0, 1, 2}, {128, 128, 128}}};
+    TerrainCell cell;
+    cell.addTile(TerrainTile(TerrainLod::L0_Finest, c, bounds, std::move(verts), std::move(facets)));
+    TerrainMesh mesh;
+    mesh.addCell(std::move(cell));
+
+    std::vector<uint8_t> buf = mesh.serializeLasTerrain();  // footprints written as zeros
+    ASSERT_GE(buf.size(), 40u);
+
+    auto patch_l0_footprint = [](std::vector<uint8_t>& b, float meters) {
+        std::memcpy(b.data() + 12, &meters, sizeof(float));  // L0 footprint at header offset 12
+    };
+
+    {   // Nominal record ≥ realized footprint (~6371 m) → loads.
+        std::vector<uint8_t> ok = buf;
+        patch_l0_footprint(ok, 20000.0f);  // nominal larger than realized is expected/allowed
+        TerrainMesh m;
+        EXPECT_NO_THROW(m.deserializeLasTerrain(ok));
+    }
+    {   // Record claims tiles finer than they are (tiles larger than the record) → hard error.
+        std::vector<uint8_t> bad = buf;
+        patch_l0_footprint(bad, 1000.0f);  // realized ~6371 m >> recorded 1000 m
+        TerrainMesh m;
+        EXPECT_THROW(m.deserializeLasTerrain(bad), std::runtime_error);
+    }
+    {   // All-zero record → not validated, loads.
+        TerrainMesh m;
+        EXPECT_NO_THROW(m.deserializeLasTerrain(buf));
+    }
+}
+
+// A truncated (or old-header) .las_terrain is rejected with an exception, not a crash — the
+// bounds guard prevents reads past the end of a malformed buffer.
+TEST(TerrainMeshTest, LasTerrain_TruncatedData_ThrowsNotCrash) {
+    TerrainMesh mesh;
+    {
+        GeodeticPoint c{0.0, 0.0, 0.f};
+        TerrainCell cell;
+        cell.addTile(makeTriangleTile(TerrainLod::L0_Finest, c));
+        mesh.addCell(std::move(cell));
+    }
+    const std::vector<uint8_t> buf = mesh.serializeLasTerrain();
+    ASSERT_GT(buf.size(), 44u);
+    // Valid 40-byte header + tile_count, but the tile payload is cut off.
+    const std::vector<uint8_t> truncated(buf.begin(), buf.begin() + 44);
+    TerrainMesh m;
+    EXPECT_THROW(m.deserializeLasTerrain(truncated), std::runtime_error);
 }
 
 // JSON schema version mismatch throws std::runtime_error.

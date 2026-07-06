@@ -472,7 +472,9 @@ def build_terrain(
     # -------------------------------------------------------------------
     lt_path = lt_dir / "terrain.las_terrain"
     _log.info("%s: writing .las_terrain  %d tiles ...", dataset_name, len(all_tiles))
-    write_las_terrain(lt_path, all_tiles)
+    # Record the per-LOD footprints in the header so the C++ index can validate its
+    # bounds-derived grid side against the build (terrain.md OQ-T-1 / OQ-T-3).
+    write_las_terrain(lt_path, all_tiles, lod_footprints_m=list(footprints_m))
 
     # -------------------------------------------------------------------
     # Step 5: Display tiles = every tile.  Uniform-footprint tiling exports all LODs

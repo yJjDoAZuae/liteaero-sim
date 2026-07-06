@@ -309,8 +309,11 @@ message TerrainTileProto {
 }
 
 message TerrainMeshProto {
-    int32                    schema_version = 1;
-    repeated TerrainTileProto tiles         = 2;
+    int32                    schema_version   = 1;
+    repeated TerrainTileProto tiles           = 2;
+    // Per-LOD tile footprint (m), L0..L6, recorded for the index to validate its bounds-derived
+    // grid side against (terrain.md OQ-T-1 / OQ-T-3).  Empty or all-zero means "not recorded".
+    repeated float           lod_footprints_m = 3;
 }
 
 message TerrainMeshState {
