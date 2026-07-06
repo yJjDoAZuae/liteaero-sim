@@ -135,15 +135,18 @@ scalars.  Callers need no knowledge of the internal local-grid encoding.
 
 ## Level-of-Detail (LOD) System
 
-> **⚠ Superseded model — see [OQ-T-2](#oq-t-2--reconcile-the-nested-slant-range-lod-model-with-the-per-lod-screen-space-error-footprints).**
-> The fixed target-spacing table, nested-cell sizing, and slant-range selection rule in this
-> section describe the LOD model as originally designed. The offline build pipeline
-> (`build_terrain.py` + `lod_policy.py`) no longer follows it: each LOD is now tiled on its
-> own grid at a **per-LOD footprint** derived from a screen-space-error policy
-> (footprints `[286, 668, 1909, 6682, 19092, 66822, 222739] m`; see
-> [terrain_lod_rendering.md](terrain_lod_rendering.md), OQ-LS-22 Alt 3). These sections are
-> retained for reference but must not be treated as authoritative for the tiling the physics
-> mesh actually loads. Do not write new code against the tables below until OQ-T-2 is resolved.
+> **⚠ Superseded design — resolved by [OQ-T-2](#oq-t-2--reconcile-the-nested-slant-range-lod-model-with-the-per-lod-screen-space-error-footprints).**
+> The fixed target-spacing table, nested-cell sizing, and the slant-range selection rule and
+> hysteresis below describe an original design in which the terrain owned LOD-selection policy.
+> That is **no longer the design**: the terrain subsystem owns no LOD-selection error model or
+> threshold table. It stores per-LOD tiles — each LOD tiled at its own screen-space-error-derived
+> footprint by `build_terrain.py` + `lod_policy.py`, footprints
+> `[286, 668, 1909, 6682, 19092, 66822, 222739] m` (see
+> [terrain_lod_rendering.md](terrain_lod_rendering.md), OQ-LS-22 Alt 3) — and answers a
+> **finest-available** query; any coarser selection is the **consumer's** responsibility, using
+> the consumer's own error model. The target-spacing / slant-range-band tables, the slant-range
+> rule, its hysteresis, and `selectLodBySlantRange` / `LodSelector` are retained below only as
+> historical context and are **not authoritative**. Do not write new code against them.
 
 ### LOD Levels and Target Spacings
 
@@ -1469,9 +1472,13 @@ def export_gltf(
 Each file contains one or more serialized `TerrainTile` objects.  The format is:
 
 ```
-[4 bytes]   magic = 0x4C415354  ("LAST")
-[4 bytes]   format_version = 1  (uint32)
-[4 bytes]   tile_count          (uint32)
+[4 bytes]    magic = 0x4C415354  ("LAST")
+[4 bytes]    format_version = 1   (uint32)
+[4 bytes]    tile_count           (uint32)
+[7*4 bytes]  lod_footprints_m     (7 × float32 — per-LOD tile footprint (m) the build used,
+                                    L0..L6; the load-time spatial index derives its per-LOD grid
+                                    side from these instead of a compiled-in constant — see
+                                    §Internal Spatial Index and OQ-T-1)
 For each tile:
     [4 bytes]   metadata_length (uint32)
     [N bytes]   metadata JSON   (UTF-8, no BOM)
@@ -1480,6 +1487,13 @@ For each tile:
     [4 bytes]   facet_count     (uint32)
     [F*15 bytes] facets         (3×uint32 indices + 3×uint8 RGB = 15 bytes each)
 ```
+
+The file-level `lod_footprints_m` array is the single source of truth that keeps the C++
+`TerrainMesh` spatial index consistent with the tiling that produced the file (OQ-T-1
+Alternative 2). `write_las_terrain` writes it from the build's per-LOD footprints
+(`lod_policy.lod_footprints_m()`); `read_las_terrain` and `deserializeLasTerrain()` read it and
+use it as the per-LOD `cellExtent`. `format_version` stays 1 per the initial-development policy;
+files written before this field existed must be regenerated.
 
 The metadata JSON for each tile contains:
 
@@ -1725,9 +1739,11 @@ tiles but the in-memory index retains only a sparse (~8 % at L0) scattering. Whe
 a surviving coarser tile whose kilometre-spanning triangle floats above the true surface on any
 slope — the ~15 m error.
 
-**Scope.** This is a load-time indexing defect only; the `.las_terrain` file on disk is
-complete (all tiles present), so the fix is code-side and needs no re-tile. The design decision
-for the fix is [OQ-T-1](#oq-t-1--physics-terrain-index-and-cell-model-under-per-lod-footprint-tiling).
+**Scope.** This is a load-time indexing defect; the tile geometry on disk is complete and correct
+(all tiles present). The chosen fix ([OQ-T-1](#oq-t-1--physics-terrain-index-and-cell-model-under-per-lod-footprint-tiling)
+Alternative 2) reads the per-LOD footprints from a new `.las_terrain` header field, so the file
+must be regenerated once to add that field — the fast pre-texture-render write step of
+`build_terrain.py` — but no tile geometry is recomputed.
 
 ---
 
@@ -1749,14 +1765,135 @@ for the fix is [OQ-T-1](#oq-t-1--physics-terrain-index-and-cell-model-under-per-
 
 ## Open Questions
 
-| ID | Summary | Status |
-| ---- | --------- | -------- |
-| OQ-T-1 | Physics `TerrainMesh` index and cell model under per-LOD footprint tiling | **Blocking** — ground-contact correctness |
-| OQ-T-2 | Reconcile the nested slant-range LOD model with the per-LOD screen-space-error footprints | Not blocking — design debt |
+_No questions are currently open._ All three questions below are resolved; their full problem
+statements and alternatives are retained below for traceability.
+
+### OQ-T-3 — (Implementation planning) Per-LOD footprint source for the non-`.las_terrain` construction paths
+
+**Resolved — Alternative 4 (store the footprints and enforce agreement with the tile geometry on load).**
+The per-LOD footprint array is stored in every serialized format — the `.las_terrain` header (as
+OQ-T-1 decided) plus new JSON and proto fields — and the `TerrainMesh` spatial index derives each
+LOD's grid side from the **tile bounds** at index-build time (the mechanism works identically for
+every construction path, including `addCell`). On any load that carries both tiles and a stored
+array, the derived footprint is compared against the stored value and a mismatch beyond tolerance
+is a hard load-time error. Where no array is stored (an `addCell`-built mesh with no explicit
+setter call) the derived value is used directly, so the `addCell` path needs no mandatory setter
+and the existing `TerrainMesh_test.cpp` cases are unaffected. This keeps the OQ-T-1 `.las_terrain`
+header field as decided, makes footprint drift a loud load-time failure rather than silent
+corruption, and additionally catches geometry that does not tile on the expected grid. The stored
+field is therefore an explicit, validated record; the derived-from-geometry value is the operative
+source. Cost: both the stored field (three formats) and the geometry derivation are implemented,
+the latter also serving as the validator. Implementation is tracked in
+[terrain_physics_index.md](../implementation/terrain_physics_index.md).
+
+**Problem (retained).**
+The resolution of OQ-T-1 (Alternative 2) makes the C++ `TerrainMesh` spatial index derive its
+per-LOD grid side from a per-LOD footprint array carried in the `.las_terrain` file header,
+replacing the removed compiled-in `kCellSideM` constant. But a `TerrainMesh` can also be
+populated **without** a `.las_terrain` file: through `addCell()` — used directly by the unit
+tests in `TerrainMesh_test.cpp`, which build meshes and then call `elevation_m()`,
+`queryLocalAABB()`, and `querySphere()` — and through `deserializeJson()` / `deserializeProto()`.
+None of these paths carries the `.las_terrain` header, so once `kCellSideM` is removed they have
+no footprint source and the index (which keys every tile through `cellKey`, and therefore needs a
+per-LOD grid side) cannot function. This is an implementation-decomposition question — how the
+non-`.las_terrain` construction paths obtain the footprints — and it lies on the critical path of
+the OQ-T-1 fix: the C++ index change cannot be implemented without breaking existing tests until
+it is answered. It does not reopen the OQ-T-1 design decision, but its resolution may make the
+`.las_terrain` header field of that decision redundant (see Alternative 1).
+
+**Alternatives.**
+
+1. **Derive per-LOD footprints from the loaded tiles' own bounds.** At index-build time compute
+   each LOD's grid side from the geodetic extent of a tile at that LOD; all tiles at one LOD share
+   a footprint on the build grid, so any one tile fixes it. Applies identically to every
+   construction path and needs no stored field in any format.
+   - *Benefits:* one mechanism for all paths; self-describing; no per-format duplication. The
+     footprint is computed from the tile geometry it describes, so it can never disagree with that
+     geometry — the drift that caused the original defect is structurally impossible, not merely
+     avoided. Consistent with the data-driven intent of OQ-T-1.
+   - *Drawbacks:* insertion must know a LOD's footprint at the moment its first tile is keyed,
+     requiring a two-pass load or deferred keying; makes the OQ-T-1 `.las_terrain` header field
+     redundant, so adopting it means revisiting OQ-T-1 to drop that field rather than carry an
+     unused one.
+   - *Prerequisites:* restructure `deserializeLasTerrain()` / `addCell()` insertion so the per-LOD
+     grid side is known at keying time.
+
+2. **Mirror the footprint array into every format, plus a setter for `addCell`.** Add the array
+   to JSON (`serializeJson` / `deserializeJson`) and proto (`TerrainMeshProto`), and add
+   `TerrainMesh::setLodFootprints(...)` (or a constructor parameter) that `addCell` callers and
+   tests set before querying.
+   - *Benefits:* keeps the OQ-T-1 `.las_terrain` header exactly as decided; each format is
+     self-contained.
+   - *Drawbacks:* the footprint array becomes independent state carried in four places — the
+     `.las_terrain` header, a JSON field, a proto field, and an `addCell` setter — with nothing
+     enforcing that the stored value agrees with the tile geometry stored beside it. This
+     re-creates the exact failure mode being fixed: the original defect was a footprint value
+     (`kCellSideM`) held separately from the build and allowed to drift out of sync; this
+     alternative moves that same drift risk from one compiled-in constant to four
+     serialized/settable copies rather than eliminating it. It also duplicates read/write code and
+     a round-trip test per format, and forces every `addCell`-based test to set the array or fail.
+   - *Prerequisites:* extend the JSON and proto schemas; add the setter; update all `addCell`
+     test call sites.
+
+3. **Compiled-in default footprints as a fallback.** Retain a default footprint table used only
+   when no footprints are supplied (`addCell` / JSON / proto without the field), overridden by the
+   `.las_terrain` header when present.
+   - *Benefits:* smallest change to existing tests (they keep working against the default);
+     `.las_terrain` remains authoritative for the simulation.
+   - *Drawbacks:* reintroduces exactly the compiled-in constant whose drift caused the original
+     defect, now as a silent fallback — the highest risk of recurrence.
+   - *Prerequisites:* none beyond the plan items.
+
+4. **Store the footprints and enforce agreement with the tile geometry on load.** Carry the array
+   as in Alternative 2, but on every load that has both tiles and a stored array, derive each LOD's
+   footprint from the tile bounds (the mechanism of Alternative 1) and require the stored value to
+   match within tolerance, failing loudly on mismatch. Where there is no stored array (`addCell`
+   with no setter call), use the derived value.
+   - *Benefits:* keeps an explicit, self-documenting record of the build's intended footprint —
+     and keeps the OQ-T-1 `.las_terrain` header field exactly as decided — while making drift a
+     hard load-time error instead of silent corruption. The same derive-and-compare check also
+     catches geometry that does not tile on the expected grid, a build defect Alternative 1 would
+     silently accept. Fixes the `addCell` gap through the derived fallback.
+   - *Drawbacks:* the most code of any option — it needs both the stored field in each format (as
+     Alternative 2) and the geometry derivation (as Alternative 1), the latter now serving as a
+     validator. In the common case the stored value is redundant with the geometry; it earns its
+     place only as an explicit record and a cross-check.
+   - *Prerequisites:* the format/field work of Alternative 2 plus the derivation of Alternative 1.
+
+**Recommendation.**
+The choice reduces to Alternative 1 versus Alternative 4; Alternatives 2 and 3 are dominated.
+Alternative 4 strictly supersedes Alternative 2 — it adds the load-time enforcement Alternative 2
+lacks — so there is no reason to store the footprints without also validating them against the
+geometry. Alternative 3 is not recommended: it silently reintroduces the drift-prone constant.
+
+Alternative 1 (derive, do not store) is the smallest change and makes drift structurally
+impossible, but it renders the OQ-T-1 `.las_terrain` header field redundant, so choosing it means
+revisiting OQ-T-1 to drop that field. Alternative 4 (store and enforce) keeps the OQ-T-1 header
+field as decided, fixes the `addCell` gap via the derived fallback, and turns any drift or
+unexpected tiling into a loud load-time failure — at the cost of being the most code, since it
+implements both the stored field and the derivation-as-validator. Choose Alternative 1 to minimize
+surface and accept that the files do not record their own footprints; choose Alternative 4 to keep
+an explicit, validated record of build intent and leave OQ-T-1 untouched. Both are sound; the
+decision is whether that explicit, fail-fast record is worth the extra code.
 
 ### OQ-T-1 — Physics terrain index and cell model under per-LOD footprint tiling
 
-**Problem.**
+**Resolved — Alternative 2 (data-driven index from the `.las_terrain` header).**
+The per-LOD footprint array the tiler uses is written into the `.las_terrain` file header (see
+§`.las_terrain` File Format), replacing the compiled-in `kCellSideM` constant, which is removed.
+The index is then always consistent with the tiling that produced the file it loads, eliminating
+the constant-drift class that caused the §Internal Spatial Index defect. **Refined by OQ-T-3
+(Alternative 4):** the operative per-LOD grid side is derived from the tile bounds, and the stored
+header value is validated against that derivation on load, so the header is an explicit,
+cross-checked record rather than the sole source — this is what lets the `addCell` / JSON / proto
+construction paths work without their own header. `schema_version` stays 1 (initial-development
+policy); the Python writer/reader (`las_terrain.py`) and the C++ (de)serialize path are updated
+together. Note the ground-height fix itself needs **no** dataset regeneration — deriving from the
+tile bounds works on the existing file; regeneration is only needed to populate the new stored
+record and exercise its validation (the write is the fast pre-texture-render step of
+`build_terrain.py`). Implementation is tracked in the terrain implementation plan.
+
+**Problem (retained).**
 The C++ `TerrainMesh` indexes terrain tiles in a hash map keyed by the tile centroid quantized
 onto a per-LOD grid. The grid side per level is a compiled-in constant array,
 `kCellSideM = [1000, 3000, 10000, 30000, 100000, 100000, 100000] m`, and the `TerrainCell`
@@ -1828,7 +1965,31 @@ twice.
 
 ### OQ-T-2 — Reconcile the nested slant-range LOD model with the per-LOD screen-space-error footprints
 
-**Problem.**
+**Resolved — terrain owns no LOD-selection policy; selection is consumer-defined.**
+None of the three enumerated alternatives was adopted. The terrain subsystem is defined **not**
+to own any LOD-selection error model or threshold table. Each consumer of terrain data has its
+own definition of the world-space-to-consumer-space error transformation and its own thresholds;
+neither the visualizer's screen-space-error values nor any fixed slant-range table is correct for
+an arbitrary consumer, and future consumers cannot be predicted. The terrain subsystem therefore
+provides only (a) multi-resolution per-LOD tile storage and (b) a finest-available elevation/tile
+query at a point; any coarser selection is the consumer's responsibility, computed with the
+consumer's own model. The single current consumer is the above-ground-level (AGL) query used by
+the landing gear, the body collider, and the AGL display in the visualizer; that consumer uses
+the finest available LOD, which the finest-available query already returns. This is a property of
+the AGL consumer alone and says nothing about any future consumer — a forward-looking scanning
+LIDAR model, for example, would define its own world-space-to-sensor-space error transformation
+and thresholds and select LODs accordingly, which is exactly why the terrain subsystem does not
+bake in a selection policy. Consequently the fixed target-spacing table, the slant-range selection rule and
+its hysteresis dead-band, `TerrainMesh::selectLodBySlantRange()`, and the `LodSelector` helper are
+removed from the terrain subsystem's scope as authoritative policy (retained in §Level-of-Detail
+System only as historical context, behind the superseded-design banner). The viewer's
+screen-space-error policy remains solely the viewer's own concern (see
+[terrain_lod_rendering.md](terrain_lod_rendering.md)). The nested-LOD `TerrainCell` container is
+retained only as per-cell storage grouping, not as a selection mechanism. Fully deleting the
+superseded slant-range prose and the `selectLodBySlantRange` / `LodSelector` code is a follow-up
+cleanup work item, not part of the OQ-T-1 fix.
+
+**Problem (retained).**
 §Level-of-Detail System and §Geographic Cell Size describe a LOD model with fixed target vertex
 spacings (10 m to 10 km), nested cells (one `TerrainCell` holds L0–L6 of one co-located patch),
 and a slant-range selection rule (boundary `r0 = 300 m`, growing by 3× per level). The build
