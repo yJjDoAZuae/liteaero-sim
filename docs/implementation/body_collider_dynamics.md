@@ -39,10 +39,18 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 
 | IP-BC-12 | done | Resolve the envelope-wide post-impact limit cycle (OQ-BC-9 → Alt 1): split the **gear-only** contact reaction from the combined reaction and gate the step-5b n_z apportionment (`nz_relax`) and the OQ-LG-23 settle term on **gear** WoW alone, so body-collider contact no longer feeds the FBW lift-shaping loop (committed 73a9468). Guard: the four-case impact envelope suite + gear regressions. Shallow now passes; **steep/inverted retain a residual** (the lift-into-ground fight + roll-energy injection) addressed by IP-BC-13 + the lift-path decision | — | [body_collider.md OQ-BC-9](../design/body_collider.md) |
 
-| IP-BC-13 | ready | Inelastic rotational velocity-arrest for the body collider (OQ-BC-10 → Alt 1): replace the collider's share of the compliant §5c $\Delta\theta$ channel with a dissipative arrest of the contact-driving body angular rate (rotational analog of §5a; `max(0,·)` floor, no rebound work, **derived** coefficient with a CFL bound). Keep the gear's compliant §5c channel unchanged (per-source split already in place). Guard: a new wingtip-strike roll-energy regression (level strike must lose roll energy) + the impact-envelope and landing-gear regressions | — | [body_collider.md OQ-BC-10](../design/body_collider.md) |
+| IP-BC-13 | superseded (OQ-BC-12) | Inelastic §5c rotational velocity-arrest (OQ-BC-10 → Alt 1). **Prototyped and shown ineffective** for the reported gear-landing catapult: it cut the launch but left the 177° roll-over, because the driver is the §5a CM-arresting force + the missing rotational DOF, not the §5c moment channel (OQ-BC-12). Test scaffold retained (roll metrics + `WingtipStrike` + wide-wing config + the `GearLanding_WingtipGraze` reproduction). | — | [body_collider.md OQ-BC-10](../design/body_collider.md) |
+| IP-BC-14 | superseded (OQ-BC-12) | Scoped aero-lift suppression for the steep/inverted pitch limit cycle. Subsumed: the lift-fight is a facet of the missing rotational DOF (OQ-BC-12); the suppression is at most a velocity-slaved patch. | — | [body_collider.md OQ-BC-11](../design/body_collider.md) |
+| IP-BC-15 | blocked (OQ-BC-12) | Implement the OQ-BC-12 resolution (Alt A rigid-body contact rotation, or Alt B velocity-slaved pivot-rate approximation). Guard: the `GearLanding_WingtipGraze_DoesNotCatapultOrLaunch` reproduction + the impact-envelope + the full landing-gear regressions | — | [body_collider.md OQ-BC-12](../design/body_collider.md) |
 
 > **IP-BC-11 reason:** OQ-BC-8 is resolved (Alt 1 — hysteretic geometric latch, derived band). Ordered
 > after IP-BC-12, which removes the control-loop WoW gate, so the latch lands as reporting-only.
+>
+> **IP-BC-14 blocked reason:** OQ-BC-11 (whether to adopt the scoped aero-lift suppression) is
+> unresolved. The steep/inverted pitch limit cycle is the lift-into-ground fight, not the collider
+> moment channel — an IP-BC-13 rotational-arrest prototype shifted only the reversal count and left the
+> pitch p2p unchanged (10.5° steep / 6.9° inverted), confirming the oscillator is the lift path.
+> Resolve OQ-BC-11 before implementing.
 >
 > **IP-BC-12 (the real defect, OQ-BC-9 → Alt 1):** the body-collider post-impact behavior is a non-physical
 > limit cycle across most of the impact envelope — shallow (581 pitch reversals / 584 steps, 5.8° p2p),

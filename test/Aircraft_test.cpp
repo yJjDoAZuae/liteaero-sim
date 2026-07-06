@@ -591,6 +591,73 @@ static nlohmann::json addBodyCollider(nlohmann::json config) {
     return config;
 }
 
+// The small-UAS flight body collider (configs/small_uas_ksba_flight.json): a wide wing box whose
+// lowest corner sits only ~0.035 m below the CG but spans ±1.38 m, so at a few degrees of roll —
+// while the gear compresses on a normal touchdown — the wingtip corner reaches the runway.
+static nlohmann::json addFlightBodyCollider(nlohmann::json config) {
+    config["body_collider"] = {{"volumes", nlohmann::json::array({
+        {{"name", "fuselage"}, {"half_extents_body_m", {0.45f, 0.08f, 0.07f}},
+         {"center_offset_body_m", {0.0f, 0.0f, 0.04f}}},
+        {{"name", "wing"}, {"half_extents_body_m", {0.08f, 1.38f, 0.015f}},
+         {"center_offset_body_m", {0.05f, 0.0f, 0.02f}}},
+        {{"name", "horizontal_tail"}, {"half_extents_body_m", {0.05f, 0.35f, 0.01f}},
+         {"center_offset_body_m", {-0.5f, 0.0f, 0.01f}}},
+    })}};
+    return config;
+}
+
+// The small-UAS flight landing gear (nose + two mains); mains put the CG ~0.23 m above the runway.
+static nlohmann::json addFlightLandingGear(nlohmann::json config) {
+    auto wheel = [](float x, float y, bool steer, bool brake) {
+        return nlohmann::json{
+            {"attach_point_body_m", {x, y, 0.15f}}, {"travel_axis_body", {0.0f, 0.0f, 1.0f}},
+            {"spring_stiffness_npm", brake ? 800.0f : 600.0f},
+            {"damping_compression_nspm", brake ? 42.0f : 17.0f},
+            {"damping_extension_nspm", brake ? 8.0f : 3.0f},
+            {"orifice_damping_compression_ns2pm2", brake ? 27.0f : 6.0f},
+            {"orifice_damping_extension_ns2pm2", brake ? 5.0f : 1.0f},
+            {"spring_nonlinearity_nd", 1.5f}, {"preload_n", 0.0f},
+            {"travel_max_m", brake ? 0.1f : 0.08f}, {"tyre_radius_m", brake ? 0.08f : 0.06f},
+            {"tyre_cornering_stiffness_npm", brake ? 3000.0f : 2000.0f},
+            {"tyre_longitudinal_stiffness_npm", brake ? 4000.0f : 3000.0f},
+            {"rolling_resistance_nd", 0.02f}, {"is_steerable", steer}, {"has_brake", brake},
+        };
+    };
+    config["landing_gear"] = {{"substeps", 4}, {"wheel_units", nlohmann::json::array({
+        wheel(0.25f, 0.0f, true, false),    // nose
+        wheel(-0.05f, -0.3f, false, true),  // left main
+        wheel(-0.05f, 0.3f, false, true),   // right main
+    })}};
+    return config;
+}
+
+// Override makeConfig()'s airliner mass/geometry with the small-UAS flight values so the wing-box
+// catapult (low roll inertia × 1.38 m lever arm) reproduces (OQ-BC-10 / IP-BC-13).
+static nlohmann::json makeSmallUasConfig() {
+    auto c = makeConfig();
+    c["inertia"] = {{"mass_kg", 5.0}, {"Ixx_kgm2", 0.08}, {"Iyy_kgm2", 0.15}, {"Izz_kgm2", 0.22}};
+    c["aircraft"]["S_ref_m2"]      = 1.021;
+    c["aircraft"]["roll_rate_wn_rad_s"] = 30.0;
+    c["airframe"]["tas_max_mps"]   = 35.0;
+    c["lift_curve"]["cl_max"]      = 1.6;
+    c["lift_curve"]["cl_min"]      = -0.8;
+    return c;
+}
+
+// A wide wing box (1.38 m half-span) so a small roll puts one wingtip corner far below the belly —
+// the long lever arm that OQ-BC-10 shows catapults the airframe in roll through the compliant §5c
+// channel. Used by the wingtip-strike roll-energy regression (IP-BC-13).
+static nlohmann::json addWideWingCollider(nlohmann::json config) {
+    config["body_collider"] = {{"volumes", nlohmann::json::array({
+        {
+            {"name",                 "wing"},
+            {"half_extents_body_m",  {0.5f, 1.38f, 0.2f}},
+            {"center_offset_body_m", {0.0f, 0.0f, 0.0f}}
+        }
+    })}};
+    return config;
+}
+
 // Post-contact dynamics metrics for body-collider impact scenarios. A crash backstop must,
 // at ANY impact angle/speed: stay finite, arrest the descent, not sink through terrain, and
 // settle without a high-frequency attitude/WoW limit cycle.
@@ -603,6 +670,10 @@ struct BodyImpactMetrics {
     float min_agl_m           = 0.f; // deepest CG-AGL excursion (transient tunneling proxy)
     float final_agl_m         = 0.f; // settled CG altitude above terrain (non-penetration)
     float roll_at_contact_deg = 0.f; // |roll| at first contact (for the inverted case)
+    int   roll_reversals      = 0;   // direction changes of roll after contact (roll limit-cycle proxy)
+    float late_roll_p2p_deg   = 0.f; // peak-to-peak roll in the settled window
+    float peak_roll_gain_deg  = 0.f; // max |roll| after contact minus |roll| at contact (energy proxy):
+                                     // a wingtip strike that ADDS roll energy drives this positive
     bool  all_finite          = true;
     int   steps_after_contact = 0;
 };
@@ -615,11 +686,13 @@ static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_m
                                                float altitude_m, float sim_time_s,
                                                float contact_agl_thresh_m,
                                                float roll_rate_rps = 0.f,
-                                               float roll_until_s  = 0.f) {
+                                               float roll_until_s  = 0.f,
+                                               nlohmann::json (*add_collider)(nlohmann::json)
+                                                   = addBodyCollider) {
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
 
-    auto cfg = addBodyCollider(makeConfig());
+    auto cfg = add_collider(makeConfig());
     cfg["initial_state"]["altitude_m"]         = altitude_m;
     cfg["initial_state"]["velocity_north_mps"] = v_north_mps;
     cfg["initial_state"]["velocity_east_mps"]  = 0.0;
@@ -636,8 +709,10 @@ static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_m
     const int kSteps = static_cast<int>(sim_time_s / kDt);
 
     std::vector<float> pitch_rad;
+    std::vector<float> roll_rad;
     std::vector<unsigned char> wow;
     pitch_rad.reserve(kSteps);
+    roll_rad.reserve(kSteps);
     wow.reserve(kSteps);
 
     BodyImpactMetrics m;
@@ -656,6 +731,7 @@ static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_m
             m.all_finite = false;
         }
         pitch_rad.push_back(pitch);
+        roll_rad.push_back(ac->state().roll());
         wow.push_back(ac->weightOnWheels() ? 1u : 0u);
         m.min_agl_m = std::min(m.min_agl_m, agl);
         if (contact_step < 0 && agl <= contact_agl_thresh_m) {
@@ -671,9 +747,15 @@ static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_m
     m.steps_after_contact  = static_cast<int>(pitch_rad.size()) - contact_step - 1;
 
     constexpr float kPitchDeadband_rad = 5e-5f;
+    constexpr float kRad2Deg = 180.0f / 3.14159265f;
     float prev_signed_incr = 0.f;
+    float prev_signed_roll_incr = 0.f;
     float late_min =  std::numeric_limits<float>::max();
     float late_max = -std::numeric_limits<float>::max();
+    float roll_late_min =  std::numeric_limits<float>::max();
+    float roll_late_max = -std::numeric_limits<float>::max();
+    const float roll_at_contact_rad = roll_rad[static_cast<std::size_t>(contact_step)];
+    float peak_abs_roll_rad = std::abs(roll_at_contact_rad);
     const int late_start = contact_step + static_cast<int>(2.0f / kDt);
     for (std::size_t i = static_cast<std::size_t>(contact_step) + 1; i < pitch_rad.size(); ++i) {
         const float incr = pitch_rad[i] - pitch_rad[i - 1];
@@ -682,14 +764,26 @@ static BodyImpactMetrics runBodyColliderImpact(float v_north_mps, float v_down_m
                 ++m.pitch_reversals;
             prev_signed_incr = incr;
         }
+        const float roll_incr = roll_rad[i] - roll_rad[i - 1];
+        if (std::abs(roll_incr) >= kPitchDeadband_rad) {
+            if (prev_signed_roll_incr != 0.f && (roll_incr > 0.f) != (prev_signed_roll_incr > 0.f))
+                ++m.roll_reversals;
+            prev_signed_roll_incr = roll_incr;
+        }
+        peak_abs_roll_rad = std::max(peak_abs_roll_rad, std::abs(roll_rad[i]));
         if (static_cast<int>(i) >= late_start) {
             late_min = std::min(late_min, pitch_rad[i]);
             late_max = std::max(late_max, pitch_rad[i]);
+            roll_late_min = std::min(roll_late_min, roll_rad[i]);
+            roll_late_max = std::max(roll_late_max, roll_rad[i]);
         }
         if (wow[i] != wow[i - 1]) ++m.wow_transitions;
     }
     if (late_max >= late_min)
-        m.late_pitch_p2p_deg = (late_max - late_min) * 180.0f / 3.14159265f;
+        m.late_pitch_p2p_deg = (late_max - late_min) * kRad2Deg;
+    if (roll_late_max >= roll_late_min)
+        m.late_roll_p2p_deg = (roll_late_max - roll_late_min) * kRad2Deg;
+    m.peak_roll_gain_deg = (peak_abs_roll_rad - std::abs(roll_at_contact_rad)) * kRad2Deg;
     return m;
 }
 
@@ -968,6 +1062,161 @@ TEST(AircraftTest, BodyColliderOnly_InvertedImpact_ArrestsWithoutOscillation) {
         << m.steps_after_contact << " steps";
     EXPECT_LE(m.late_pitch_p2p_deg, 2.0f)
         << "pitch does not settle after inverted impact: p2p " << m.late_pitch_p2p_deg << " deg";
+}
+
+// Wingtip-strike roll-energy regression (OQ-BC-10 → Alt 1 / IP-BC-13): a wide-wing airframe banked
+// to a modest roll descends until one wingtip box corner strikes terrain. An inelastic backstop must
+// ARREST the contact-driving roll, not catapult it — roll must not run away after the strike. Under
+// the compliant §5c channel the 1.38 m lever arm injects roll energy (peak |roll| grows well past the
+// bank at contact, and roll limit-cycles); the inelastic rotational velocity-arrest bounds it.
+TEST(AircraftTest, BodyColliderOnly_WingtipStrike_DoesNotCatapultRoll) {
+    // Roll to a modest bank (~0.5 rps held 0.7 s), release, then descend slowly so the leading
+    // wingtip settles onto terrain with the airframe near that bank and no roll input at contact.
+    const BodyImpactMetrics m = runBodyColliderImpact(
+        /*v_north*/ 20.0f, /*v_down*/ 1.0f, /*altitude*/ 4.0f, /*sim_time*/ 14.0f,
+        /*contact_agl_thresh*/ 0.6f + 0.15f,
+        /*roll_rate_rps*/ 0.5f, /*roll_until_s*/ 0.7f,
+        /*add_collider*/ addWideWingCollider);
+
+    ASSERT_TRUE(m.reached_contact) << "wingtip must reach the surface";
+    EXPECT_TRUE(m.all_finite);
+    // Energy: the strike must not amplify the bank — peak |roll| after contact stays near the bank
+    // at contact (inelastic arrest), rather than running away (compliant catapult).
+    EXPECT_LE(m.peak_roll_gain_deg, 10.0f)
+        << "wingtip strike catapults roll: peak |roll| grew " << m.peak_roll_gain_deg
+        << " deg past the bank at contact (roll energy added)";
+    // No roll limit cycle after contact.
+    EXPECT_LE(m.roll_reversals, 25)
+        << "roll oscillates after wingtip strike: " << m.roll_reversals << " reversals";
+    EXPECT_LE(m.late_roll_p2p_deg, 2.0f)
+        << "roll does not settle after wingtip strike: p2p " << m.late_roll_p2p_deg << " deg";
+}
+
+// Reproduction of the reported flight behavior (OQ-BC-10 / IP-BC-13): a NORMAL gear touchdown of the
+// small-UAS flight config, banked only a few degrees. As the struts compress the CG drops and the
+// wide wing box's tip corner grazes the runway; through the compliant §5c channel that graze
+// catapults the airframe in roll and throws it back into the air. An inelastic rotational arrest must
+// keep the scrape from adding roll energy or launching the aircraft — this should be a boring landing.
+TEST(AircraftTest, GearLanding_WingtipGraze_DoesNotCatapultOrLaunch) {
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+
+    auto cfg = addFlightBodyCollider(addFlightLandingGear(makeSmallUasConfig()));
+    cfg["initial_state"]["altitude_m"]         = 1.0;   // CG ≈ 1 m over flat terrain at 0
+    cfg["initial_state"]["velocity_north_mps"] = 12.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.8;   // gentle sink
+
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    constexpr float kDt = 0.02f;
+    ac->initialize(cfg, kDt);
+    ac->setTerrain(&terrain);
+    ac->reset();
+
+    liteaero::simulation::AircraftCommand cmd;  // n_z = 1, no thrust
+    const int kSteps = static_cast<int>(10.0f / kDt);
+
+    float roll_at_contact_rad = 0.f, peak_abs_roll_rad = 0.f, max_agl_after_m = 0.f;
+    int contact_step = -1;
+    bool finite = true;
+    for (int i = 1; i <= kSteps; ++i) {
+        const float t = i * kDt;
+        // Roll to a few degrees early, then release (the roll angle holds through the descent).
+        cmd.rollRate_Wind_rps = (t <= 0.15f) ? 0.5f : 0.f;
+        ac->step(t, cmd, Eigen::Vector3f::Zero(), 1.225f);
+        const float roll = ac->state().roll();
+        const float agl  = ac->agl_m();
+        if (!std::isfinite(roll) || !std::isfinite(agl)) finite = false;
+        if (contact_step < 0 && agl <= 0.30f) {  // CG at the gear reach ≈ 0.23 m → first touchdown
+            contact_step = i;
+            roll_at_contact_rad = std::abs(roll);
+        }
+        if (contact_step >= 0) {
+            peak_abs_roll_rad = std::max(peak_abs_roll_rad, std::abs(roll));
+            max_agl_after_m   = std::max(max_agl_after_m, agl);
+        }
+    }
+    constexpr float kRad2Deg = 180.0f / 3.14159265f;
+    const float roll_gain_deg = (peak_abs_roll_rad - roll_at_contact_rad) * kRad2Deg;
+
+    std::cout << "[gear-wingtip-diag] contact_step=" << contact_step
+              << " roll_at_contact_deg=" << roll_at_contact_rad * kRad2Deg
+              << " peak_roll_after_deg=" << peak_abs_roll_rad * kRad2Deg
+              << " roll_gain_deg=" << roll_gain_deg
+              << " max_agl_after_m=" << max_agl_after_m << " finite=" << finite << "\n";
+
+    ASSERT_GE(contact_step, 0) << "aircraft must reach the runway on the gear";
+    EXPECT_TRUE(finite) << "state went non-finite after touchdown";
+    // The wing-tip graze must be ARRESTED, not catapulted — roll must not run away past the bank.
+    EXPECT_LE(roll_gain_deg, 10.0f)
+        << "wingtip graze catapults roll on a normal gear touchdown: +" << roll_gain_deg << " deg";
+    // ...and the aircraft must not be thrown back into the air.
+    EXPECT_LE(max_agl_after_m, 0.6f)
+        << "aircraft launched off the runway after the wingtip graze: max AGL " << max_agl_after_m << " m";
+}
+
+// Diagnostic (OQ-BC-12): the flight landing gear ALONE — no body collider — on a normal touchdown
+// banked a few degrees AND slightly crabbed (a realistic crosswind landing). The gear notebook
+// validated touchdowns but only wings-level and coordinated. If the gear settles cleanly here, the
+// catapult is the body collider's, not the velocity-slaved gear model — which decides OQ-BC-12.
+TEST(AircraftTest, GearLanding_WithRollAndYaw_GearOnly_Settles) {
+    using namespace liteaero::terrain;
+    FlatTerrain terrain{0.0f};
+
+    auto cfg = addFlightLandingGear(makeSmallUasConfig());  // gear only — no body collider
+    cfg["initial_state"]["altitude_m"]         = 1.0;
+    cfg["initial_state"]["velocity_north_mps"] = 12.0;
+    cfg["initial_state"]["velocity_east_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 0.8;
+
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    constexpr float kDt = 0.02f;
+    ac->initialize(cfg, kDt);
+    ac->setTerrain(&terrain);
+    ac->reset();
+
+    liteaero::simulation::AircraftCommand cmd;
+    cmd.n_y = 0.15f;  // slight steady lateral load → a few degrees of sideslip (crab) at touchdown
+    const int kSteps = static_cast<int>(10.0f / kDt);
+
+    float roll_at_contact_rad = 0.f, beta_at_contact_rad = 0.f;
+    float peak_abs_roll_rad = 0.f, max_agl_after_m = 0.f, final_roll_rad = 0.f;
+    int contact_step = -1;
+    bool finite = true;
+    for (int i = 1; i <= kSteps; ++i) {
+        const float t = i * kDt;
+        cmd.rollRate_Wind_rps = (t <= 0.15f) ? 0.5f : 0.f;  // bank a few degrees, then release
+        ac->step(t, cmd, Eigen::Vector3f::Zero(), 1.225f);
+        const float roll = ac->state().roll();
+        const float agl  = ac->agl_m();
+        if (!std::isfinite(roll) || !std::isfinite(agl)) finite = false;
+        if (contact_step < 0 && agl <= 0.30f) {
+            contact_step = i;
+            roll_at_contact_rad = std::abs(roll);
+            beta_at_contact_rad = ac->state().beta();
+        }
+        if (contact_step >= 0) {
+            peak_abs_roll_rad = std::max(peak_abs_roll_rad, std::abs(roll));
+            max_agl_after_m   = std::max(max_agl_after_m, agl);
+        }
+        final_roll_rad = roll;
+    }
+    constexpr float kRad2Deg = 180.0f / 3.14159265f;
+    std::cout << "[gear-only-diag] contact_step=" << contact_step
+              << " roll_at_contact_deg=" << roll_at_contact_rad * kRad2Deg
+              << " beta_at_contact_deg=" << beta_at_contact_rad * kRad2Deg
+              << " peak_roll_after_deg=" << peak_abs_roll_rad * kRad2Deg
+              << " final_roll_deg=" << final_roll_rad * kRad2Deg
+              << " max_agl_after_m=" << max_agl_after_m << " finite=" << finite << "\n";
+
+    ASSERT_GE(contact_step, 0) << "aircraft must reach the runway on the gear";
+    EXPECT_TRUE(finite);
+    // The gear alone must settle: roll must not run away and the aircraft must not be launched.
+    EXPECT_LE((peak_abs_roll_rad - roll_at_contact_rad) * kRad2Deg, 10.0f)
+        << "gear-alone roll runs away on a banked/crabbed touchdown";
+    EXPECT_LE(max_agl_after_m, 0.6f) << "gear-alone launches the aircraft: max AGL " << max_agl_after_m << " m";
 }
 
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {
