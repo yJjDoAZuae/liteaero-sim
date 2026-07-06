@@ -551,7 +551,7 @@ retained in numerical order in the subsections below.
 | ID | Summary | Blocking |
 | --- | --- | --- |
 | OQ-BC-11 | *(Subsumed by OQ-BC-12)* Steep/inverted pitch limit cycle — the "lift-into-ground fight." A facet of the missing rotational DOF; the scoped aero-lift suppression is at most a velocity-slaved patch (Alt B territory), not the fix | Deferred to OQ-BC-12 |
-| OQ-BC-12 | **Root cause.** The velocity-slaved attitude model has no angular-momentum state, so an off-center inelastic contact (wingtip / tail / single gear leg) — an angular-momentum exchange — cannot be represented; it is faked by a CM-arresting §5a force and a compliant §5c $\Delta\theta$, which catapult the airframe (a 3.8° touchdown rolls to 177° and launches 7.9 m). Add a rigid-body rotational DOF for contact (Alt A) or approximate it in the velocity-slaved model (Alt B). **Subsumes OQ-BC-10 and OQ-BC-11**; shares its root with OQ-LG-15 | **Blocks** the wingtip-graze gear-landing regression |
+| OQ-BC-12 | **Root cause.** The velocity-slaved attitude model has no angular-momentum state, so an off-center inelastic contact (wingtip / tail / single gear leg) — an angular-momentum exchange — cannot be represented; it is faked by a CM-arresting §5a force plus the §5c FBW $\Delta\theta$ attitude filter and the velocity-slaving path-curvature, catapulting the airframe (a 3.8° touchdown rolls to 177° and launches 7.9 m). Diagnostic isolates $\delta_{rr}$ as the launch driver but does not yet settle it. Add a rigid-body rotational DOF for contact (Alt A) or approximate it in the velocity-slaved model (Alt B). **Subsumes OQ-BC-10 and OQ-BC-11**; shares its root with OQ-LG-15 | **Blocks** the wingtip-graze gear-landing regression |
 
 ### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
 
@@ -933,11 +933,21 @@ IP-BC-13 was prototyped and shown ineffective — the reported gear-landing cata
 force and the missing rotational DOF, not this §5c moment channel. Problem analysis retained below.)*
 
 **Problem.** The §5c rotational-reaction channel routes the body-collider contact moment through the
-**same compliant second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
+**same second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
 with the per-step change applied to the attitude as a rate (roll via `commitAttitude`, yaw as lateral
-specific force). That path is correct for the **gear**, a compliant spring-damper that stores and
-returns elastic energy. The **body collider is an inelastic backstop** (§5a/§5b), so feeding its contact
-moment through the compliant channel is the wrong physics and **injects rotational energy**.
+specific force). **This channel models the closed-loop FBW attitude response** (a second-order mode
+whose $\omega_n,\zeta$ are set by the FBW-governed airframe rotational dynamics), **not** the strut's
+structural spring-damper — the strut compliance is modeled explicitly in `WheelUnit`
+(`spring_stiffness_npm`, `damping_compression_nspm`), a separate mechanism. Its P1 property
+($\Delta\theta\to0$ when the moment is removed) is the FBW flying the attitude back toward its reference,
+not a mechanical spring returning stored energy.
+
+*Correction (superseded framing).* An earlier version of this note called the channel "a compliant
+spring-damper that stores and returns elastic energy," implying it modeled the strut — that was wrong,
+per the paragraph above. The OQ-BC-12 diagnostic further showed this **§5c moment channel is not the
+catapult driver**: routing the collider moment through a dissipative rate-arrest instead of the filter
+changed the roll catapult only marginally (179° → 177°). The measured driver is the **§5a CM-arresting
+force**, addressed in OQ-BC-12.
 
 Observed in the live viewer (small-UAS config with a wide `wing` collision volume, half-extent
 $y = 1.38$ m): when a wingtip box corner touches terrain at a few degrees of roll, the airframe **rolls
@@ -1068,14 +1078,31 @@ wingtip, a tail corner, a single gear leg) is fundamentally an angular-momentum 
 impulse $J$ that drives the contact point's normal velocity to zero gives $\Delta\mathbf{v}_\text{cm} =
 J\hat{\mathbf{n}}/m$ (small for a long lever) and $\Delta\boldsymbol{\omega} = I^{-1}(\mathbf{r}\times J\hat{\mathbf{n}})
 \approx v_{c,n}/r$ (the pivot). The velocity-slaved model cannot represent this — it has no $\boldsymbol{\omega}$
-to exchange — so contact rotation is faked two ways, both wrong: the **§5a penalty force lands on the CM**
-(arresting CM velocity, which is physically impossible for an off-center contact), and the **§5c $\Delta\theta$
-channel injects a compliant attitude deviation** (which stores and returns energy → catapult). Reproduced
+to exchange. One clear defect is the **§5a penalty force landing on the CM** (arresting/launching CM
+velocity — physically impossible for an off-center contact whose true $\Delta\mathbf{v}_\text{cm}$ is
+small); the later Deciding-diagnostic shows this force drives the vertical *launch* but is not by itself the
+roll driver. The **§5c $\Delta\theta$ channel is not the roll driver either**: it models the closed-loop
+FBW attitude response (a second-order mode returning the attitude to its velocity-slaved reference — *not*
+the strut's structural spring-damper, which is modeled explicitly in `WheelUnit`), and a diagnostic routing
+the collider moment through a dissipative rate-arrest instead of that filter changed the roll catapult only
+marginally (179° → 177°). The Deciding-diagnostic below finds the roll catapult is instead a coupled,
+scenario-dependent interaction of the velocity-slaving path-curvature and the contact forces. Reproduced
 (`GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`): a normal 3.8° touchdown rolls to 177° and is thrown
 7.9 m airborne, driven by a measured −266 N / ±140 N wing-tip §5a force on a 5 kg airframe. This one root
 cause underlies **OQ-BC-10** (roll catapult), **OQ-BC-11** (steep/inverted pitch lift-fight), and
 **OQ-LG-15** (the gear touchdown bounce) — the last is the same defect at the gear's *small* lever arm,
-where the §5c $\Delta\theta$ kludge is just barely adequate; the 1.38 m wing lever is where it diverges.
+where the velocity-slaved kludge is just barely adequate; the 1.38 m wing lever is where it diverges.
+
+**Why pitch is stable but roll is not.** The load-factor FBW closes *different* loops per axis, which is
+why the same velocity-slaved model tolerates a pitch disturbance but catapults in roll. Pitch is regulated
+to a **load factor**: the §5c pitch deviation enters as an $\alpha$ offset, and the $n_z$ loop drives the
+resulting load factor back — pitch has a genuine closed-loop attitude anchor, bounded at stall. Roll is
+regulated to a **rate**, not an angle: the FBW commands a roll *rate* into `commitAttitude` with no
+bank-angle loop and no aero restoring moment on bank, so the bank axis is the open integral of commanded
+rate plus whatever the §5a lateral force swings the velocity vector through. Yaw is likewise rate-controlled
+and unanchored. So an off-center §5a force couples into the anchored pitch axis (mass-damped flight path,
+regulated $\alpha$) but into the *unanchored* bank/yaw axes — the asymmetry is in the FBW architecture, not
+in the contact model.
 
 **Diagnostic confirmation (the gear is not a safe baseline — it diverges).** With the body collider
 removed, the flight landing gear *alone* (`GearLanding_WithRollAndYaw_GearOnly_Settles`):
@@ -1111,10 +1138,18 @@ inherits this divergence risk.
 1. **Rigid-body angular-momentum state for contact (Alt A — physically correct).** Give the airframe a
    real $\boldsymbol{\omega}$/angular-momentum state while in contact; resolve each contact by the impulse
    that zeroes the contact-point normal velocity, splitting into $\Delta\mathbf{v}_\text{cm}=J/m$ and
-   $\Delta\boldsymbol{\omega}=I^{-1}(\mathbf{r}\times J)$.
+   $\Delta\boldsymbol{\omega}=I^{-1}(\mathbf{r}\times J)$. The essential content is to **replace the
+   CM-arresting §5a penalty force with a momentum-conserving contact impulse**
+   $J=-(1+e)\,u_n/K_c$, $K_c=1/m+(\mathbf{r}\times\hat{\mathbf{n}})^\top I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})$,
+   which yields the correct *small* $\Delta\mathbf{v}_\text{cm}$ and the pivot
+   $\Delta\boldsymbol{\omega}\approx v_{c,n}/r$ in one step. The §5c FBW $\Delta\theta$ filters are **retained
+   for the post-impact attitude response** — they govern how the FBW flies out the residual (with authority
+   faded at low speed) — rather than discarded. On this reading the gear/FBW work is preserved: the impulse
+   governs the impact instant, the FBW governs the control response after it.
    - *Benefits:* correct off-center response (pivot, $\omega\approx v_{c,n}/r$, CM preserved); **one**
-     mechanism heals OQ-BC-10, OQ-BC-11, and OQ-LG-15; the gear/collider §5c $\Delta\theta$ kludges are
-     retired; the wheel force/tyre physics is reused unchanged.
+     mechanism heals OQ-BC-10, OQ-BC-11, and OQ-LG-15; the §5c $\Delta\theta$ FBW filters are kept for
+     post-impact control (only the CM-arresting §5a force is replaced); the wheel force/tyre physics is
+     reused unchanged.
    - *Drawbacks:* must **reconcile with the velocity-slaved load-factor *flight* model** — a hybrid or mode
      (rigid-body while in contact, velocity-slaved in free flight) with a defined hand-back at liftoff, or a
      rigid-body attitude the load-factor loop drives; all tuned gear/contact behavior is re-validated;
@@ -1133,9 +1168,19 @@ inherits this divergence risk.
      shows it must be applied to the gear as well as the collider** (the gear alone catapults on a rolled
      touchdown), so it is *not* contained and it re-touches the gear model rather than leaving it untouched;
      the per-axis currency mismatch (roll/yaw as rates, pitch as an α deviation) persists; likely needs
-     case-by-case tuning — the same pattern that produced OQ-BC-10 and OQ-BC-11.
+     case-by-case tuning — the same pattern that produced OQ-BC-10 and OQ-BC-11. **The Deciding-diagnostic
+     results weigh against it but are not decisive:** Alt B's rotational lever is the roll-rate →
+     `commitAttitude` path, and the spikes showed that path has only *partial, transient-lagging* authority
+     over the roll — proportional damping pulled the *settled* roll toward level (final |roll| 160°→9° as
+     gain rose) but did not catch the fast initial peak and worsened the launch — and it does nothing about
+     the velocity-slaving path-curvature that dominates the gear case (roll persists to 137° with the entire
+     §5c roll channel removed). Whether a properly-scoped roll-rate law (authority-limited,
+     dynamic-pressure-faded, wind-frame consistent) *plus* a momentum-conserving gear force could arrest the
+     pivot was not tested — so Alt B is not ruled out, only shown fragile through the naive injection path.
    - *Prerequisites:* a contact-geometry pivot-rate estimate for both gear and collider contacts; an
-     off-center-vs-flat contact discriminator to decide when to suppress the §5a / gear rotational force.
+     off-center-vs-flat contact discriminator to decide when to suppress the §5a / gear rotational force;
+     and a way to keep the velocity-slaving path-curvature from whipping the attitude in the gear case,
+     which the roll-rate injection alone does not reach.
 
 3. **Status quo — keep patching per symptom.** Not recommended: each patch (IP-BC-13 arrest, OQ-BC-11
    lift-suppression) relocates the symptom because none supplies the missing degree of freedom.
@@ -1148,11 +1193,86 @@ on off-center contact (it catapults any rolled touchdown), so reconverging on it
 the velocity-slaved gear model is not a sound baseline to approximate against. Alt A reuses the gear *force*
 physics and retires only the $\Delta\theta$ rotational kludge — a workaround for this exact limitation. Its
 real cost, and the design work it must scope, is reconciling contact rigid-body rotation with the
-velocity-slaved load-factor *flight* model at the in-contact ↔ free-flight boundary. Alt B is no longer a
-contained body-collider stopgap — the diagnostic forces it onto the gear too, so it remains a momentum-less
-approximation applied in *two* places with the per-case-tuning burden that produced OQ-BC-10/11. The
-decision turns on whether the Alt A flight-model reconciliation is affordable now; if it is not, Alt B is a
-larger-than-hoped stopgap covering both gear and collider.
+velocity-slaved load-factor *flight* model at the in-contact ↔ free-flight boundary.
+
+**The Deciding-diagnostic results do *not* yet settle this — Alt A is recommended on physical grounds,
+not yet proven necessary.** The experiment confirmed $\delta_{rr}$ as the launch driver and showed the
+roll catapult is a coupled, scenario-dependent interaction (path-curvature dominant for the gear case, the
+contact forces for the wingtip case), but the two experiments that would actually decide Alt A vs Alt B
+were either only half-run or run with a crude proxy (see the Deciding-diagnostic subsection): the *gear*
+contact force was never made momentum-conserving, and the FBW roll-rate damper was a raw proportional term
+that nonetheless *did* pull the settled roll toward level (final |roll| 160°→9° as its gain rose). Alt A
+remains the recommendation on *physical* grounds — one genuine angular-momentum DOF heals all three
+defects, reuses the gear force physics, and is the state a correct FBW roll-rate damper would ultimately
+act on — but the empirical case that a properly-scoped force fix plus a well-built FBW rate damper (i.e. a
+competent Alt B) *cannot* suffice **is not yet made.** The two follow-on experiments in the
+Deciding-diagnostic subsection should be run before committing to Alt A's larger scope.
+
+**Deciding diagnostic (completed) — narrowed the mechanisms; did *not* settle Alt A vs Alt B.** A
+sequence of throwaway spikes (each an env-gated toggle, since reverted) probed the two failing
+regressions. Full results below.
+
+*Gear-only, banked 3.8° + crabbed 7.9° (`GearLanding_WithRollAndYaw_GearOnly_Settles`):*
+
+| Change (vs baseline) | Peak roll | Final roll | Max AGL | Finite |
+| --- | --- | --- | --- | --- |
+| Baseline | 180.0° | NaN | $2.6\times10^{8}$ m | no |
+| Kill §5c $\delta_{rr}$ | 180.0° | 177.5° | 0.29 m | yes |
+| FBW roll-rate damping $k=0.1$ | 179.4° | 159.8° | 2.5 m | yes |
+| FBW roll-rate damping $k=0.3$ | 179.9° | 151.8° | 14.3 m | yes |
+| FBW roll-rate damping $k=0.6$ | 179.5° | 109.9° | 62 m | yes |
+| FBW roll-rate damping $k=1.0$ | 179.9° | 9.2° | 376 m | yes |
+| Kill $\delta_{rr}$ + roll-damp $k=1.0$ | 180.0° | NaN | $5.7\times10^{8}$ m | no |
+| Disable path-curvature | 137.6° | −12.5° | 1.2 m | yes |
+| Path-curvature off + $\delta_{rr}$ off + impulse force | 4.3° (= contact) | 3.3° | 0.29 m | yes |
+
+*Wingtip-graze, gear + collider (`GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`):*
+
+| Change (vs baseline) | Roll gain | Max AGL |
+| --- | --- | --- |
+| Baseline | +175.2° | 7.9 m |
+| §5a **collider** force → impulse ($\Delta\mathbf{v}_\text{cm}$ small) | +175.3° | 4.4 m |
+| Kill §5c $\delta_{rr}$ | +172.3° | 0.29 m |
+| Disable path-curvature | +174.6° | 3.2 m |
+
+What the data **establishes**:
+- **$\delta_{rr}$ drives the vertical launch/divergence, robustly.** Killing it collapses Max AGL to 0.29 m
+  in *both* scenarios and removes the gear-only NaN. This is the cleanest single result.
+- **The catapult is multi-mechanism and scenario-dependent — no single driver.** Path-curvature dominates
+  the *gear-only* roll (180°→137°, final roll −12.5°) but is nearly inert in the *wingtip* case
+  (175°→174.6°), where the roll is carried by the gear/collider contact forces and $\delta_{rr}$ together.
+  No single toggle tames the wingtip roll.
+- **Removing all three fakes settles the gear-only case** at its contact bank (4.3°, no launch) — but this
+  was run only for gear-only; the wingtip all-three-off was not tested.
+
+What the data does **not** establish (the honest gaps — several cut against my earlier conclusions):
+- **The contact-force hypothesis was only half-tested.** The impulse spike fixed the *collider* force only;
+  the *gear* penalty force — which the gear-only test shows is itself a catapult source — was left intact.
+  So "fixing the force alone is insufficient" is unproven: the force that actually carries the wingtip roll
+  (the gear) was never made momentum-conserving. A proper test must replace the **gear** force too.
+- **Roll-rate damping is *not* powerless over the roll.** The settled roll is pulled monotonically toward
+  level as $k$ rises (final |roll| 160°→9° across $k=0.1$→1.0), so the rate channel *does* have authority
+  over the steady-state roll — contradicting a flat "the roll is not a rate-channel effect." What the crude
+  proportional term fails to do is catch the fast initial *peak* (~180° transient) and it inflates the
+  vertical launch (2.5→376 m). But that term is a poor proxy for a real FBW roll-rate damper: it feeds back
+  the raw body roll rate (ill-defined during a 180° tumble), has no authority limit, no dynamic-pressure
+  fade, and is applied in the body frame rather than wind. Its launch-worsening and $\delta_{rr}$-combined
+  divergence are as plausibly implementation artifacts as evidence about FBW damping. **This spike does not
+  fairly test the FBW roll-rate-damping hypothesis** — and the partial roll authority it *did* show is, if
+  anything, weak evidence *for* that direction.
+
+**Net.** The experiment isolated $\delta_{rr}$ as the launch driver and showed the roll catapult is a
+coupled, scenario-dependent interaction of path-curvature, the contact forces, and $\delta_{rr}$ — not a
+clean single mechanism. It did **not** establish that Alt A is uniquely required, nor that a properly
+designed FBW roll-rate damper (the user's hypothesis) cannot arrest the roll. Three experiments would
+actually decide it:
+1. **Momentum-conserving *gear* force** (mirror the collider impulse on the wheel reaction) plus the
+   wingtip all-three-off run, to test the force hypothesis where it was left untested.
+2. **A properly-scoped FBW roll-rate damper** — wind-frame consistent, authority-limited, dynamic-pressure
+   faded, engaging before the tumble develops — to fairly test the roll-rate-damping hypothesis rather than
+   the crude proxy.
+3. Only if both fail to yield a bounded pivot with the correct $\omega\approx v_{c,n}/r$ does the evidence
+   force Alt A.
 
 ---
 
