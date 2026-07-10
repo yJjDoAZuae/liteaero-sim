@@ -159,11 +159,15 @@ the shared contact path described in [aircraft.md](aircraft.md) step 10.
 
 ### 5. Contact Dynamics
 
-> **Status: implemented and tested.** All four items are implemented (OQ-BC-1…7 resolved): §5a
+> **Status: implemented and tested** (base model); **the OQ-BC-12 Alt B contact-reaction correction is
+> decided and pending implementation.** All four base items are implemented (OQ-BC-1…7 resolved): §5a
 > velocity-arrest normal contact, §5b restitution-consistent hard constraint, §5c dedicated
 > rotational-reaction $\Delta\theta$ channel (parallel filters in `Aircraft`, behavior-preserving by the
-> $H_2$/`LP`/$G(s)$ linearity invariant), and §5d Coulomb + viscous scrape friction. The implementation
+> $H_2$/`LP`/$G(s)$ linearity invariant), and §5d Coulomb + viscous scrape friction. The base implementation
 > plan and its tests are in [body_collider_dynamics.md](../implementation/body_collider_dynamics.md).
+> **OQ-BC-12 (resolved → Alternative B) supersedes** the §5a collider normal force (→ momentum impulse), the
+> attitude reference (→ contact-excluded), and the §5c **roll** currency (→ persistent wind-axis roll rate);
+> see the OQ-BC-12 Decided-design subsection and [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).
 
 **§5a — Inelastic normal contact: dissipation-dominated velocity-arrest (implemented, OQ-BC-1 →
 Alternative 3).** A purely **dissipative** normal force
@@ -303,11 +307,15 @@ limit cycles, and the constraint's velocity correction is a discrete analogue; t
 requirement (Test Strategy `Aircraft_BodyCollider_NoRelaunch`) is that the restitution-consistent
 projection does not excite the kinematic attitude.
 
-**§5c — Gear-style rotational reaction $\Delta\theta$ (implemented, OQ-BC-3/6/7 resolved; collider
-portion superseded by OQ-BC-10).** The goal
+**§5c — Gear-style rotational reaction $\Delta\theta$ (implemented, OQ-BC-3/6/7 resolved; the **roll**
+channel superseded by OQ-BC-12 → Alt B, pending implementation).** The goal
 is a rotational reaction to a body strike (a wing-low
 or tail-first contact pitches/rolls the airframe *about* the contact, via the §2a low-pass on $M/I$
-with properties P1–P4), with the gear and body-collider contributions **independently attributable**.
+with properties P1–P4), with the gear and body-collider contributions **independently attributable**. The
+pitch and yaw channels described here are retained; **OQ-BC-12 Alt B replaces the roll channel** — the
+returning $\delta_{rr}=d(\Delta\theta_\text{roll})/dt$ becomes a *persistent* filtered wind-axis roll rate
+on $q_{nw}$ (FBW is roll-rate command, no bank hold), and the collider's share is driven by the momentum
+impulse rather than the compliant deviation (see the OQ-BC-12 Decided-design subsection).
 
 > **Defect & resolution (OQ-BC-10 → Alt 1).** Routing the **body-collider** moment through this
 > *compliant* channel injects rotational energy — a wide-wing-box strike catapults the airframe in roll
@@ -545,13 +553,12 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-Open questions (ascending by ID). OQ-BC-1 through OQ-BC-10 are resolved; their resolution notes are
-retained in numerical order in the subsections below.
+Open questions (ascending by ID). **All OQ-BC questions (OQ-BC-1 through OQ-BC-12) are resolved**; their
+resolution notes are retained in numerical order in the subsections below. There are no open questions.
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| OQ-BC-11 | *(Subsumed by OQ-BC-12)* Steep/inverted pitch limit cycle — the "lift-into-ground fight." A facet of the missing rotational DOF; the scoped aero-lift suppression is at most a velocity-slaved patch (Alt B territory), not the fix | Deferred to OQ-BC-12 |
-| OQ-BC-12 | **Root cause.** The velocity-slaved attitude model has no angular-momentum state, so an off-center inelastic contact (wingtip / tail / single gear leg) — an angular-momentum exchange — cannot be represented; it is faked by a CM-arresting §5a force plus the §5c FBW $\Delta\theta$ attitude filter and the velocity-slaving path-curvature, catapulting the airframe (a 3.8° touchdown rolls to 177° and launches 7.9 m). Diagnostic isolates $\delta_{rr}$ as the launch driver but does not yet settle it. Add a rigid-body rotational DOF for contact (Alt A) or approximate it in the velocity-slaved model (Alt B). **Subsumes OQ-BC-10 and OQ-BC-11**; shares its root with OQ-LG-15 | **Blocks** the wingtip-graze gear-landing regression |
+| — | *(none open — OQ-BC-12 resolved to Alternative B on 2026-07-10; see its resolution note and the [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md) plan)* | — |
 
 ### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
 
@@ -928,9 +935,11 @@ toward zero** at contact rather than a compliant deflection. The **gear keeps it
 unchanged** (the OQ-BC-6/7 per-source split already separates the two). The arrest coefficient is
 **derived** (non-magic), with its own CFL bound analogous to §5a's $1/N_\text{arr}$. Acceptance guard:
 a wingtip-strike roll-energy regression (a level wingtip strike must *lose* roll energy, not gain it)
-plus the impact-envelope and landing-gear regressions. Tracked as IP-BC-13. *(Superseded by OQ-BC-12:
-IP-BC-13 was prototyped and shown ineffective — the reported gear-landing catapult is driven by the §5a
-force and the missing rotational DOF, not this §5c moment channel. Problem analysis retained below.)*
+plus the impact-envelope and landing-gear regressions. Tracked as IP-BC-13. *(Superseded by OQ-BC-12,
+resolved to Alternative B: IP-BC-13 was prototyped and shown ineffective — the reported gear-landing
+catapult is driven by the §5a CM force and the velocity-slaving path-curvature, not this §5c moment
+channel. The inelastic collider rotation is delivered instead by the Alt B momentum impulse feeding the
+persistent wind-axis roll rate (see OQ-BC-12 Decided design). Problem analysis retained below.)*
 
 **Problem.** The §5c rotational-reaction channel routes the body-collider contact moment through the
 **same second-order path as the landing gear** — $\Delta\theta = (1/\omega_n^2)\,H_2(M/I)$,
@@ -1006,10 +1015,11 @@ wingtip-strike roll-energy test plus the impact-envelope and gear regressions as
 Alternative 3 is the conservative fallback if a stable inelastic rotational arrest proves hard to
 parameterize.
 
-### OQ-BC-11 — Scoped Aero-Lift Suppression for the Lift-Into-Ground Fight
+### OQ-BC-11 — Scoped Aero-Lift Suppression for the Lift-Into-Ground Fight *(Resolved — subsumed by OQ-BC-12 → Alt B)*
 
-*(Subsumed by OQ-BC-12 — retained for the lift-fight analysis. The scoped aero-lift suppression is a
-velocity-slaved patch (Alt B territory); the root fix is the rotational DOF of OQ-BC-12.)*
+*(Subsumed by OQ-BC-12, resolved to Alternative B. The steep/inverted lift-into-ground fight is addressed by
+the Alt B contact-excluded attitude reference and the momentum-partitioned translational reaction rather than
+a scoped aero-lift clamp. Problem analysis retained below for the lift-fight record.)*
 
 **Problem.**
 After IP-BC-12 decoupled body-collider contact from the FBW lift-shaping loop (OQ-BC-9 Alt 1), the
@@ -1067,7 +1077,32 @@ model but is out of proportion to this defect. Alternative 2 hides the defect an
 This question **blocks** the steep/inverted pitch regressions; IP-BC-13 (the OQ-BC-10 rotational
 arrest) is independent and does not resolve it.
 
-### OQ-BC-12 — Contact Rotation Requires an Angular-Momentum State (Velocity-Slaved Model Root Cause)
+### OQ-BC-12 — Contact Rotation Requires an Angular-Momentum State (Velocity-Slaved Model Root Cause) *(Resolved — Alternative B)*
+
+**Resolution (Alternative B — momentum-consistent filtered contact reaction; user-selected 2026-07-10).**
+Approximate the contact rotation *inside* the velocity-slaved model using the filtered-deviation pattern,
+with no rigid-body angular-momentum integrator. Three mechanisms: (1) a **momentum-partitioned
+translational reaction** — the collider §5a penalty force becomes the contact impulse $J=-(1+e)u_n/K_c$,
+$K_c=1/m+(\mathbf{r}\times\hat{\mathbf{n}})^\top I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})$, so the CM sees
+only the small $\Delta\mathbf{v}_\text{cm}$ (the gear strut/tyre force physics is unchanged); (2) a
+**contact-excluded attitude reference** — the velocity-slaving path-curvature is referenced to the
+contact-removed velocity, curing the whip the Deciding diagnostic identified as the dominant gear-only
+driver; (3) a **per-axis rotational reaction** — pitch and yaw stay compliant/returning (anchored to
+$n_z/\alpha$ and $\beta=0$), while roll is corrected to a **persistent filtered wind-axis roll rate applied
+directly to $q_{nw}$** (not a body-to-wind deviation), driven by the gear torque $M_x/I_{xx}$ plus the
+collider impulse kick. **Rationale (user):** the pivot rate is momentum-computable inside the velocity-slaved
+model (the same $K_c$ impulse as Alt A), so the Alt A vs Alt B distinction is state *persistence*, not rate
+accuracy; Alt B reuses the filtered-deviation machinery already invested in and touches the gear only through
+the shared attitude reference and the roll currency, avoiding the flight-model reconciliation Alt A requires.
+Because the FBW commands roll *rate* with no bank hold, a ground roll input must integrate into a **persistent**
+bank in the wind axis rather than decay to zero — the correction of today's $\delta_{rr}=d(\Delta\theta_\text{roll})/dt$.
+**Accepted fidelity limit:** no angular-momentum conservation across successive contacts (the collider pivot
+bleeds on the FBW roll-rate-damping $\tau$ rather than propagating as $I\boldsymbol{\omega}$); crossing that
+boundary is the deferred Alt A scope. The decided design and its invariants are in **Decided design** below;
+the implementation plan is [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).
+**OQ-BC-10 and OQ-BC-11 are subsumed by this resolution.**
+
+<details><summary>Problem, diagnostic, alternatives, and rationale (retained)</summary>
 
 **Problem.**
 The load-factor `Aircraft` is **velocity-slaved**: `KinematicState::stepPV` integrates position and
@@ -1095,14 +1130,14 @@ where the velocity-slaved kludge is just barely adequate; the 1.38 m wing lever 
 
 **Why pitch is stable but roll is not.** The load-factor FBW closes *different* loops per axis, which is
 why the same velocity-slaved model tolerates a pitch disturbance but catapults in roll. Pitch is regulated
-to a **load factor**: the §5c pitch deviation enters as an $\alpha$ offset, and the $n_z$ loop drives the
-resulting load factor back — pitch has a genuine closed-loop attitude anchor, bounded at stall. Roll is
-regulated to a **rate**, not an angle: the FBW commands a roll *rate* into `commitAttitude` with no
-bank-angle loop and no aero restoring moment on bank, so the bank axis is the open integral of commanded
-rate plus whatever the §5a lateral force swings the velocity vector through. Yaw is likewise rate-controlled
-and unanchored. So an off-center §5a force couples into the anchored pitch axis (mass-damped flight path,
-regulated $\alpha$) but into the *unanchored* bank/yaw axes — the asymmetry is in the FBW architecture, not
-in the contact model.
+to a **load factor** ($n_z/\alpha$) and yaw to **zero aerodynamic sideslip** (coordinated flight): both are
+genuine closed-loop attitude anchors, so a contact pitch or yaw disturbance is flown back and the deviation
+returns. Roll is regulated to a **rate**, not an angle: the FBW commands a roll *rate* into `commitAttitude`
+with no bank-angle loop and no aero restoring moment on bank, so the bank axis is the open integral of
+commanded rate plus whatever the §5a lateral force swings the velocity vector through — the **one unanchored
+axis**. So an off-center §5a force couples into the anchored pitch and yaw axes (which return) but into the
+*unanchored* bank axis (which runs away) — the asymmetry is in the FBW architecture, not in the contact
+model.
 
 **Diagnostic confirmation (the gear is not a safe baseline — it diverges).** With the body collider
 removed, the flight landing gear *alone* (`GearLanding_WithRollAndYaw_GearOnly_Settles`):
@@ -1157,17 +1192,25 @@ inherits this divergence risk.
    - *Prerequisites:* define the in-contact ↔ free-flight attitude reconciliation and the liftoff hand-back;
      a rigid-body contact-resolution formulation; re-run the full gear + impact regression suites.
 
-2. **Velocity-slaved approximation (Alt B).** Compute the pivot rate $\omega\approx v_{c,n}/r$ from the
-   contact geometry and inject it through the one rotational input the model accepts (the roll rate into
-   `commitAttitude`), while **suppressing the §5a CM-arresting force for off-center contacts** (§5b
-   non-penetration retained).
+2. **Velocity-slaved approximation (Alt B).** Compute the contact pivot rate from the **same momentum
+   impulse as Alt A** — $\Delta\boldsymbol{\omega} = J\,I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})$,
+   $J=-(1+e)\,u_n/K_c$ (the geometric $\omega\approx v_{c,n}/r$ is only its long-lever, roll-dominated
+   limit, not a separate method) — and inject it through the one rotational input the model accepts (the
+   roll rate into `commitAttitude`), while **suppressing the §5a CM-arresting force for off-center
+   contacts** (§5b non-penetration retained). The distinguishing feature of Alt B is *not* a cruder pivot
+   rate — it is that the rate is applied **as a one-shot injection and not carried as a persistent
+   momentum state.**
    - *Benefits:* no reconciliation with the flight model; reuses the existing roll-rate injection path;
-     smaller than a full rigid-body integrator.
-   - *Drawbacks:* still a **kinematic fake** — no momentum is carried, so the induced rotation does not
-     propagate correctly through the subsequent gear contact or into free flight; **the diagnostic above
+     smaller than a full rigid-body integrator; the pivot rate is exactly as correct as Alt A's for the
+     single contact instant.
+   - *Drawbacks:* the correct instantaneous rate is the easy part — the deficits are all downstream. **No
+     momentum is carried,** so the induced rotation does not propagate through the subsequent gear contact
+     or into free flight (a crosswind touchdown is a *sequence* of off-center contacts, so this matters);
+     **the diagnostic above
      shows it must be applied to the gear as well as the collider** (the gear alone catapults on a rolled
      touchdown), so it is *not* contained and it re-touches the gear model rather than leaving it untouched;
-     the per-axis currency mismatch (roll/yaw as rates, pitch as an α deviation) persists; likely needs
+     the per-axis currency mismatch (a body-frame $\Delta\boldsymbol{\omega}$ routed through roll/yaw rates
+     and a pitch α deviation) persists; likely needs
      case-by-case tuning — the same pattern that produced OQ-BC-10 and OQ-BC-11. **The Deciding-diagnostic
      results weigh against it but are not decisive:** Alt B's rotational lever is the roll-rate →
      `commitAttitude` path, and the spikes showed that path has only *partial, transient-lagging* authority
@@ -1177,15 +1220,23 @@ inherits this divergence risk.
      §5c roll channel removed). Whether a properly-scoped roll-rate law (authority-limited,
      dynamic-pressure-faded, wind-frame consistent) *plus* a momentum-conserving gear force could arrest the
      pivot was not tested — so Alt B is not ruled out, only shown fragile through the naive injection path.
-   - *Prerequisites:* a contact-geometry pivot-rate estimate for both gear and collider contacts; an
-     off-center-vs-flat contact discriminator to decide when to suppress the §5a / gear rotational force;
-     and a way to keep the velocity-slaving path-curvature from whipping the attitude in the gear case,
-     which the roll-rate injection alone does not reach.
+   - *Prerequisites:* the momentum-impulse pivot rate ($K_c$ from mass + inertia tensor) for both gear and
+     collider contacts; an off-center-vs-flat contact discriminator to decide when to suppress the §5a /
+     gear rotational force; and a way to keep the velocity-slaving path-curvature from whipping the attitude
+     in the gear case, which the roll-rate injection alone does not reach.
 
 3. **Status quo — keep patching per symptom.** Not recommended: each patch (IP-BC-13 arrest, OQ-BC-11
    lift-suppression) relocates the symptom because none supplies the missing degree of freedom.
 
 **Recommendation.**
+**A and B are a spectrum, not a dichotomy.** Both compute the pivot rate from the same momentum impulse
+($\Delta\boldsymbol{\omega}=J\,I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})$); they differ only in **how much
+rotational state is carried and for how long** — Alt B injects the rate for one contact instant and lets
+velocity-slaving resume, while Alt A carries $\boldsymbol{\omega}$ as an integrated, momentum-conserving
+state that propagates across contacts and into free flight. Suppressing the path-curvature during contact
+and carrying the injected rate forward moves Alt B along this axis until it *becomes* Alt A; the design
+choice is where on that axis the cost/fidelity tradeoff lands.
+
 Alternative A. Three separately-filed defects (roll catapult, pitch lift-fight, gear touchdown bounce) are
 one missing rotational degree of freedom. The gear-alone diagnostic also answers the reasonable concern
 that Alt A would merely reconverge on the existing gear model: the existing gear model is **itself broken**
@@ -1273,6 +1324,132 @@ actually decide it:
    the crude proxy.
 3. Only if both fail to yield a bounded pivot with the correct $\omega\approx v_{c,n}/r$ does the evidence
    force Alt A.
+
+</details>
+
+**Decided design — momentum-consistent filtered contact reaction (Alt B).** *(Decided 2026-07-10; pending
+implementation — [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).)* A
+unified velocity-slaved approximation covering **both** the gear and the body collider, built entirely on
+the filtered-deviation pattern already in `Aircraft` (§5c / [landing_gear.md §2a](landing_gear.md)). The
+gear and collider use *different but compatible* contact dynamics; the balance between translational and
+rotational reaction on each follows the mass-versus-rotational-inertia momentum partition. No rigid-body
+integrator and no persistent $\boldsymbol{\omega}$ state.
+
+*Key realization that makes it tractable.* The catapult has two coupled drivers, and fixing the first
+shrinks the second. (1) The contact **force** lands on the CM, so a large penalty force swings the velocity
+vector; (2) the velocity-slaving **path-curvature** then rotates the attitude to follow that swung velocity
+(the Deciding-diagnostic showed this dominates the gear case). If the translational reaction is reduced to
+the momentum-correct *small* $\Delta\mathbf{v}_\text{cm}$, the velocity vector barely moves, so the
+path-curvature whip nearly vanishes on its own — and the attitude response is then supplied deliberately by
+the filtered-deviation channels rather than as a side effect of the velocity swing. The force channel
+$G(s)$ (OQ-LG-15/18/19) already does exactly this for pitch; Alt B extends the idea to roll/yaw and closes
+the residual double-count.
+
+*Three mechanisms.*
+
+1. **Momentum-partitioned translational reaction.** Each contact reaction is applied to the CM with the
+   physically-correct effective mass. For the **collider** (inelastic, $e=0$) the §5a penalty force is
+   replaced by the contact impulse $J=-(1+e)\,u_n/K_c$,
+   $K_c=1/m+(\mathbf{r}\times\hat{\mathbf{n}})^\top I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})$, giving
+   $\Delta\mathbf{v}_\text{cm}=J\hat{\mathbf{n}}/m$ — small for a long lever, so the CM barely moves (this is
+   the impulse spike from the Deciding diagnostic, promoted to the model). For the **gear**, the strut/tyre
+   forces are already physical sustained forces at the wheel; they keep acting on the CM as today. In both
+   cases $K_c$ is the "mass vs rotational inertia" partition the user asked for: the fraction $1/(m\,K_c)$
+   of the corner arrest is translation, the fraction $(\mathbf{r}\times\hat{\mathbf{n}})^\top
+   I^{-1}(\mathbf{r}\times\hat{\mathbf{n}})/K_c$ is rotation.
+
+2. **Contact-excluded attitude reference (removes the double-count).** The velocity-slaving path-curvature
+   is referenced to the **contact-excluded** velocity $\mathbf{v}_\text{att} = \mathbf{v}_\text{final} -
+   (\mathbf{F}_\text{contact}/m)\,\Delta t$ instead of the raw post-contact velocity, so the contact-induced
+   velocity change no longer rotates the attitude. This reuses the existing OQ-LG-21 `v_att_ref` hook in
+   `commitAttitude` (which already references attitude to a filtered velocity) — the change is to subtract
+   the contact velocity delta rather than only low-pass it. In free flight $\mathbf{F}_\text{contact}=0$ and
+   behavior is unchanged. The attitude then follows the aerodynamic flight path, and *all* contact-induced
+   rotation is delivered through the filtered-deviation channels below — once, not twice.
+
+3. **Per-axis rotational reaction — the currency AND the application point differ per axis.** Two things
+   distinguish the axes. First, *what the FBW anchors*: it holds a *load factor* in pitch ($n_z/\alpha$) and
+   *zero aerodynamic sideslip* in yaw (coordinated flight), but commands only a *roll rate* in roll with no
+   bank-angle hold — so pitch and yaw responses **return** while roll **persists**. Second, *where the
+   response is applied*: pitch and yaw are genuine **body-to-wind deviations** (they add to $\alpha$ and to
+   $\beta$/lateral in $q_{wb}$), but **roll is not a body-to-wind deviation at all** — the parameterization
+   $q_{nb}=q_{nw}\,q_{wb}$ with $q_{wb}=R_y(\alpha)R_z(-\beta)$ has no roll DOF, so bank lives entirely in
+   $q_{nw}$ and the roll response rotates the wind-axis orientation directly.
+   - **Pitch — compliant body-to-wind deviation (attitude-anchored; returns; unchanged).** Pitch is
+     regulated to $n_z/\alpha$, so a contact pitch input is flown back toward the commanded flight path. The
+     compliant $\Delta\theta_\text{pitch}=(1/\omega_n^2)\,H_2(M_y/I_{yy})$ (an $\alpha$ deviation) plus the
+     force channel $G(s)$ is the *correct* returning dynamics; kept for both gear and collider.
+   - **Roll — a filtered rate applied to the wind-axis orientation $q_{nw}$; persists; NOT a body-to-wind
+     deviation.** The gear/collider roll input drives a wind-axis roll **rate** — the gear via the continuous
+     specific torque $M_x/I_{xx}$, the collider via the momentum impulse kick
+     $\Delta\omega_x=J\,(I^{-1}(\mathbf{r}\times\hat{\mathbf{n}}))_x$ — shaped by a first-order filter
+     carrying the FBW/strut roll-rate damping $\tau$, and applied **directly to $q_{nw}$** as a roll about
+     the wind-X (velocity) axis (exactly the existing `commitAttitude` roll-rate input). Because $q_{nw}$ is
+     an integrated orientation and the FBW holds no bank setpoint, the bank **persists** — it holds wherever
+     the integrated rate leaves it and settles only when the driving moment reaches its bank-dependent
+     equilibrium (wings-level on flat ground, where the strut geometry zeroes the asymmetric moment), never
+     springing back. There is **no body-to-wind roll deviation** in this picture, and none is needed: a
+     ground roll banks the lift vector rigidly with the body, which is precisely a rotation of the wind frame
+     about the velocity vector. This **replaces** today's $\delta_{rr}=d(\Delta\theta_\text{roll})/dt$, whose
+     bank telescopes to $\Delta\theta_\text{roll}$ and therefore snaps back to the entry bank when the moment
+     stops — the defect that rolls the airframe toward level and then rolls it *back*. Both sources drive the
+     **same** wind-axis roll rate (gear continuous, collider impulsive), so they sum linearly; it is
+     inelastic for the collider ($e=0$, no stored energy) yet bounded (the $\tau$ roll-rate damping bleeds
+     the induced rate and the strut re-levels on subsequent contact — a persistent but finite bank, not a
+     catapult).
+   - **Yaw — compliant deviation (sideslip-anchored; returns; like pitch).** The FBW holds coordinated
+     flight (zero aerodynamic sideslip $\beta$), so yaw is anchored just as pitch is: a contact yaw
+     disturbance (crab drag, wingtip drag, asymmetric gear drag) creates transient sideslip that the FBW
+     decrabs back to $\beta\to0$, leaving **no** persistent yaw deviation. The existing compliant
+     $\Delta\theta_\text{yaw}=(1/\omega_n^2)\,H_2(M_z/I_{zz})$, applied through the lateral-force
+     ($\delta_{ay}$) currency, is the correct *returning* dynamics and is kept for both gear and collider
+     (the collider yaw pivot feeds the same compliant channel). It still requires the mechanism-2 contact
+     exclusion so a legitimate contact yaw is not *also* double-counted through the velocity-vector swing.
+
+   The momentum/inertia balance is unchanged by the currency fix: $\omega_\text{roll}$ is driven by
+   $M_x/I_{xx}$ (gear) and the $K_c$-partitioned impulse (collider), so the rotational-versus-translational
+   split still follows the mass-versus-inertia admittance. What changed is only the **roll currency** — an
+   integrated, persistent rate rather than a returning deviation.
+
+*Why the two sources are compatible.* Both partition the contact reaction into translation and rotation
+through the same inertial quantities ($m$, $I$); both deliver rotation through the *same* summed
+`commitAttitude` channels (gear and collider contributions add linearly, preserving the §5c linearity
+invariant); both depend on the same contact-excluded attitude reference so neither double-counts. They
+differ only where they *should* — the gear roll input is a continuous strut torque, the collider's is an
+inelastic impulse kick — but both drive the one wind-axis roll rate on $q_{nw}$, and pitch and yaw stay
+compliant body-to-wind deviations (anchored, returning) for both. The gear and collider filter states are
+separate `FilterSS2Clip` instances summed at the end.
+
+*What it satisfies.* Inelastic collider ($e=0$ via the impulse, no energy return); gear strut dynamics
+(the strut/tyre **force** physics is untouched); mass-vs-inertia momentum balance ($K_c$ for the collider,
+the $m/I$ gain ratio for the gear); no major deviation — it reuses the force-channel/`v_att_ref`/`FilterSS2Clip`
+machinery already built, applies the filtered roll rate to $q_{nw}$ (the existing `commitAttitude` input)
+and adds the collider impulse, and replaces the §5a penalty force with the impulse. It changes the **gear** in two bounded ways — the shared contact-excluded
+attitude reference (mechanism 2, which cures the gear-alone path-curvature catapult) and the roll-axis
+currency (mechanism 3: the gear roll deviation now integrates as a persistent rate instead of the returning
+$d(\Delta\theta_\text{roll})/dt$) — while leaving the gear pitch/force channels and the strut/tyre force
+model as they are. The roll-currency change is inside the same filtered-deviation pattern, not a new
+subsystem.
+
+*Invariants / acceptance.* (P-B1) contact-excluded reference is exact in free flight
+($\mathbf{F}_\text{contact}=0$); (P-B2) the collider CM change equals the momentum $\Delta\mathbf{v}_\text{cm}$
+(long-lever → near-zero); (P-B3) a level wingtip strike induces $|\Delta\boldsymbol{\omega}|\approx v_{c,n}/r$
+and leaves a *persistent but finite* bank (re-leveled by the strut on subsequent gear contact, bled by the
+$\tau$ roll-rate damping), not a catapult; (P-B4) **roll persistence:** a banked touchdown that rolls to
+wings-level *stays* level rather than springing back to the entry bank (the currency-fix regression); (P-B5)
+the existing gear-only wings-level and the new banked/crabbed touchdowns settle; (P-B6) the §5c
+gear+collider linearity equivalence still holds on the pitch/yaw channels. Guards:
+`GearLanding_WithRollAndYaw_GearOnly_Settles`, `GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`, a new
+roll-persistence time-history test, the impact-envelope suite, and the existing gear regressions.
+
+*Residual approximation (honest scope).* No angular momentum is conserved across successive contacts — the
+collider pivot decays on $\tau_\text{fbw}$ rather than propagating as $I\boldsymbol{\omega}$, so a rapid
+multi-corner tumble is only approximately rendered. This is the accepted Alt B fidelity limit; if a
+scenario needs true inter-contact momentum propagation, that is the point on the spectrum where Alt A is
+required. **Open sub-question before implementation:** whether the contact-excluded reference (mechanism 2)
+should subtract the *instantaneous* contact velocity delta or a short-window average — the instantaneous
+form is exact per step but may need the existing low-pass to reject per-step bounce; to be pinned by the
+`GearLanding_*` time-histories during implementation.
 
 ---
 
