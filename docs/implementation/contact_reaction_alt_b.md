@@ -29,25 +29,26 @@ per-symptom patches OQ-BC-12 subsumes.
 
 | ID | Status | Title | Depends on | Design refs |
 | --- | --- | --- | --- | --- |
-| IP-CRB-1 | todo | Add `mass_kg` and inverse-inertia (`I⁻¹`, 3×3) members to `BodyCollider`; add matching `BodyColliderParams` proto fields and JSON serialize/deserialize with a round-trip test | — | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [OQ-BC-5 resolution](../design/body_collider.md) |
-| IP-CRB-2 | blocked (IP-CRB-1) | Extend `BodyCollider::initialize` to accept the body inertia tensor and store `1/m`, `I⁻¹`; `Aircraft::initialize` passes `_inertia` (mass + Ixx/Iyy/Izz) | IP-CRB-1 | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [OQ-BC-5 resolution](../design/body_collider.md) |
-| IP-CRB-3 | blocked (IP-CRB-2) | Replace the §5a penalty normal force in `BodyCollider::step` with the momentum impulse force `F = u_n/(K_c·N_arr·dt)`, `K_c = 1/m + (r×n̂)ᵀI⁻¹(r×n̂)` per penetrating corner (small `Δv_cm`; moment `r×F` carries the correct angular impulse) | IP-CRB-2 | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [§5a](../design/body_collider.md) |
-| IP-CRB-4 | todo | Contact-excluded attitude reference in `Aircraft::step`: subtract `(F_contact_ned/m)·dt` from the `v_att_ref` passed to `commitAttitude`, extending the OQ-LG-21 blend | — | [body_collider.md OQ-BC-12 Alt B mech.2](../design/body_collider.md), [landing_gear.md §OQ-LG-21](../design/landing_gear.md) |
-| IP-CRB-5 | blocked (IP-CRB-3, IP-CRB-4) | Replace §5c roll `delta_rr = d(Δθ_roll)/dt` with a filtered wind-axis roll-rate state driven by `(M_x,gear + M_x,collider)/Ixx` with FBW/strut roll-rate damping `τ` (new `dtheta_roll_damp_tau_s` config); apply directly to the `commitAttitude` roll-rate input; leave pitch (α) and yaw (δ_ay) compliant channels unchanged | IP-CRB-3, IP-CRB-4 | [body_collider.md OQ-BC-12 Alt B mech.3 (roll)](../design/body_collider.md) |
+| IP-CRB-1 | done | Add `_mass_kg` and body-frame **inertia diagonal** `_inertia_diag_kgm2` (Ixx/Iyy/Izz) members to `BodyCollider`; matching `BodyColliderParams` proto fields (7,8) + JSON serialize/deserialize + round-trip tests (inertia is diagonal in this model, not a full 3×3) | — | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [OQ-BC-5 resolution](../design/body_collider.md) |
+| IP-CRB-2 | done | Extend `BodyCollider::initialize` to accept the body inertia diagonal and populate `_inertia_diag_kgm2`; `Aircraft::initialize` passes `_inertia` (Ixx/Iyy/Izz). `1/m` and `1/I` are formed at use in `step` | IP-CRB-1 | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [OQ-BC-5 resolution](../design/body_collider.md) |
+| IP-CRB-3 | done | Replace the §5a penalty normal force in `BodyCollider::step` with the momentum impulse force `F = u_n/(K_c·N_arr·dt)`, `K_c = 1/m + (r×n̂)ᵀI⁻¹(r×n̂)` per penetrating corner (small `Δv_cm`; moment `r×F` carries the correct angular impulse). `1/(N_arr·dt)` recovered from `b_corner` (no dt stored); onset factor for C0/deep-embed. Collider suite + P-B2 long-lever test green | IP-CRB-2 | [body_collider.md OQ-BC-12 Alt B mech.1](../design/body_collider.md), [§5a](../design/body_collider.md) |
+| IP-CRB-4 | done | Contact-excluded attitude reference in `Aircraft::step`: subtract `(R_nb·F_contact/m)·dt` from the `v_att_ref` passed to `commitAttitude`, extending the OQ-LG-21 blend (free-flight identity: `F_contact=0`). Combined with IP-CRB-3 this **cures the crosswind gear-landing NaN divergence** (`2.6e8 m`→finite) and reduces the wingtip launch (7.9→3.0 m); roll catapult remains pending IP-CRB-5 | — | [body_collider.md OQ-BC-12 Alt B mech.2](../design/body_collider.md), [landing_gear.md §OQ-LG-21](../design/landing_gear.md) |
+| IP-CRB-5 | done | §5c roll = persistent wind-axis roll-rate state on `(M_x,gear + M_x,collider)/Ixx`, damped by the FBW `roll_rate` closed loop, **advanced with Tustin (stiff-stable) integration + a roll-rate clamp (OQ-BC-13)**. Banked wingtip touchdown settles (roll gain 173°→8.2°, no launch); no NaN; round-trips (JSON+proto). `rollRateState_rps()` accessor | IP-CRB-3, IP-CRB-4 | [body_collider.md OQ-BC-12 Alt B mech.3 (roll)](../design/body_collider.md), [OQ-BC-13 resolution](../design/body_collider.md) |
+| IP-CRB-5b | done | Castering nosewheel (`is_castering` → `F_y=0`) in `WheelUnit`/`LandingGear` + config + test; removes the crosswind nose-cornering yaw disturbance. FBW-loop roll damping in place | IP-CRB-4 | [landing_gear.md §3](../design/landing_gear.md), [body_collider.md OQ-BC-12 Alt B mech.3 (yaw)](../design/body_collider.md) |
+| IP-CRB-5c | todo | Retarget the §5c **yaw** channel onto the FBW `n_y` loop (`ny_wn`/`ny_zeta`), keep `Izz`, hold authority effective to zero ground speed while WoW. For the crosswind crab: the roll is now stable, but a sustained `n_y` crab command still swings the velocity vector (path-curvature) → residual roll; assess whether the yaw retarget + a fuller contact-exclusion is needed | IP-CRB-5 | [body_collider.md OQ-BC-12 Alt B mech.3 (yaw)](../design/body_collider.md) |
 | IP-CRB-6 | blocked (IP-CRB-5) | Acceptance harness: add the roll-persistence time-history regression (banked touchdown rolls to wings-level and *stays*, P-B4) and verify P-B1…P-B6 across `GearLanding_WithRollAndYaw_GearOnly_Settles`, `GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`, the impact-envelope suite, and the existing gear regressions | IP-CRB-5 | [body_collider.md OQ-BC-12 Alt B invariants](../design/body_collider.md) |
 | IP-CRB-7 | blocked (IP-CRB-5, IP-CRB-6) | Remove the superseded §5c roll deviation-derivative path and mark IP-BC-13/14/15 superseded in [body_collider_dynamics.md](body_collider_dynamics.md) | IP-CRB-5, IP-CRB-6 | [body_collider.md OQ-BC-12 Alt B mech.3 (roll)](../design/body_collider.md) |
 
-> **IP-CRB-2 / IP-CRB-3 blocked reason:** the inertia-plumbing chain — IP-CRB-2 needs the `BodyCollider`
-> inertia members and their serialization (IP-CRB-1) in place; IP-CRB-3 then needs `initialize` to have
-> stored `1/m` and `I⁻¹` (IP-CRB-2) before it can form `K_c` in `step`.
+> **IP-CRB-5 blocked reason:** the persistent-rate roll channel is coded, but its **explicit** integration
+> of the (correctly-righting) gear roll moment against the tiny airframe roll inertia is a stiff mode that
+> diverges at the outer step — **OQ-BC-13** must be resolved (stiff-stable integration vs characterized
+> bank-restoring mode) before the roll channel is stable and the banked/crosswind regressions can pass.
 >
-> **IP-CRB-5 blocked reason:** the roll-currency correction needs *both* the physical collider moment
-> (IP-CRB-3 — otherwise the oversized penalty moment still kicks the roll integrator) and the
-> contact-excluded attitude reference (IP-CRB-4 — otherwise roll is driven twice, once through the
-> integrator and once through the velocity-vector swing).
+> **IP-CRB-5c blocked reason:** the yaw retarget onto the `n_y` loop is a refinement that only matters once
+> the roll channel is stable (IP-CRB-5); until then the roll divergence dominates the crosswind result.
 >
 > **IP-CRB-6 blocked reason:** the acceptance invariants (P-B1…P-B6, including roll persistence) can only be
-> evaluated once the roll fix (IP-CRB-5) is in place.
+> evaluated once the roll fix (IP-CRB-5) is stable.
 >
 > **IP-CRB-7 blocked reason:** the superseded roll deviation-derivative path may be removed only after its
 > replacement (IP-CRB-5) is verified by the full acceptance run (IP-CRB-6).
@@ -80,3 +81,16 @@ serialization round-trip tests never see a half-migrated message.
 contacts (the collider pivot bleeds on `τ` rather than propagating as `Iω`); this is the accepted fidelity
 boundary recorded in the design and is out of scope for this plan. Crossing it is the Alt A decision, not a
 CRB item.
+
+**Discovered gap during implementation (needs a decision — rule 14).** After IP-CRB-3/4, the steep-dive
+(−53°) and inverted body-collider impact tests (`BodyColliderOnly_SteepDiveImpact`,
+`BodyColliderOnly_InvertedImpact`) still limit-cycle in **pitch** (~49 / ~616 reversals) — these are the
+*pre-existing* OQ-BC-11 "lift-into-ground fight" failures. Alt B mechanisms 1–3 do **not** address them:
+the driver is the FBW commanding aero lift (`n_z=+1`) *toward* the terrain in a pitched/inverted attitude,
+an aero-lift loop that neither the momentum impulse nor the contact-excluded reference touches. The
+OQ-BC-12 closure over-claimed that Alt B addresses OQ-BC-11. Additionally the shallow-belly
+`BodyColliderOnly_Landing_DoesNotOscillateAfterContact` regressed slightly (pitch p2p 1.0→1.72°) from the
+smaller impulse force. **Resolution options:** (a) add the scoped aero-lift suppression (OQ-BC-9 Alt 3 /
+OQ-BC-11 Alt 1 — clamp aero lift toward zero while body-collider contact is the active contact) as a 4th
+Alt B mechanism; (b) reopen OQ-BC-11 as a separate follow-up and re-scope these envelope tests out of the
+CRB acceptance. Roll (IP-CRB-5) is orthogonal to this pitch gap and proceeds regardless.

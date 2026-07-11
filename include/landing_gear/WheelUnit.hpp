@@ -25,6 +25,10 @@ struct WheelUnitParams {
     float           rolling_resistance_nd           = 0.02f;
     float           max_brake_torque_nm             = 0.0f;
     bool            is_steerable                    = false;
+    // Magic castering wheel (nose gear): carries load and rolls but produces NO side force
+    // (F_y = 0), quasi-statically aligned to its ground-relative velocity. Directional control
+    // is left to the FBW yaw model, not nosewheel cornering (landing_gear.md §3, OQ-BC-12 Alt B).
+    bool            is_castering                    = false;
     bool            has_brake                       = false;
     float           spindown_time_s                 = 5.0f;
     float           spindown_reference_speed_mps    = 20.0f;

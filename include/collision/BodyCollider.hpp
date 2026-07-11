@@ -34,9 +34,12 @@ class BodyCollider {
 public:
     // mass_kg and dt_s are the airframe mass and outer step rate; the §5a
     // velocity-arrest damping is derived from them (body_collider.md §5a / OQ-BC-5).
+    // inertia_diag_kgm2 is the body-frame inertia diagonal (Ixx, Iyy, Izz); it feeds
+    // the OQ-BC-12 Alt B momentum impulse K_c = 1/m + (r x n)^T I^-1 (r x n).
     // The defaults are a convenience for geometry unit tests — Aircraft always
-    // passes the real airframe mass and step.
-    void initialize(const nlohmann::json& config, float mass_kg = 1.0f, float dt_s = 0.01f);
+    // passes the real airframe mass, step, and inertia.
+    void initialize(const nlohmann::json& config, float mass_kg = 1.0f, float dt_s = 0.01f,
+                    const Eigen::Vector3f& inertia_diag_kgm2 = Eigen::Vector3f::Zero());
     void reset() {}
 
     // Compute contact forces against terrain.
@@ -99,6 +102,12 @@ private:
     // mass-scaled and tuning-free). Both clamped to >= 0 on load.
     float _friction_coulomb_nd = 0.f;
     float _friction_viscous_nd = 0.f;
+    // Airframe mass (kg) and body-frame inertia diagonal (Ixx, Iyy, Izz, kg*m^2),
+    // supplied by Aircraft (OQ-BC-5). Consumed by the OQ-BC-12 Alt B momentum impulse
+    // K_c = 1/m + (r x n)^T I^-1 (r x n); serialized so a restored collider keeps them
+    // without Aircraft re-supplying mass/inertia.
+    float           _mass_kg           = 0.f;
+    Eigen::Vector3f _inertia_diag_kgm2 = Eigen::Vector3f::Zero();
     // Maximum distance from CG to any corner of any volume, over all orientations.
     // Used as the AGL early-exit threshold.
     float _max_reach_m = 0.f;

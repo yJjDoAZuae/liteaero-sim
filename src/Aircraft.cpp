@@ -202,7 +202,9 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     // torque persists at zero airspeed.
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    // OQ-BC-12 Alt B mech.3 (IP-CRB-5c): yaw is damped by the FBW n_y (lateral coordination) closed
+    // loop the model already carries — ny_wn/ny_zeta — not the ad-hoc dtheta_wn_yaw.
+    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _dtheta_pitch_filter.resetToInput(0.f);
     _dtheta_roll_filter .resetToInput(0.f);
     _dtheta_yaw_filter  .resetToInput(0.f);
@@ -227,7 +229,7 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     // body-collider contact reaction only (OQ-BC-6 → parallel set in Aircraft).
     _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _bc_dtheta_pitch_filter.resetToInput(0.f);
     _bc_dtheta_roll_filter .resetToInput(0.f);
     _bc_dtheta_yaw_filter  .resetToInput(0.f);
@@ -293,7 +295,9 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     if (config.contains("body_collider")) {
         // §5a: the velocity-arrest damping is derived from airframe mass and the
         // outer step (OQ-BC-5); both are already set above.
-        _body_collider.initialize(config.at("body_collider"), _inertia.mass_kg, _outer_dt_s);
+        _body_collider.initialize(
+            config.at("body_collider"), _inertia.mass_kg, _outer_dt_s,
+            Eigen::Vector3f{_inertia.Ixx_kgm2, _inertia.Iyy_kgm2, _inertia.Izz_kgm2});
         _has_body_collider = true;
     } else {
         _has_body_collider = false;
@@ -327,6 +331,8 @@ void Aircraft::reset() {
     _bc_force_x.setZero();
     _prev_dtheta_roll  = 0.f;
     _prev_dtheta_yaw   = 0.f;
+    _roll_rate_state_rps = 0.f;  // IP-CRB-5: persistent wind-axis roll-rate state
+    _roll_torque_accel_prev = 0.f;  // OQ-BC-13: Tustin previous-input term
     _v_filt_ned.setZero();
     _v_filt_init = false;
     _settle_axbar = 0.f;
@@ -377,6 +383,9 @@ void Aircraft::step(double time_sec,
     // Rotation matrices used both here and at step 10 (gear-to-wind transform).
     // _state is not mutated between steps 5 and 10.
     constexpr float kGravity_mps2 = 9.80665f;
+    // OQ-BC-13: FBW roll-rate authority limit — the induced contact roll-rate state is clamped to this
+    // reasonable physical bound (the roll axis should never command rates beyond it; also a stiff-mode guard).
+    constexpr float kRollRateLimit_rps = 6.0f;
     const Eigen::Matrix3f R_nb_mat = _state.q_nb().toRotationMatrix();
     const Eigen::Matrix3f R_nw_mat = _state.q_nw().toRotationMatrix();
 
@@ -542,27 +551,52 @@ void Aircraft::step(double time_sec,
         //     Gear and body-collider filters share ωn/ζ, so the per-axis sum equals the former
         //     combined channel by linearity. ---
         const float inv_wn2_pitch = 1.0f / (_dtheta_wn_pitch_rad_s * _dtheta_wn_pitch_rad_s);
-        const float inv_wn2_roll  = 1.0f / (_dtheta_wn_roll_rad_s  * _dtheta_wn_roll_rad_s);
-        const float inv_wn2_yaw   = 1.0f / (_dtheta_wn_yaw_rad_s   * _dtheta_wn_yaw_rad_s);
+        const float inv_wn2_yaw   = 1.0f / (_ny_wn_rad_s   * _ny_wn_rad_s);   // FBW n_y loop (IP-CRB-5c)
+        // Pitch and yaw are ANCHORED (FBW holds n_z/α and β=0), so their deviations RETURN —
+        // the compliant H₂ low-pass on M/I is the correct dynamics (unchanged, OQ-BC-12 Alt B mech.3).
         const float dtheta_moment_pitch =
             (_dtheta_pitch_filter   .step(gear_moment_body.y() / _inertia.Iyy_kgm2)
            + _bc_dtheta_pitch_filter.step(bc_moment_body.y()   / _inertia.Iyy_kgm2)) * inv_wn2_pitch;
-        const float dtheta_roll =
-            (_dtheta_roll_filter   .step(gear_moment_body.x() / _inertia.Ixx_kgm2)
-           + _bc_dtheta_roll_filter.step(bc_moment_body.x()   / _inertia.Ixx_kgm2)) * inv_wn2_roll;
         const float dtheta_yaw =
             (_dtheta_yaw_filter   .step(gear_moment_body.z() / _inertia.Izz_kgm2)
            + _bc_dtheta_yaw_filter.step(bc_moment_body.z()   / _inertia.Izz_kgm2)) * inv_wn2_yaw;
 
         dtheta_pitch = dtheta_force + dtheta_moment_pitch;
 
-        // Roll: rate of change of (total) deviation → roll rate contribution for commitAttitude.
-        delta_rr_filt_rps  = (dtheta_roll - _prev_dtheta_roll) / _outer_dt_s;
-        // Yaw: rate of change of (total) deviation × velocity → lateral specific force.
-        delta_ay_filt_mps2 = (dtheta_yaw  - _prev_dtheta_yaw)  / _outer_dt_s * V_safe;
+        // Roll (OQ-BC-12 Alt B mech.3, IP-CRB-5): the FBW rate-commands roll with no bank hold,
+        // so the contact roll torque integrates into a PERSISTENT wind-axis roll rate applied
+        // directly to q_nw — NOT a returning deviation. The gear supplies a continuous righting
+        // torque (rolls a banked touchdown to level and it STAYS, since M_x → 0 at level), the
+        // collider an impulse kick (its M_x = r × F_impulse integrates to the momentum pivot
+        // Δω ≈ v_c,n/r). Both sources drive the same wind-axis roll rate.
+        //
+        // The roll-rate damping is the FBW CLOSED-LOOP roll-rate response the model already
+        // carries (ζ·ωₙ of the rate-command loop, `roll_rate_wn`/`roll_rate_zeta`) — NOT a
+        // hand-tuned constant and NOT a separate open-loop aero term (that would double-count
+        // what the closed loop already models). τ = 1/(ζ·ωₙ). This replaces the old
+        // delta_rr = d(Δθ_roll)/dt, whose bank telescoped back to the pre-contact value.
+        const float roll_torque_accel =
+            (gear_moment_body.x() + bc_moment_body.x()) / _inertia.Ixx_kgm2;   // M_x / Ixx (a[n])
+        const float tau_roll =
+            1.0f / std::max(_roll_rate_zeta_nd * _roll_rate_wn_rad_s, 1e-3f);   // FBW closed-loop
+        // OQ-BC-13: advance ω̇ = a − ω/τ with TUSTIN (trapezoidal), not forward Euler — the gear righting
+        // mode is overdamped-stable but stiff (ωn≈59 rad/s, ζ≈1.4), and explicit Euler diverges while the
+        // A-stable bilinear renders the true settling. ω[n] = (a[n]+a[n-1]+ω[n-1]·(A−B))/(A+B),
+        // A=2/Δt, B=1/τ. Then clamp to the FBW roll-rate authority (reasonable physical limit / guard).
+        {
+            const float A = 2.0f / _outer_dt_s;
+            const float B = 1.0f / tau_roll;
+            _roll_rate_state_rps =
+                (roll_torque_accel + _roll_torque_accel_prev + _roll_rate_state_rps * (A - B)) / (A + B);
+            _roll_torque_accel_prev = roll_torque_accel;
+            _roll_rate_state_rps =
+                std::clamp(_roll_rate_state_rps, -kRollRateLimit_rps, kRollRateLimit_rps);
+        }
+        delta_rr_filt_rps = _roll_rate_state_rps;
 
-        _prev_dtheta_roll = dtheta_roll;
-        _prev_dtheta_yaw  = dtheta_yaw;
+        // Yaw: rate of change of the (returning) deviation × velocity → lateral specific force.
+        delta_ay_filt_mps2 = (dtheta_yaw - _prev_dtheta_yaw) / _outer_dt_s * V_safe;
+        _prev_dtheta_yaw   = dtheta_yaw;
     }
 
     LoadFactorInputs lfa_in;
@@ -690,16 +724,27 @@ void Aircraft::step(double time_sec,
     //     that otherwise whips the zero-inertia attitude (and spikes the gear). The committed
     //     attitude then yields a consistent (near-zero at quiescence) body rate for the gear.
     const Eigen::Vector3f& v_final_ned = _state.velocity_NED_mps();
+    // OQ-BC-12 Alt B mech.2 (IP-CRB-4): reference the velocity-slaving path-curvature to
+    // the CONTACT-EXCLUDED velocity, so a contact force does not whip the zero-inertia
+    // attitude by swinging the velocity vector. The contact-induced velocity change over
+    // this step is (F_contact/m)*dt; subtracting it makes the attitude follow the
+    // aerodynamic flight path, and contact-induced rotation is delivered only through the
+    // §5c channels (once, not twice). In free flight force_body_n == 0 so v_att_base ==
+    // v_final and behavior is unchanged. The authority fade phi still uses the real speed.
+    Eigen::Vector3f v_att_base = v_final_ned;
+    if (m > 0.f) {
+        v_att_base -= (R_nb_mat * _contact_forces.force_body_n) * (dt_s / m);
+    }
     if (!_v_filt_init) {
-        _v_filt_ned  = v_final_ned;
+        _v_filt_ned  = v_att_base;
         _v_filt_init = true;
     } else {
         const float tau   = std::max(_att_filt_tau_s, 1e-3f);
         const float alpha = 1.0f - std::exp(-dt_s / tau);
-        _v_filt_ned += alpha * (v_final_ned - _v_filt_ned);
+        _v_filt_ned += alpha * (v_att_base - _v_filt_ned);
     }
     const float phi_att = phiAuthority(v_final_ned.norm(), _dtheta_vref_mps);
-    const Eigen::Vector3f v_att_ref = phi_att * v_final_ned + (1.0f - phi_att) * _v_filt_ned;
+    const Eigen::Vector3f v_att_ref = phi_att * v_att_base + (1.0f - phi_att) * _v_filt_ned;
 
     _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s, v_att_ref);
 }
@@ -735,6 +780,8 @@ nlohmann::json Aircraft::serializeJson() const {
     j["bc_force_x"]             = nlohmann::json::array({_bc_force_x(0, 0), _bc_force_x(1, 0)});
     j["prev_dtheta_roll"]     = _prev_dtheta_roll;
     j["prev_dtheta_yaw"]      = _prev_dtheta_yaw;
+    j["roll_rate_state_rps"]  = _roll_rate_state_rps;  // IP-CRB-5
+    j["roll_torque_accel_prev"] = _roll_torque_accel_prev;  // OQ-BC-13 Tustin state
     j["att_filt_tau_s"]       = _att_filt_tau_s;
     j["v_filt_ned"]           = nlohmann::json::array({_v_filt_ned.x(), _v_filt_ned.y(), _v_filt_ned.z()});
     j["v_filt_init"]          = _v_filt_init;
@@ -816,7 +863,9 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_relax_wn_rad_s, _nz_relax_zeta_nd, 0.f);
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    // OQ-BC-12 Alt B mech.3 (IP-CRB-5c): yaw is damped by the FBW n_y (lateral coordination) closed
+    // loop the model already carries — ny_wn/ny_zeta — not the ad-hoc dtheta_wn_yaw.
+    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     if (j.contains("nz_relax_filter"))     _nz_relax_filter.deserializeJson(j.at("nz_relax_filter"));
     if (j.contains("dtheta_pitch_filter")) _dtheta_pitch_filter.deserializeJson(j.at("dtheta_pitch_filter"));
@@ -826,7 +875,7 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     // §5c body-collider rotation-deviation filters: same config as the gear set, restore state.
     _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _bc_fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     if (j.contains("bc_dtheta_pitch_filter")) _bc_dtheta_pitch_filter.deserializeJson(j.at("bc_dtheta_pitch_filter"));
     if (j.contains("bc_dtheta_roll_filter"))  _bc_dtheta_roll_filter.deserializeJson(j.at("bc_dtheta_roll_filter"));
@@ -854,6 +903,8 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     }
     _prev_dtheta_roll  = j.value("prev_dtheta_roll",  0.f);
     _prev_dtheta_yaw   = j.value("prev_dtheta_yaw",   0.f);
+    _roll_rate_state_rps = j.value("roll_rate_state_rps", 0.f);  // IP-CRB-5
+    _roll_torque_accel_prev = j.value("roll_torque_accel_prev", 0.f);  // OQ-BC-13
     _att_filt_tau_s    = j.value("att_filt_tau_s", _att_filt_tau_s);
     if (j.contains("v_filt_ned") && j.at("v_filt_ned").size() >= 3) {
         _v_filt_ned.x() = j.at("v_filt_ned").at(0).get<float>();
@@ -952,6 +1003,8 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_dtheta_vref_mps(_dtheta_vref_mps);
     proto.set_wa_q_lo_pa(_wa_q_lo_pa);
     proto.set_wa_q_hi_pa(_wa_q_hi_pa);
+    proto.set_roll_rate_state_rps(_roll_rate_state_rps);  // IP-CRB-5
+    proto.set_roll_torque_accel_prev(_roll_torque_accel_prev);  // OQ-BC-13
     proto.set_dtheta_stance_tau_s(_dtheta_stance_tau_s);
     proto.set_nz_relax_wn_rad_s(_nz_relax_wn_rad_s);
     proto.set_nz_relax_zeta_nd(_nz_relax_zeta_nd);
@@ -1037,18 +1090,22 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _dtheta_vref_mps       = proto.dtheta_vref_mps();
     _wa_q_lo_pa            = proto.wa_q_lo_pa();
     _wa_q_hi_pa            = proto.wa_q_hi_pa();
+    _roll_rate_state_rps   = proto.roll_rate_state_rps();  // IP-CRB-5
+    _roll_torque_accel_prev = proto.roll_torque_accel_prev();  // OQ-BC-13
     _nz_relax_wn_rad_s     = proto.nz_relax_wn_rad_s();
     _nz_relax_zeta_nd      = proto.nz_relax_zeta_nd();
     _dtheta_stance_tau_s   = (_nz_relax_wn_rad_s > 0.0f) ? 1.0f / _nz_relax_wn_rad_s : 1.0f;
     _nz_relax_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _nz_relax_wn_rad_s, _nz_relax_zeta_nd, 0.f);
     _dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    // OQ-BC-12 Alt B mech.3 (IP-CRB-5c): yaw is damped by the FBW n_y (lateral coordination) closed
+    // loop the model already carries — ny_wn/ny_zeta — not the ad-hoc dtheta_wn_yaw.
+    _dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     // §5c body-collider rotation-deviation filters: same config as the gear set.
     _bc_dtheta_pitch_filter.setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_pitch_rad_s, _dtheta_zeta_nd, 0.f);
     _bc_dtheta_roll_filter .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_roll_rad_s,  _dtheta_zeta_nd, 0.f);
-    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _dtheta_wn_yaw_rad_s,   _dtheta_zeta_nd, 0.f);
+    _bc_dtheta_yaw_filter  .setLowPassSecondIIR(_cmd_filter_dt_s, _ny_wn_rad_s,   _ny_zeta_nd, 0.f);
     _bc_fz_stance_filter.setLowPassFirstIIR(_cmd_filter_dt_s, _dtheta_stance_tau_s);
     {
         Mat21 x;

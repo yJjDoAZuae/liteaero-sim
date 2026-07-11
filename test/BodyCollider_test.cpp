@@ -203,6 +203,37 @@ TEST(BodyColliderTest, ArrestDampingScalesWithMass) {
     EXPECT_NEAR(F_heavy / F_light, 2.f, 1e-3f);
 }
 
+// IP-CRB-3 (OQ-BC-12 Alt B, invariant P-B2): the momentum impulse partitions the
+// arrest by the corner effective inverse mass K_c = 1/m + (r x n)^T I^-1 (r x n). A
+// long-lever contact routes most of the impulse into rotation, so the normal force
+// (hence the CM velocity change) is a small fraction of a pure translational arrest.
+TEST(BodyColliderTest, MomentumImpulse_LongLever_SmallNormalForce) {
+    // Wide thin wing-like volume: corners at y = +/-1.38 m (a large roll lever), hz small.
+    const nlohmann::json cfg = {{"volumes", nlohmann::json::array({
+        {
+            {"name",                 "wing"},
+            {"half_extents_body_m",  {0.08f, 1.38f, 0.015f}},
+            {"center_offset_body_m", {0.f, 0.f, 0.f}}
+        }
+    })}};
+    const Eigen::Vector3f inertia{0.08f, 0.15f, 0.22f};  // small-UAS: Ixx=0.08 → lever dominates K_c
+
+    BodyCollider with_inertia;
+    with_inertia.initialize(cfg, 5.0f, 0.02f, inertia);
+    BodyCollider translational;                          // zero inertia → K_c = 1/m (pure translation)
+    translational.initialize(cfg, 5.0f, 0.02f, Eigen::Vector3f::Zero());
+
+    // Level, shallow sink so only the 4 bottom wing corners contact.
+    const auto snap = makeSinkingSnap(0.01f, 2.f);
+    const float F_rot   = with_inertia.step(snap).force_body_n.norm();
+    const float F_trans = translational.step(snap).force_body_n.norm();
+    ASSERT_GT(F_trans, 0.f);
+    ASSERT_GT(F_rot,   0.f);
+    // 1.38^2 / 0.08 ≈ 24 vs 1/m = 0.2 → K_c is ~2 orders larger, so the force collapses.
+    EXPECT_LT(F_rot / F_trans, 0.05f)
+        << "long-lever contact must route most of the impulse into rotation, not CM arrest";
+}
+
 // ---------------------------------------------------------------------------
 // Inverted aircraft — protection for upside-down crash
 // ---------------------------------------------------------------------------
@@ -384,6 +415,63 @@ TEST(BodyColliderTest, ProtoRoundTrip) {
     const auto cf_restored = restored.step(makeSinkingSnap(0.05f, 2.f), terrain);
     EXPECT_NEAR(cf_restored.force_body_n.z(), cf_orig.force_body_n.z(), 1e-3f);
     EXPECT_LT(cf_orig.force_body_n.z(), 0.f);
+}
+
+// ---------------------------------------------------------------------------
+// IP-CRB-1 (OQ-BC-12 Alt B): airframe mass + body-frame inertia diagonal are
+// serialized so a restored collider retains the terms needed for the momentum
+// impulse K_c = 1/m + (r×n̂)ᵀ I⁻¹ (r×n̂) without Aircraft re-supplying them.
+// ---------------------------------------------------------------------------
+
+TEST(BodyColliderTest, MassAndInertiaJsonRoundTrip) {
+    BodyCollider original;
+    original.initialize(makeConfig(0.4f, 0.25f, 0.15f), 1000.f, 0.01f);
+
+    nlohmann::json j = original.serializeJson();
+    EXPECT_FLOAT_EQ(j.at("mass_kg").get<float>(), 1000.f);  // captured from initialize
+
+    // The inertia diagonal is populated by Aircraft in IP-CRB-2; inject it here to
+    // exercise the serialization path on its own.
+    j["inertia_diag_kgm2"] = {120.f, 340.f, 400.f};
+    BodyCollider restored;
+    restored.deserializeJson(j);
+
+    const nlohmann::json j2 = restored.serializeJson();
+    EXPECT_FLOAT_EQ(j2.at("mass_kg").get<float>(), 1000.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(0).get<float>(), 120.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(1).get<float>(), 340.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(2).get<float>(), 400.f);
+}
+
+TEST(BodyColliderTest, MassAndInertiaProtoRoundTrip) {
+    BodyCollider original;
+    original.initialize(makeConfig(0.4f, 0.25f, 0.15f), 1000.f, 0.01f);
+
+    nlohmann::json j = original.serializeJson();
+    j["inertia_diag_kgm2"] = {120.f, 340.f, 400.f};
+    BodyCollider seeded;
+    seeded.deserializeJson(j);
+
+    const auto bytes = seeded.serializeProto();
+    BodyCollider restored;
+    restored.deserializeProto(bytes);
+
+    const nlohmann::json j2 = restored.serializeJson();
+    EXPECT_FLOAT_EQ(j2.at("mass_kg").get<float>(), 1000.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(0).get<float>(), 120.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(1).get<float>(), 340.f);
+    EXPECT_FLOAT_EQ(j2.at("inertia_diag_kgm2").at(2).get<float>(), 400.f);
+}
+
+// IP-CRB-2: initialize() populates the inertia diagonal from the value Aircraft supplies.
+TEST(BodyColliderTest, InitializePopulatesInertiaDiagonal) {
+    BodyCollider c;
+    c.initialize(makeConfig(0.4f, 0.25f, 0.15f), 5.0f, 0.02f, Eigen::Vector3f{0.08f, 0.15f, 0.22f});
+    const nlohmann::json j = c.serializeJson();
+    EXPECT_FLOAT_EQ(j.at("mass_kg").get<float>(), 5.0f);
+    EXPECT_FLOAT_EQ(j.at("inertia_diag_kgm2").at(0).get<float>(), 0.08f);
+    EXPECT_FLOAT_EQ(j.at("inertia_diag_kgm2").at(1).get<float>(), 0.15f);
+    EXPECT_FLOAT_EQ(j.at("inertia_diag_kgm2").at(2).get<float>(), 0.22f);
 }
 
 // ---------------------------------------------------------------------------

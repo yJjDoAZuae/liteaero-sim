@@ -553,12 +553,12 @@ per step. At a nominal outer step all of this is negligible relative to the LFA 
 
 ## Open Questions
 
-Open questions (ascending by ID). **All OQ-BC questions (OQ-BC-1 through OQ-BC-12) are resolved**; their
+Open questions (ascending by ID). **All OQ-BC questions (OQ-BC-1 through OQ-BC-13) are resolved**; their
 resolution notes are retained in numerical order in the subsections below. There are no open questions.
 
 | ID | Summary | Blocking |
 | --- | --- | --- |
-| — | *(none open — OQ-BC-12 resolved to Alternative B on 2026-07-10; see its resolution note and the [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md) plan)* | — |
+| — | *(none open — OQ-BC-12 resolved to Alternative B; OQ-BC-13 resolved to Alternative 1, stiff-stable integration + state rate limit)* | — |
 
 ### OQ-BC-1 — Inelastic Normal-Contact Formulation *(Resolved)*
 
@@ -1382,8 +1382,11 @@ the residual double-count.
    - **Roll — a filtered rate applied to the wind-axis orientation $q_{nw}$; persists; NOT a body-to-wind
      deviation.** The gear/collider roll input drives a wind-axis roll **rate** — the gear via the continuous
      specific torque $M_x/I_{xx}$, the collider via the momentum impulse kick
-     $\Delta\omega_x=J\,(I^{-1}(\mathbf{r}\times\hat{\mathbf{n}}))_x$ — shaped by a first-order filter
-     carrying the FBW/strut roll-rate damping $\tau$, and applied **directly to $q_{nw}$** as a roll about
+     $\Delta\omega_x=J\,(I^{-1}(\mathbf{r}\times\hat{\mathbf{n}}))_x$ — shaped by a first-order filter whose
+     rate damping is the **FBW closed-loop roll-rate response the model already carries**
+     ($\tau=1/(\zeta\,\omega_n)$ of the `roll_rate_wn`/`roll_rate_zeta` rate-command loop) — *not* a
+     hand-tuned constant, and *not* a separate open-loop aero term (that would double-count the damping the
+     closed loop already models). It is applied **directly to $q_{nw}$** as a roll about
      the wind-X (velocity) axis (exactly the existing `commitAttitude` roll-rate input). Because $q_{nw}$ is
      an integrated orientation and the FBW holds no bank setpoint, the bank **persists** — it holds wherever
      the integrated rate leaves it and settles only when the driving moment reaches its bank-dependent
@@ -1397,14 +1400,43 @@ the residual double-count.
      inelastic for the collider ($e=0$, no stored energy) yet bounded (the $\tau$ roll-rate damping bleeds
      the induced rate and the strut re-levels on subsequent contact — a persistent but finite bank, not a
      catapult).
-   - **Yaw — compliant deviation (sideslip-anchored; returns; like pitch).** The FBW holds coordinated
-     flight (zero aerodynamic sideslip $\beta$), so yaw is anchored just as pitch is: a contact yaw
-     disturbance (crab drag, wingtip drag, asymmetric gear drag) creates transient sideslip that the FBW
-     decrabs back to $\beta\to0$, leaving **no** persistent yaw deviation. The existing compliant
-     $\Delta\theta_\text{yaw}=(1/\omega_n^2)\,H_2(M_z/I_{zz})$, applied through the lateral-force
-     ($\delta_{ay}$) currency, is the correct *returning* dynamics and is kept for both gear and collider
-     (the collider yaw pivot feeds the same compliant channel). It still requires the mechanism-2 contact
-     exclusion so a legitimate contact yaw is not *also* double-counted through the velocity-vector swing.
+   - **Yaw — compliant deviation (sideslip-anchored; returns), damped by the FBW $n_y$ loop and effective to
+     zero speed via nosewheel steering.** The FBW holds coordinated flight (zero aerodynamic sideslip
+     $\beta$), so yaw is anchored just as pitch is: a contact yaw disturbance (crab drag, wingtip drag,
+     asymmetric gear drag) creates transient sideslip that the FBW decrabs back to $\beta\to0$, leaving
+     **no** persistent yaw deviation. The response is the compliant $H_2(M_z/I_{zz})$ (using the **yaw
+     inertia $I_{zz}$**), applied through the lateral-force ($\delta_{ay}$) currency. Two corrections make it
+     physical: **(a)** its damping is the **FBW lateral/coordination closed loop the model already carries**
+     (`ny_wn_rad_s`/`ny_zeta_nd`, the $n_y$ command loop) — *not* the ad-hoc `dtheta_wn_yaw` and *not* a
+     separate open-loop aero term; **(b)** the yaw authority must stay **effective to zero ground speed**,
+     because on the ground the yaw is controlled by **nosewheel steering**, not the airspeed-dependent aero
+     coordination ($a_\text{lat}=V\dot\psi$ fades to zero). The yaw damping is the FBW `n_y`
+     closed loop regardless of speed; the nosewheel just has to not *fight* it.
+
+     **Nosewheel model (trimaero-consistent — no steering controller, no gains).** The nosewheel is a
+     **magic castering wheel**: it carries vertical load and rolls, is quasi-statically trimmed to align
+     with its ground-relative velocity, and produces **no side force** (`F_y = 0`). It therefore contributes
+     no cornering/yaw disturbance. **Directional control is then entirely the FBW yaw model** (the `n_y`
+     closed loop), which is what makes it effective to zero ground speed. This is the actual crosswind fix:
+     today the nose gear is flagged `is_steerable` and computes a Pacejka lateral force `F_y` from its slip
+     angle, so at a crab that `F_y` is a large yaw disturbance that whips the airframe; modelling the
+     nosewheel as free-castering removes that disturbance at its source, and the characterized FBW loop
+     supplies the directional control — no steering feedback law, consistent with the trimaero philosophy of
+     modelling FBW *outcomes* (a characterized `ωₙ`/`ζ` loop) rather than effector gains. *(The
+     castering-nosewheel behavior is a landing-gear-model element — record it in
+     [landing_gear.md](landing_gear.md) as well; it is the `F_y = 0` treatment of the nose/castering wheel.)* It still requires the mechanism-2 contact exclusion
+     so a legitimate contact yaw is not *also* double-counted through the velocity-vector swing. This yaw
+     correction is the root fix for the **crosswind (crabbed) touchdown**: an uncontrolled crab swings the
+     velocity vector, which the velocity-slaving path-curvature turns into a roll catapult; damping the yaw
+     properly (and to zero speed) removes the swing at its source.
+
+   **Per-axis damping principle.** Each axis' contact-rotation damping is the airframe's **FBW closed-loop
+   response for that axis** — `roll_rate` for roll, $n_y$ for yaw, $n_z$ for pitch — using the real inertia
+   ($I_{xx}$, $I_{zz}$, $I_{yy}$). These closed loops already embed the aero + control-effector dynamics, so
+   no separate open-loop aero damping is added (it would double-count). The ad-hoc `dtheta_wn_*` frequencies
+   are superseded by the FBW-loop frequencies for the contact channels. *(Pitch is currently still on
+   `dtheta_wn_pitch`; migrating it to the $n_z$ loop is the consistency follow-up, tracked with the OQ-BC-11
+   pitch-envelope gap.)*
 
    The momentum/inertia balance is unchanged by the currency fix: $\omega_\text{roll}$ is driven by
    $M_x/I_{xx}$ (gear) and the $K_c$-partitioned impulse (collider), so the rotational-versus-translational
@@ -1450,6 +1482,88 @@ required. **Open sub-question before implementation:** whether the contact-exclu
 should subtract the *instantaneous* contact velocity delta or a short-window average — the instantaneous
 form is exact per step but may need the existing low-pass to reject per-step bounce; to be pinned by the
 `GearLanding_*` time-histories during implementation.
+
+### OQ-BC-13 — Alt B roll channel: stiff explicit integration of the gear roll moment diverges *(Resolved — Alternative 1)*
+
+**Resolution (Alternative 1 — Tustin (stiff-stable) integration of the roll-rate state, plus a state rate
+limit).** The roll-rate state $\omega_\text{roll}$ (driven by $\dot\omega=M_x/I_{xx}-\omega/\tau$, $\tau$
+from the FBW `roll_rate` loop) is advanced with **Tustin (bilinear/trapezoidal)** integration rather than
+forward Euler, and $\omega_\text{roll}$ is **clamped to a reasonable FBW roll-rate limit**. **Rationale
+(user + analysis):** a moment-vs-bank/rate fit to the instrumented data
+($M_x\approx-k\phi-c\dot\phi$, $k\approx280$ N·m/rad, $c\approx13.5$ N·m·s/rad) gives $\omega_n\approx59$
+rad/s, $\zeta\approx1.4$ — the continuous mode is **overdamped and stable**; the fast eigenvalue
+$\lambda\approx-145\ \text{s}^{-1}$ makes forward Euler's amplification $|1+\lambda\Delta t|\approx1.9>1$
+(unstable) while a trapezoidal/implicit scheme is A-stable, so Tustin renders the true (settling) response.
+The rate limit is not a numerical band-aid but the **physical FBW roll-rate authority** — the roll axis
+should never command rates beyond reasonable limits — and serves as a defensive bound. This mirrors the
+[OQ-LG-15](landing_gear.md) resolution for the analogous pitch/force stiff mode (same velocity-slaved
+stiff-contact family) and reuses the project's Tustin discretization discipline. Implemented in IP-CRB-5.
+
+<details><summary>Problem and alternatives (retained)</summary>
+
+**Problem.** The OQ-BC-12 Alt B roll channel (IP-CRB-5) advances a wind-axis roll-rate state by explicitly
+integrating the contact roll torque over the outer step: $\omega_\text{roll}\mathrel{+}=\Delta t\,
+\big(M_x/I_{xx}-\omega_\text{roll}/\tau\big)$, with $\tau=1/(\zeta\omega_n)$ from the FBW `roll_rate` loop.
+Implementation showed this **diverges** on any banked gear touchdown (e.g. a 3.8° wingtip-graze catapults to
+107° and the crabbed crosswind case to NaN). A direct instrumentation of the gear roll moment established
+that the moment **sign is correct — it is righting**: at $+3.8°$ of bank the gear produces
+$M_x=-18.6\ \text{N·m}$ (opposing the bank, rolling toward level). The failure is not a reversed moment but a
+**stiff numerical instability**:
+
+- The small-UAS airframe roll inertia is tiny ($I_{xx}=0.08\ \text{kg·m}^2$), so $M_x/I_{xx}\approx-233\
+  \text{rad/s}^2$. Over one outer step ($\Delta t=0.02\ \text{s}$) the roll-rate state jumps $\approx-4.7\
+  \text{rad/s}$, and the bank **overshoots level in a single step** ($+3.8°\to-1.5°$).
+- The gear roll moment is also **rate-coupled**: a large roll rate drives large contact-point velocities,
+  hence large strut/tyre forces, hence a larger $M_x$. So each overshoot returns a *larger* opposing
+  moment ($M_x$ jumps $-18.6\to+70\to-296\ \text{N·m}$), and the oscillation **grows** —
+  $+3.8°\to-1.5°\to+15.5°\to\ldots\to$ NaN.
+
+This is the **roll-axis analog of OQ-LG-15**: an explicit, single-outer-rate integration of a **stiff**
+contact mode (large righting stiffness against a near-zero effective inertia gives a very high natural
+frequency $\omega_n=\sqrt{k/I_{xx}}$ that $\Delta t$ cannot resolve) in the velocity-slaved model. The FBW
+`roll_rate` damping ($\tau\approx0.048$ s) is far too weak to stabilize a mode this stiff. Affected: every
+banked or crabbed gear touchdown of a low-inertia airframe; wings-level touchdowns (small $M_x$) are
+unaffected, which is why the `FullStop` regressions stay green.
+
+**Alternatives.**
+
+1. **Stiff-stable (implicit) integration of the roll-rate state.** Advance $\omega_\text{roll}$ with a
+   backward-Euler / Tustin update on the $M_x/I_{xx}$ term (A-stable), so the stiff righting mode settles
+   instead of overshooting at the outer $\Delta t$. Reuses the project's existing Tustin/`tf2ss` machinery
+   (as OQ-LG-15/20 did for the force channel).
+   - *Benefits:* direct numerical fix; no sub-stepping cost; consistent with the OQ-LG-15 resolution.
+   - *Drawbacks:* the rate-coupled $M_x(\omega)$ makes the mode nonlinear/time-varying, so an implicit
+     *linear* update may still need the moment linearized or a sub-iteration; needs the effective stiffness
+     $k=\partial M_x/\partial\phi$ estimate.
+   - *Prerequisites:* an effective roll-stiffness/damping estimate for the implicit coefficients.
+2. **Sub-step the roll integration** at a rate that resolves the stiff mode ($\omega_n\,\Delta t_\text{sub}$
+   below the explicit stability limit), like the gear wheel-spin sub-stepping (OQ-LG-5).
+   - *Benefits:* keeps the explicit form; local to the roll channel.
+   - *Drawbacks:* cost scales with stiffness; the mode frequency is airframe-dependent, so the sub-step
+     count must be derived, not fixed.
+   - *Prerequisites:* the $\omega_n$ estimate to size the sub-step count.
+3. **Model the gear roll righting as a characterized closed-loop bank-restoring mode** (trimaero style):
+   instead of integrating the raw stiff $M_x/I_{xx}$, drive the bank toward the gear equilibrium (wings
+   level on flat ground) through a characterized 2nd-order settling ($\omega_n,\zeta$ from the
+   gear/airframe roll mode), analogous to how the §5c pitch/force channels model the FBW/gear outcome
+   rather than the raw stiff force.
+   - *Benefits:* aligns with the load-factor/trimaero philosophy (model the closed-loop outcome, not the
+     stiff primitive); intrinsically bounded; no explicit-stiffness blow-up.
+   - *Drawbacks:* re-introduces a characterized-mode parameterization for roll (what OQ-BC-12 replaced with
+     the persistent rate); must preserve the "bank persists / does not spring back to entry bank" property
+     while still settling to the *gear* equilibrium.
+   - *Prerequisites:* define the roll bank-restoring mode $\omega_n,\zeta$ and its equilibrium (gear-derived).
+
+**Recommendation.** Alternative 1 (stiff-stable integration) is the smallest change that keeps the
+OQ-BC-12 Alt B persistent-rate model and directly cures the numerical instability, and it mirrors the
+already-accepted OQ-LG-15 resolution for the analogous pitch/force stiff mode. If the rate-coupling makes a
+linear implicit update insufficient, Alternative 3 (characterized bank-restoring mode) is the
+philosophy-consistent fallback. The choice needs a decision because it changes the roll-channel numerics;
+it **blocks** the banked and crosswind gear-landing regressions, which cannot pass until the stiff mode is
+stabilized. Shares its root with [landing_gear.md OQ-LG-15](landing_gear.md) (the same velocity-slaved
+stiff-contact family) and should be resolved consistently with it.
+
+</details>
 
 ---
 

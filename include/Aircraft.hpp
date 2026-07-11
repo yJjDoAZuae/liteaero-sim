@@ -96,6 +96,12 @@ public:
     bool  isStalled()     const { return _aero_stalled; }       // positive- or negative-side stall
     bool  isClRecovering() const { return _cl_recovering_active; }
 
+    // OQ-BC-12 Alt B roll channel (IP-CRB-5) — the persistent wind-axis roll-rate state committed to
+    // q_nw each step. Exposed for instrumentation / scenario analysis (e.g. the roll-response and
+    // OQ-BC-13 stiff-integration study); the driving contact roll moment is available via
+    // contactForces().moment_body_nm.x().
+    float rollRateState_rps() const { return _roll_rate_state_rps; }
+
     // Serialize / deserialize warm-start state.
     // Note: deserializeJson() restores _propulsion state via _propulsion->deserializeJson()
     // but does not reconstruct the propulsion model itself — the correct Propulsion
@@ -156,6 +162,17 @@ private:
     liteaero::control::Mat21         _bc_force_x = liteaero::control::Mat21::Zero();
     float  _prev_dtheta_roll      = 0.f;  // Δθ_roll from previous step (for rate computation)
     float  _prev_dtheta_yaw       = 0.f;  // Δθ_yaw from previous step (for rate computation)
+    // OQ-BC-12 Alt B (IP-CRB-5): the roll deviation is a PERSISTENT filtered wind-axis roll
+    // rate on q_nw (FBW rate-commands roll, no bank hold), not a returning deviation. State =
+    // the induced roll rate; its rate damping is the FBW CLOSED-LOOP roll-rate response
+    // (ζ·ωₙ of `_roll_rate_wn_rad_s`/`_roll_rate_zeta_nd`), not a separate tuned/aero term.
+    // The gear's continuous righting torque rolls a banked touchdown to level and it STAYS
+    // (M_x → 0 at equilibrium) rather than springing back.
+    float  _roll_rate_state_rps    = 0.f;
+    // OQ-BC-13: the roll-rate state is advanced with Tustin (trapezoidal) integration for stiff-stability
+    // (the gear righting mode is overdamped-stable but stiff; forward Euler diverges). This holds the
+    // previous-step specific torque M_x/Ixx (the Tustin bilinear needs a[n-1]).
+    float  _roll_torque_accel_prev = 0.f;
     // H₂ physical rotational-mode frequencies/damping (config; OQ-LG-17 numeric values set at
     // implementation — supplied as physical constants, not derived from inertia alone, which is
     // dimensionally insufficient for a frequency).

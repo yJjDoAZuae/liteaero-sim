@@ -620,7 +620,9 @@ static nlohmann::json addFlightLandingGear(nlohmann::json config) {
             {"travel_max_m", brake ? 0.1f : 0.08f}, {"tyre_radius_m", brake ? 0.08f : 0.06f},
             {"tyre_cornering_stiffness_npm", brake ? 3000.0f : 2000.0f},
             {"tyre_longitudinal_stiffness_npm", brake ? 4000.0f : 3000.0f},
-            {"rolling_resistance_nd", 0.02f}, {"is_steerable", steer}, {"has_brake", brake},
+            {"rolling_resistance_nd", 0.02f}, {"is_steerable", steer},
+            {"is_castering", steer},  // nose wheel = magic castering wheel (F_y = 0), OQ-BC-12 Alt B
+            {"has_brake", brake},
         };
     };
     config["landing_gear"] = {{"substeps", 4}, {"wheel_units", nlohmann::json::array({
@@ -1485,6 +1487,26 @@ TEST(AircraftTest, JsonSerialization_ContainsGearFilterStateKeys) {
         << "serializeJson() must include fz_stance_filter (destancing) state";
     EXPECT_TRUE(j.contains("prev_dtheta_roll"))
         << "serializeJson() must include prev_dtheta_roll state";
+}
+
+// IP-CRB-2 (OQ-BC-12 Alt B): Aircraft must pass its inertia diagonal to the body
+// collider so the momentum impulse K_c has the airframe's rotational admittance.
+TEST(AircraftTest, BodyCollider_ReceivesAircraftInertia) {
+    auto cfg = addFlightBodyCollider(makeSmallUasConfig());
+    auto ac = std::make_unique<liteaero::simulation::Aircraft>(
+        std::make_unique<StubPropulsion>(0.0f));
+    ac->initialize(cfg, 0.02f);
+
+    const nlohmann::json j  = ac->serializeJson();
+    const auto&          bc = j.at("body_collider_config");
+    EXPECT_FLOAT_EQ(bc.at("mass_kg").get<float>(),
+                    cfg.at("inertia").at("mass_kg").get<float>());
+    EXPECT_FLOAT_EQ(bc.at("inertia_diag_kgm2").at(0).get<float>(),
+                    cfg.at("inertia").at("Ixx_kgm2").get<float>());
+    EXPECT_FLOAT_EQ(bc.at("inertia_diag_kgm2").at(1).get<float>(),
+                    cfg.at("inertia").at("Iyy_kgm2").get<float>());
+    EXPECT_FLOAT_EQ(bc.at("inertia_diag_kgm2").at(2).get<float>(),
+                    cfg.at("inertia").at("Izz_kgm2").get<float>());
 }
 
 TEST(AircraftTest, BodyColliderImpact_RotationState_RoundTrips) {

@@ -103,6 +103,7 @@
                 "tyre_longitudinal_stiffness_npm": 3000.0,
                 "rolling_resistance_nd": 0.02,
                 "is_steerable": true,
+                "is_castering": true,
                 "has_brake": false
             },
             {

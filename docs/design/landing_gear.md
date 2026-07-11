@@ -557,6 +557,16 @@ $$F(s) = D \sin\!\bigl(C \arctan(B s - E(B s - \arctan(B s)))\bigr)$$
 where $s$ is the relevant slip quantity (slip ratio $\kappa$ for longitudinal, slip angle
 $\alpha_t$ for lateral), and $B$, $C$, $D$, $E$ are shape parameters.
 
+**Castering (nose) wheel — no side force.** A wheel flagged `is_castering` is modeled as a
+free-castering wheel: it carries vertical load and rolls, is quasi-statically trimmed to align with its
+ground-relative velocity, and produces **no lateral (side) force** ($F_y \equiv 0$). It generates no
+cornering/yaw disturbance, so ground directional control is left entirely to the FBW yaw model (the `n_y`
+closed loop) rather than to nosewheel cornering — consistent with the load-factor/trimaero philosophy of
+modeling FBW *outcomes*, not effector gains, and effective to zero ground speed. This replaces the earlier
+`is_steerable` Pacejka-cornering nose wheel, whose lateral force at a crab slip angle was a large yaw
+disturbance on a crosswind touchdown. The main wheels retain their Pacejka $F_y$. (See
+[body_collider.md OQ-BC-12 Alt B mech.3 — yaw](body_collider.md).)
+
 #### 3a. Vertical Force
 
 The tyre vertical force is the strut reaction force transmitted through the contact patch:

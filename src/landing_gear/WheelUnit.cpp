@@ -169,8 +169,13 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
     const float alpha_t = -std::atan2(V_cy, std::abs(V_cx) + kVeps);
 
     // 7. Pacejka tyre forces  (B, C, D=mu*Fz, E from arch doc Table 3d)
+    // A magic castering (nose) wheel produces NO side force (F_y = 0) — it quasi-statically
+    // aligns to its ground-relative velocity; directional control is the FBW yaw model, not
+    // nosewheel cornering (landing_gear.md §3, OQ-BC-12 Alt B).
     float F_x = pacejka(kappa,   10.0f, 1.9f, friction_mu_nd * F_z,  0.97f);
-    float F_y = pacejka(alpha_t,  8.0f, 1.3f, friction_mu_nd * F_z, -1.0f);
+    float F_y = _params.is_castering
+                    ? 0.0f
+                    : pacejka(alpha_t, 8.0f, 1.3f, friction_mu_nd * F_z, -1.0f);
 
     // 8. Friction-circle saturation
     const float F_total = std::sqrt(F_x * F_x + F_y * F_y);
@@ -207,7 +212,9 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
         const float Vref_star  = std::max(std::abs(V_cx), ws_star) + kVeps;
         const float kappa_star = (r_w * omega_star - V_cx) / Vref_star;
         float F_x_star = pacejka(kappa_star, 10.0f, 1.9f, friction_mu_nd * F_z, 0.97f);
-        float F_y_star = pacejka(alpha_t,     8.0f, 1.3f, friction_mu_nd * F_z, -1.0f);
+        float F_y_star = _params.is_castering
+                             ? 0.0f
+                             : pacejka(alpha_t, 8.0f, 1.3f, friction_mu_nd * F_z, -1.0f);
         const float Ftot_star = std::sqrt(F_x_star * F_x_star + F_y_star * F_y_star);
         if (Ftot_star > F_limit && Ftot_star > 0.0f)
             F_x_star *= F_limit / Ftot_star;

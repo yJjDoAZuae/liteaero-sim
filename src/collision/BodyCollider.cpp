@@ -42,7 +42,8 @@ void BodyCollider::recomputeMaxReach() {
     }
 }
 
-void BodyCollider::initialize(const nlohmann::json& config, float mass_kg, float dt_s) {
+void BodyCollider::initialize(const nlohmann::json& config, float mass_kg, float dt_s,
+                              const Eigen::Vector3f& inertia_diag_kgm2) {
     _volumes.clear();
     for (const auto& jv : config.at("volumes")) {
         _volumes.push_back(parseVolume(jv));
@@ -65,6 +66,11 @@ void BodyCollider::initialize(const nlohmann::json& config, float mass_kg, float
             ? mass_kg / (static_cast<float>(n_corners_total) * kArrestSteps * dt_s)
             : 0.f;
 
+    // Airframe mass and body-frame inertia diagonal for the OQ-BC-12 Alt B momentum
+    // impulse K_c = 1/m + (r x n)^T I^-1 (r x n).
+    _mass_kg           = mass_kg;
+    _inertia_diag_kgm2 = inertia_diag_kgm2;
+
     recomputeMaxReach();
 }
 
@@ -85,6 +91,15 @@ ContactForces BodyCollider::step(const liteaero::nav::KinematicStateSnapshot& sn
     const Eigen::Vector3f omega  = snap.rates_body_rps;
 
     ContactForces out;
+
+    // OQ-BC-12 Alt B momentum impulse (mech.1): recover 1/(N_arr*dt) from the derived
+    // b_corner = m/(n_corners*N_arr*dt) so no separate dt is stored, plus 1/m for the
+    // translational term of the per-corner effective inverse mass K_c.
+    const std::size_t n_corners_total = 8u * _volumes.size();
+    const float inv_mass        = (_mass_kg > 0.f) ? 1.0f / _mass_kg : 0.f;
+    const float inv_arrest_time = (_mass_kg > 0.f)
+        ? static_cast<float>(n_corners_total) * _b_corner_nspm / _mass_kg   // = 1/(N_arr*dt)
+        : 0.f;
 
     for (const auto& vol : _volumes) {
         const float hx = vol.half_extents_body_m.x();
@@ -113,19 +128,30 @@ ContactForces BodyCollider::step(const liteaero::nav::KinematicStateSnapshot& sn
             const Eigen::Vector3f v_corner_ned = R_nb * (v_body + omega.cross(corner_body));
             const float pen_dot = v_corner_ned.z();
 
-            // §5a velocity-arrest contact (body_collider.md §5a). A purely
-            // dissipative, penetration-modulated force F = max(0, c * delta * delta_dot)
-            // that opposes the sink rate only — no spring, no static restoring
-            // force (the §5b hard constraint owns static non-penetration), and the
-            // max(0) floor forbids adhesion / does no work on rebound. The
-            // coefficient c = b_corner / hz makes the effective damping (c*delta)
-            // equal b_corner at the volume half-depth; penetration is capped at
-            // 2*hz so the worst-case effective damping is bounded.
-            const float hz      = vol.half_extents_body_m.z();
+            // §5a normal contact — OQ-BC-12 Alt B momentum impulse (body_collider.md
+            // §5a / Alt B mech.1). The corner's effective inverse mass along the
+            // up-normal is K_c = 1/m + (r x n)^T I^-1 (r x n) (translational + rotational
+            // admittance); the impulse J = u_n/K_c arrests the corner's normal approach
+            // and is applied over N_arr steps as F = J/(N_arr*dt). For a long lever the
+            // rotational term dominates, so the force — and hence the CM velocity change —
+            // is small (the airframe pivots rather than the CM arresting); a centered
+            // contact reduces to K_c = 1/m (pure translation). The onset factor
+            // (pen/pen_cap, capped at 1) keeps the force C0-continuous at contact and
+            // bounds it under deep embedding. No spring, no static restoring force (§5b
+            // owns non-penetration); the max(0) floor forbids adhesion / does no work on
+            // rebound (dissipative, e=0).
             const float pen_cap = 2.0f * hz;
-            const float pen_eff = std::min(pen, pen_cap);
-            const float c_nspm2 = (hz > 0.f) ? _b_corner_nspm / hz : 0.f;
-            const float F_pen   = std::max(0.f, c_nspm2 * pen_eff * pen_dot);
+            const float onset   = (pen_cap > 0.f) ? std::min(pen / pen_cap, 1.0f) : 0.f;
+            const Eigen::Vector3f n_body = R_bn * Eigen::Vector3f{0.f, 0.f, -1.f};  // up, body frame
+            const Eigen::Vector3f rxn    = corner_body.cross(n_body);
+            float rot_admittance = 0.f;
+            if (_inertia_diag_kgm2.x() > 0.f) rot_admittance += rxn.x() * rxn.x() / _inertia_diag_kgm2.x();
+            if (_inertia_diag_kgm2.y() > 0.f) rot_admittance += rxn.y() * rxn.y() / _inertia_diag_kgm2.y();
+            if (_inertia_diag_kgm2.z() > 0.f) rot_admittance += rxn.z() * rxn.z() / _inertia_diag_kgm2.z();
+            const float k_c   = inv_mass + rot_admittance;
+            const float F_pen = (k_c > 0.f)
+                ? std::max(0.f, onset * pen_dot * inv_arrest_time / k_c)
+                : 0.f;
 
             // Normal arrest force, upward in NED (flat-terrain normal = NED -z).
             Eigen::Vector3f F_ned{0.f, 0.f, -F_pen};
@@ -257,6 +283,8 @@ nlohmann::json BodyCollider::serializeJson() const {
     j["arrest_damping_corner_nspm"] = _b_corner_nspm;
     j["friction_coulomb_nd"] = _friction_coulomb_nd;
     j["friction_viscous_nd"] = _friction_viscous_nd;
+    j["mass_kg"] = _mass_kg;
+    j["inertia_diag_kgm2"] = {_inertia_diag_kgm2.x(), _inertia_diag_kgm2.y(), _inertia_diag_kgm2.z()};
     return j;
 }
 
@@ -272,6 +300,13 @@ void BodyCollider::deserializeJson(const nlohmann::json& j) {
     _b_corner_nspm = j.value("arrest_damping_corner_nspm", 0.f);
     _friction_coulomb_nd = std::max(0.f, j.value("friction_coulomb_nd", 0.f));
     _friction_viscous_nd = std::max(0.f, j.value("friction_viscous_nd", 0.f));
+    _mass_kg = j.value("mass_kg", 0.f);
+    if (j.contains("inertia_diag_kgm2")) {
+        const auto& in = j.at("inertia_diag_kgm2");
+        _inertia_diag_kgm2 = {in.at(0).get<float>(), in.at(1).get<float>(), in.at(2).get<float>()};
+    } else {
+        _inertia_diag_kgm2 = Eigen::Vector3f::Zero();
+    }
     recomputeMaxReach();
 }
 
@@ -282,6 +317,10 @@ std::vector<uint8_t> BodyCollider::serializeProto() const {
     proto.set_arrest_damping_corner_nspm(_b_corner_nspm);
     proto.set_friction_coulomb_nd(_friction_coulomb_nd);
     proto.set_friction_viscous_nd(_friction_viscous_nd);
+    proto.set_mass_kg(_mass_kg);
+    proto.mutable_inertia_diag_kgm2()->set_x(_inertia_diag_kgm2.x());
+    proto.mutable_inertia_diag_kgm2()->set_y(_inertia_diag_kgm2.y());
+    proto.mutable_inertia_diag_kgm2()->set_z(_inertia_diag_kgm2.z());
     for (const auto& v : _volumes) {
         auto* pv = proto.add_volumes();
         pv->set_name(v.name);
@@ -307,6 +346,10 @@ void BodyCollider::deserializeProto(const std::vector<uint8_t>& bytes) {
     _b_corner_nspm = proto.arrest_damping_corner_nspm();
     _friction_coulomb_nd = std::max(0.f, proto.friction_coulomb_nd());
     _friction_viscous_nd = std::max(0.f, proto.friction_viscous_nd());
+    _mass_kg = proto.mass_kg();
+    _inertia_diag_kgm2 = {proto.inertia_diag_kgm2().x(),
+                          proto.inertia_diag_kgm2().y(),
+                          proto.inertia_diag_kgm2().z()};
     _volumes.clear();
     for (int i = 0; i < proto.volumes_size(); ++i) {
         const auto& pv = proto.volumes(i);

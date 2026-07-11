@@ -280,6 +280,8 @@ message AircraftState {
     bool               body_in_hard_contact = 73;  // body-contact WoW latch (see OQ-BC-8)
     float              wa_q_lo_pa            = 74;  // OQ-LG-24/26 w_a band edges (derived state)
     float              wa_q_hi_pa            = 75;
+    float              roll_rate_state_rps   = 76;  // OQ-BC-12 Alt B (IP-CRB-5) persistent wind-axis roll rate
+    float              roll_torque_accel_prev = 77;  // OQ-BC-13 Tustin previous-input term
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;
@@ -399,6 +401,11 @@ message BodyColliderParams {
     // tangential F = -mu*F_pen*vhat_t - (k_visc*b_corner)*v_t at penetrating corners.
     float                          friction_coulomb_nd = 5;  // mu
     float                          friction_viscous_nd = 6;  // k_visc (scales b_corner)
+    // Airframe mass (kg) and body-frame inertia diagonal (Ixx, Iyy, Izz, kg*m^2),
+    // supplied by Aircraft (OQ-BC-5); consumed by the OQ-BC-12 Alt B momentum impulse
+    // K_c = 1/m + (r x n)^T I^-1 (r x n). Serialized so a restored collider retains them.
+    float                          mass_kg           = 7;
+    Vector3f                       inertia_diag_kgm2 = 8;
 }
 
 // ---------------------------------------------------------------------------

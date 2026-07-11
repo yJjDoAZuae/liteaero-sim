@@ -39,6 +39,7 @@ void LandingGear::initialize(const nlohmann::json& config) {
         p.rolling_resistance_nd           = wu_json.value("rolling_resistance_nd", 0.02f);
         p.max_brake_torque_nm             = wu_json.value("max_brake_torque_nm", 0.0f);
         p.is_steerable                    = wu_json.value("is_steerable", false);
+        p.is_castering                    = wu_json.value("is_castering", false);
         p.has_brake                       = wu_json.value("has_brake", false);
         p.spindown_time_s                 = wu_json.value("spindown_time_s", 5.0f);
         p.spindown_reference_speed_mps    = wu_json.value("spindown_reference_speed_mps", 20.0f);
