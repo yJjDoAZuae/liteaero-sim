@@ -171,6 +171,24 @@ void bind_aircraft(py::module_& m)
             [](const StrutState& s) { return s.wheel_speed_rps; },
             "Wheel angular speed (rad/s).");
 
+    // --- WheelUnit::ContactDiag (per-wheel contact-force breakdown; model-diagnosis interface) ---
+    py::class_<WheelUnit::ContactDiag>(m, "WheelContactDiag")
+        .def_readonly("F_z",       &WheelUnit::ContactDiag::F_z,       "Normal force magnitude (N).")
+        .def_readonly("F_x",       &WheelUnit::ContactDiag::F_x,       "Pacejka longitudinal force (N, +fwd).")
+        .def_readonly("F_y",       &WheelUnit::ContactDiag::F_y,       "Pacejka lateral force (N). Zero for a castering wheel.")
+        .def_readonly("F_rr",      &WheelUnit::ContactDiag::F_rr,      "Rolling resistance (N, signed).")
+        .def_readonly("kappa",     &WheelUnit::ContactDiag::kappa,     "Longitudinal slip ratio.")
+        .def_readonly("alpha_t",   &WheelUnit::ContactDiag::alpha_t,   "Slip angle (rad).")
+        .def_readonly("V_cx",      &WheelUnit::ContactDiag::V_cx,      "Contact-patch forward speed (m/s).")
+        .def_readonly("V_cy",      &WheelUnit::ContactDiag::V_cy,      "Contact-patch lateral speed (m/s).")
+        .def_readonly("omega",     &WheelUnit::ContactDiag::omega,     "Wheel spin (rad/s).")
+        .def_readonly("delta_dot", &WheelUnit::ContactDiag::delta_dot, "Strut closing rate (m/s).")
+        .def_property_readonly("force_body_n",
+            [](const WheelUnit::ContactDiag& d) {
+                return std::array<float, 3>{d.force_body.x(), d.force_body.y(), d.force_body.z()};
+            },
+            "Per-wheel contact force in the body frame (N) as [x, y, z].");
+
     // --- KinematicState (read-only; returned by Aircraft.state()) ---
     py::class_<KinematicState>(m, "KinematicState")
         .def_property_readonly("time_s",
@@ -347,6 +365,24 @@ void bind_aircraft(py::module_& m)
              "Per-wheel strut states from the most recent step().\n\n"
              "Returns a list of StrutState objects in the same order as\n"
              "the wheel_units array in the aircraft config.  Returns an empty\n"
-             "list when no landing gear is configured.");
+             "list when no landing gear is configured.")
+        .def("wheel_contact_diags",
+             [](const PyAircraft& self) -> std::vector<WheelUnit::ContactDiag> {
+                 if (!self.aircraft->hasLandingGear()) return {};
+                 const auto& units = self.aircraft->landingGear().wheelUnits();
+                 std::vector<WheelUnit::ContactDiag> out;
+                 out.reserve(units.size());
+                 for (const auto& wu : units)
+                     out.push_back(wu.lastContactDiag());
+                 return out;
+             },
+             "Per-wheel contact-force breakdown (WheelContactDiag) from the most recent\n"
+             "step(): normal / longitudinal / lateral / rolling-resistance forces, slip\n"
+             "ratio and angle, contact-patch velocities, and wheel spin.  Same order as\n"
+             "the wheel_units config; empty when no landing gear is configured.")
+        .def_property_readonly("roll_rate_state_rps",
+             [](const PyAircraft& self) { return self.aircraft->rollRateState_rps(); },
+             "OQ-BC-12 Alt B persistent wind-axis roll-rate state (rad/s) committed to the\n"
+             "attitude each step (the induced contact roll rate, Tustin-integrated).");
 }
 
