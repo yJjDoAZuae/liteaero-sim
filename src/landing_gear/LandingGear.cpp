@@ -71,118 +71,118 @@ void LandingGear::reset() {
 
 // ---------------------------------------------------------------------------
 
+LandingGear::ContactPlane LandingGear::beginContact(
+        const liteaero::nav::KinematicStateSnapshot& snap,
+        const liteaero::terrain::Terrain&            terrain) {
+    // Terrain tangent-plane approximation (OQ-AC-3): queried ONCE per outer step. Flat-terrain
+    // surface normal points UP in NED; the reference height is the CG-column terrain elevation.
+    ContactPlane plane;
+    plane.surface_normal_ned = Eigen::Vector3f{0.f, 0.f, -1.f};
+    plane.terrain_h_m        = terrain.elevation_m(snap.position.latitude_rad,
+                                                   snap.position.longitude_rad);
+
+    const float h_ac = snap.position.altitude_m;
+
+    // Airborne early-exit: no strut can reach the ground.
+    if (h_ac - plane.terrain_h_m > _max_reach_m) {
+        for (auto& wu : _wheel_units) wu.reset();
+        _contact_forces = ContactForces{};
+        plane.active = false;
+        return plane;
+    }
+
+    // Fast-path: all wheels airborne, stopped, and struts neutral — nothing to integrate.
+    // Strut check covers the first airborne step after liftoff (strut still deflected).
+    const Eigen::Matrix3f R_nb = liteaero::nav::KinematicStateUtil::q_nb(snap).toRotationMatrix();
+    const Eigen::Vector3f surface_normal_body =
+        (R_nb.transpose() * plane.surface_normal_ned).normalized();
+    const int n = static_cast<int>(_wheel_units.size());
+    bool skip = true;
+    for (int i = 0; i < n; ++i) {
+        const WheelUnitParams& p = _config.wheel_units[i];
+        const Eigen::Vector3f c_body = p.attach_point_body_m - p.tyre_radius_m * surface_normal_body;
+        const float h_contact   = h_ac - (R_nb * c_body).z();
+        const float penetration = plane.terrain_h_m - h_contact;
+        const StrutState ss = _wheel_units[i].strutState();
+        if (penetration > 0.0f || ss.wheel_speed_rps > 0.0f || ss.strut_deflection_m > 0.0f) {
+            skip = false;
+            break;
+        }
+    }
+    if (skip) {
+        _contact_forces = ContactForces{};
+        plane.active = false;
+        return plane;
+    }
+    plane.active = true;
+    return plane;
+}
+
+ContactForces LandingGear::substepContact(
+        const liteaero::nav::KinematicStateSnapshot& snap,
+        const ContactPlane&                          plane,
+        float nose_wheel_angle_rad,
+        float brake_left_nd,
+        float brake_right_nd,
+        float inner_dt_s) {
+    // Recompute the per-strut geometry FRESH from the (possibly evolving) pose against the fixed
+    // tangent plane, so the strut spring/damper react to the current bank and roll rate.
+    const Eigen::Matrix3f R_nb = liteaero::nav::KinematicStateUtil::q_nb(snap).toRotationMatrix();
+    const Eigen::Matrix3f R_bn = R_nb.transpose();
+    const Eigen::Vector3f surface_normal_body = (R_bn * plane.surface_normal_ned).normalized();
+
+    const float           h_ac   = snap.position.altitude_m;
+    const Eigen::Vector3f v_body = R_bn * snap.velocity_ned_mps;
+    const Eigen::Vector3f omega  = snap.rates_body_rps;
+    const int             n      = static_cast<int>(_wheel_units.size());
+
+    // Uniform surface: friction is constant, so recomputing per substep is free.
+    const float mu = _surface_friction
+                         .frictionCoefficients(Eigen::Vector3f::Zero())
+                         .longitudinal_peak_nd;
+
+    ContactForces total;
+    for (int i = 0; i < n; ++i) {
+        const WheelUnitParams& p = _config.wheel_units[i];
+
+        // Contact point in body frame (undeflected strut position); penetration into the plane.
+        const Eigen::Vector3f c_body = p.attach_point_body_m - p.tyre_radius_m * surface_normal_body;
+        const float           h_contact   = h_ac - (R_nb * c_body).z();
+        const float           penetration = plane.terrain_h_m - h_contact;
+        // Contact-patch velocity in body frame (includes rigid-body rotation ω × r).
+        const Eigen::Vector3f contact_vel = v_body + omega.cross(c_body);
+
+        // Brake demand by lateral (y) position: negative y = left side.
+        float brake = 0.0f;
+        if (p.has_brake) brake = (c_body.y() <= 0.0f) ? brake_left_nd : brake_right_nd;
+        const float steer = p.is_steerable ? nose_wheel_angle_rad : 0.0f;
+
+        const WheelContactForces wcf = _wheel_units[i].step(
+            penetration, c_body, contact_vel, surface_normal_body, steer, brake, mu, inner_dt_s);
+        total.force_body_n   += wcf.force_body_n;
+        total.moment_body_nm += wcf.moment_body_nm;
+        if (wcf.in_contact) total.weight_on_wheels = true;
+    }
+    return total;
+}
+
 ContactForces LandingGear::step(const liteaero::nav::KinematicStateSnapshot& snap,
                                  const liteaero::terrain::Terrain&            terrain,
                                  float nose_wheel_angle_rad,
                                  float brake_left_nd,
                                  float brake_right_nd,
                                  float outer_dt_s) {
-    // Body-to-NED rotation matrix and its transpose (NED-to-body)
-    const Eigen::Matrix3f R_nb = liteaero::nav::KinematicStateUtil::q_nb(snap).toRotationMatrix();
-    const Eigen::Matrix3f R_bn = R_nb.transpose();
-
-    // Surface normal in NED: pointing UP = [0, 0, -1] (NED z is down)
-    const Eigen::Vector3f surface_normal_NED{0.f, 0.f, -1.f};
-    const Eigen::Vector3f surface_normal_body = (R_bn * surface_normal_NED).normalized();
-
-    // Aircraft state
-    const float           h_ac   = snap.position.altitude_m;
-    const Eigen::Vector3f v_body = R_bn * snap.velocity_ned_mps;
-    const Eigen::Vector3f omega  = snap.rates_body_rps;
-
-    // Single terrain query at CG; also used for AGL early-exit.
-    const float terrain_h = terrain.elevation_m(snap.position.latitude_rad,
-                                                 snap.position.longitude_rad);
-
-    if (h_ac - terrain_h > _max_reach_m) {
-        for (auto& wu : _wheel_units) wu.reset();
-        _contact_forces = ContactForces{};
-        return _contact_forces;
-    }
+    // Behavior-preserving wrapper: tangent plane once, then N substeps on the FIXED pose. Per-substep
+    // pose evolution / roll co-integration is driven by Aircraft via beginContact + substepContact
+    // directly (OQ-AC-3); this wrapper is the no-co-integration path (tests / callers without roll).
+    const ContactPlane plane = beginContact(snap, terrain);
+    if (!plane.active) return _contact_forces;   // beginContact set _contact_forces = {}
 
     const float inner_dt_s = outer_dt_s / static_cast<float>(_config.substeps);
-    const int   n          = static_cast<int>(_wheel_units.size());
-
-    // Precompute per-wheel contact geometry at the undeflected tyre position.
-    // Penetration = how deep the undeflected contact patch is into the terrain.
-    // WheelUnit::step() clamps this to [0, travel_max] — no δ_prev term here.
-    std::vector<float>           penetrations(n);
-    std::vector<Eigen::Vector3f> contact_points(n);
-    std::vector<Eigen::Vector3f> contact_vels(n);
-    std::vector<float>           friction_mu(n);
-
-    for (int i = 0; i < n; ++i) {
-        const WheelUnitParams& p  = _config.wheel_units[i];
-
-        // Contact point in body frame (undeflected strut position)
-        const Eigen::Vector3f c_body = p.attach_point_body_m
-                                     - p.tyre_radius_m * surface_normal_body;
-        contact_points[i] = c_body;
-
-        // Altitude of contact point: h_ac minus the NED-z component of the body offset
-        const Eigen::Vector3f c_ned_offset = R_nb * c_body;
-        const float h_contact = h_ac - c_ned_offset.z();
-
-        penetrations[i] = terrain_h - h_contact;
-
-        // Contact-patch velocity in body frame (includes rigid-body rotation)
-        contact_vels[i] = v_body + omega.cross(c_body);
-
-        // Friction: use longitudinal peak of the surface model
-        friction_mu[i] = _surface_friction
-                             .frictionCoefficients(Eigen::Vector3f::Zero())
-                             .longitudinal_peak_nd;
-    }
-
-    // Fast-path: all wheels airborne, stopped, and struts neutral — nothing to integrate.
-    // Strut check covers the first airborne step after liftoff (strut still deflected).
-    {
-        bool skip = true;
-        for (int i = 0; i < n; ++i) {
-            const StrutState ss = _wheel_units[i].strutState();
-            if (penetrations[i] > 0.0f || ss.wheel_speed_rps > 0.0f
-                    || ss.strut_deflection_m > 0.0f) {
-                skip = false;
-                break;
-            }
-        }
-        if (skip) {
-            _contact_forces = ContactForces{};
-            return _contact_forces;
-        }
-    }
-
-    // Inner substep loop — spring-damper + Pacejka run N_sub times at inner_dt_s
-    std::vector<WheelContactForces> last_wcf(n);
-    for (int sub = 0; sub < _config.substeps; ++sub) {
-        for (int i = 0; i < n; ++i) {
-            const WheelUnitParams& p = _config.wheel_units[i];
-
-            // Assign brake demand by lateral (y) position: negative y = left side
-            float brake = 0.0f;
-            if (p.has_brake) {
-                brake = (contact_points[i].y() <= 0.0f) ? brake_left_nd : brake_right_nd;
-            }
-            const float steer = p.is_steerable ? nose_wheel_angle_rad : 0.0f;
-
-            last_wcf[i] = _wheel_units[i].step(
-                penetrations[i],
-                contact_points[i],
-                contact_vels[i],
-                surface_normal_body,
-                steer,
-                brake,
-                friction_mu[i],
-                inner_dt_s);
-        }
-    }
-
-    // Accumulate total contact forces and moments
     ContactForces total;
-    for (int i = 0; i < n; ++i) {
-        total.force_body_n   += last_wcf[i].force_body_n;
-        total.moment_body_nm += last_wcf[i].moment_body_nm;
-        if (last_wcf[i].in_contact) total.weight_on_wheels = true;
+    for (int sub = 0; sub < _config.substeps; ++sub) {
+        total = substepContact(snap, plane, nose_wheel_angle_rad,
+                               brake_left_nd, brake_right_nd, inner_dt_s);
     }
     _contact_forces = total;
     return total;

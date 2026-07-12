@@ -406,34 +406,87 @@ void Aircraft::step(double time_sec,
     // The gear uses the snapshot body rate directly. Since commitAttitude now derives that
     // rate from the committed (slope-aware, filtered-reference) attitude (OQ-LG-21), it is
     // consistent and free of the (v×a)/|V|² spike, so no separate gear-only override is needed.
-    ContactForces contact_forces;
-    if (_has_landing_gear && _terrain != nullptr) {
-        contact_forces = _landing_gear.step(
-            _state.snapshot(),
-            *_terrain,
-            0.0f,    // nose wheel steering angle (not yet wired to AircraftCommand)
-            0.0f,    // brake left demand
-            0.0f,    // brake right demand
-            _outer_dt_s);
-    }
-    // §5c (OQ-BC-6/7) and OQ-BC-9 (Alt 1): capture the gear-only contact reaction separately. The
-    // EOM uses the combined reaction (the body collider is a mechanical backstop), but the FBW
-    // lift-shaping loop (§5b n_z apportionment and the OQ-LG-23 settle term) and the §5c Δθ channels
-    // read GEAR-ONLY quantities — body-collider contact must not drive the rollout lift-shaping
-    // (gear-rollout shaping is a category error for a crash attitude, OQ-BC-9).
-    const Eigen::Vector3f gear_force_body  = contact_forces.force_body_n;
-    const Eigen::Vector3f gear_moment_body = contact_forces.moment_body_nm;
-    const bool gear_on_wheels = contact_forces.weight_on_wheels;
+    // The body collider is stepped FIRST so its roll moment is available to the roll co-integration
+    // below. It is the crash-backstop mechanical reaction; on a normal landing its moment is zero.
     Eigen::Vector3f bc_force_body  = Eigen::Vector3f::Zero();
     Eigen::Vector3f bc_moment_body = Eigen::Vector3f::Zero();
+    bool bc_on_wheels = false;
     if (_has_body_collider && _terrain != nullptr) {
         const auto bc = _body_collider.step(_state.snapshot(), *_terrain);
         bc_force_body  = bc.force_body_n;
         bc_moment_body = bc.moment_body_nm;
-        contact_forces.force_body_n   += bc.force_body_n;
-        contact_forces.moment_body_nm += bc.moment_body_nm;
-        contact_forces.weight_on_wheels |= bc.weight_on_wheels;
+        bc_on_wheels   = bc.weight_on_wheels;
     }
+
+    // Gear reaction + roll co-integration (OQ-AC-3 / IP-CRB-9). beginContact fixes the terrain
+    // tangent-plane approximation ONCE (outer); the substep loop then recomputes the strut/tire
+    // forces from the EVOLVING bank against that plane and Tustin-integrates the persistent wind-axis
+    // roll rate (`roll_rate_state`) at `inner_dt`, advancing the bank each substep so the strut damper
+    // reacts to the in-phase roll rate (physical energy extraction — no outer-rate lag, no amplitude
+    // clamp). Roll stays a velocity-slaved DOF here; no rigid-body EOM is integrated (trimaero).
+    Eigen::Vector3f gear_force_body  = Eigen::Vector3f::Zero();
+    Eigen::Vector3f gear_moment_body = Eigen::Vector3f::Zero();
+    bool gear_on_wheels = false;
+    // Co-integrated wind-axis bank swept this step; commitAttitude (step 13) applies this as the
+    // contact-induced roll so the committed bank matches the substep sweep (Σ ω·inner_dt), avoiding a
+    // half-step bank/rate phase error between the co-integration and the outer attitude commit.
+    float roll_bank_incr_rad = 0.f;
+    // FBW closed-loop roll-rate damping τ = 1/(ζ·ωₙ) (OQ-BC-13); shared by the substep and the
+    // airborne-decay integrations of roll_rate_state.
+    const float tau_roll = 1.0f / std::max(_roll_rate_zeta_nd * _roll_rate_wn_rad_s, 1e-3f);
+    if (_has_landing_gear && _terrain != nullptr) {
+        const LandingGear::ContactPlane plane =
+            _landing_gear.beginContact(_state.snapshot(), *_terrain);
+        if (plane.active) {
+            const int   n_sub    = std::max(1, _landing_gear.config().substeps);
+            const float inner_dt = _outer_dt_s / static_cast<float>(n_sub);
+            const float A = 2.0f / inner_dt;
+            const float B = 1.0f / tau_roll;
+            auto snap_sub = _state.snapshot();                  // working copy: evolving bank + roll rate
+            const Eigen::Quaternionf q_nw0 = snap_sub.q_nw;
+            for (int sub = 0; sub < n_sub; ++sub) {
+                // Advance the bank so the strut geometry sees the co-integrated roll (OQ-AC-3).
+                snap_sub.q_nw = (q_nw0 * Eigen::Quaternionf(
+                                    Eigen::AngleAxisf(roll_bank_incr_rad, Eigen::Vector3f::UnitX()))).normalized();
+                snap_sub.rates_body_rps.x() = _roll_rate_state_rps;   // in-phase roll rate for the damper
+                const ContactForces wcf = _landing_gear.substepContact(
+                    snap_sub, plane, 0.0f, 0.0f, 0.0f, inner_dt);
+                // Tustin-integrate roll_rate_state from (gear + collider) M_x/Ixx at inner_dt.
+                const float a = (wcf.moment_body_nm.x() + bc_moment_body.x()) / _inertia.Ixx_kgm2;
+                _roll_rate_state_rps =
+                    (a + _roll_torque_accel_prev + _roll_rate_state_rps * (A - B)) / (A + B);
+                _roll_torque_accel_prev = a;
+                _roll_rate_state_rps =
+                    std::clamp(_roll_rate_state_rps, -kRollRateLimit_rps, kRollRateLimit_rps);
+                roll_bank_incr_rad += _roll_rate_state_rps * inner_dt;
+                // Aggregate for the EOM / §5b / §5c = substep MEAN (not the last substep, whose evolved
+                // bank + extreme rate would feed an inconsistent, energy-injecting force to the outer loop).
+                gear_force_body  += wcf.force_body_n;
+                gear_moment_body += wcf.moment_body_nm;
+                gear_on_wheels    = gear_on_wheels || wcf.weight_on_wheels;
+            }
+            gear_force_body  /= static_cast<float>(n_sub);
+            gear_moment_body /= static_cast<float>(n_sub);
+        } else {
+            // Airborne / neutral: no gear reaction; decay roll_rate_state (Tustin, gear input 0) at
+            // the outer step so the persistent rate relaxes on the FBW loop.
+            const float a = bc_moment_body.x() / _inertia.Ixx_kgm2;
+            const float A = 2.0f / _outer_dt_s;
+            const float B = 1.0f / tau_roll;
+            _roll_rate_state_rps =
+                (a + _roll_torque_accel_prev + _roll_rate_state_rps * (A - B)) / (A + B);
+            _roll_torque_accel_prev = a;
+            _roll_rate_state_rps =
+                std::clamp(_roll_rate_state_rps, -kRollRateLimit_rps, kRollRateLimit_rps);
+        }
+    }
+
+    // §5c (OQ-BC-6/7, OQ-BC-9): the FBW lift-shaping (§5b n_z apportionment, OQ-LG-23 settle) and the
+    // §5c Δθ channels read GEAR-ONLY quantities; the EOM uses the COMBINED reaction (collider = backstop).
+    ContactForces contact_forces;
+    contact_forces.force_body_n     = gear_force_body + bc_force_body;
+    contact_forces.moment_body_nm   = gear_moment_body + bc_moment_body;
+    contact_forces.weight_on_wheels = gear_on_wheels || bc_on_wheels;
     _contact_forces = contact_forces;
     // Propagate persistent body-contact flag: even when the penalty spring
     // sees pen=0 after the hard constraint corrected altitude, the aircraft is
@@ -581,24 +634,12 @@ void Aircraft::step(double time_sec,
         // hand-tuned constant and NOT a separate open-loop aero term (that would double-count
         // what the closed loop already models). τ = 1/(ζ·ωₙ). This replaces the old
         // delta_rr = d(Δθ_roll)/dt, whose bank telescoped back to the pre-contact value.
-        const float roll_torque_accel =
-            (gear_moment_body.x() + bc_moment_body.x()) / _inertia.Ixx_kgm2;   // M_x / Ixx (a[n])
-        const float tau_roll =
-            1.0f / std::max(_roll_rate_zeta_nd * _roll_rate_wn_rad_s, 1e-3f);   // FBW closed-loop
-        // OQ-BC-13: advance ω̇ = a − ω/τ with TUSTIN (trapezoidal), not forward Euler — the gear righting
-        // mode is overdamped-stable but stiff (ωn≈59 rad/s, ζ≈1.4), and explicit Euler diverges while the
-        // A-stable bilinear renders the true settling. ω[n] = (a[n]+a[n-1]+ω[n-1]·(A−B))/(A+B),
-        // A=2/Δt, B=1/τ. Then clamp to the FBW roll-rate authority (reasonable physical limit / guard).
-        {
-            const float A = 2.0f / _outer_dt_s;
-            const float B = 1.0f / tau_roll;
-            _roll_rate_state_rps =
-                (roll_torque_accel + _roll_torque_accel_prev + _roll_rate_state_rps * (A - B)) / (A + B);
-            _roll_torque_accel_prev = roll_torque_accel;
-            _roll_rate_state_rps =
-                std::clamp(_roll_rate_state_rps, -kRollRateLimit_rps, kRollRateLimit_rps);
-        }
-        delta_rr_filt_rps = _roll_rate_state_rps;
+        // roll_rate_state is co-integrated with the gear strut forces on the substep loop (OQ-AC-3 /
+        // §5a, IP-CRB-9): each substep the strut damper reacts to the in-phase roll rate at inner_dt,
+        // so it physically dissipates the roll energy (no outer-rate lag, no amplitude clamp).
+        // commitAttitude applies the substep-swept bank (roll_bank_incr / dt = the mean roll rate),
+        // so the committed bank matches the co-integration — no half-step bank/rate phase error.
+        delta_rr_filt_rps = roll_bank_incr_rad / _outer_dt_s;
 
         // Yaw: rate of change of the (returning) deviation × velocity → lateral specific force.
         delta_ay_filt_mps2 = (dtheta_yaw - _prev_dtheta_yaw) / _outer_dt_s * V_safe;

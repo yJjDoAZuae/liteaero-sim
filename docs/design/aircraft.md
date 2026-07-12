@@ -677,9 +677,16 @@ its full configuration and internal state.
 
    R_nb, R_nw = _state.q_nb(), q_nw() rotation matrices (reused in 5c and 10)
 
-5a. Contact forces on the CURRENT (pre-integration) pose — one-step lag:
-       contact = _landingGear->step(...) ⊕ _bodyCollider->step(...)    // body frame
-    Computed before the LFA so steps 5b/5c can use this step's gear reaction.
+5a. Contact reaction + roll co-integration (OQ-AC-3 / IP-CRB-9). The body collider is stepped first
+    (its moment feeds the roll integration). The gear uses `beginContact` to fix the terrain
+    tangent-plane approximation ONCE (outer), then a substep loop at `inner_dt = dt/substeps`
+    recomputes the strut/tire forces from the EVOLVING bank via `substepContact` and Tustin-integrates
+    `roll_rate_state`, advancing the bank each substep so the strut damper reacts to the in-phase roll
+    rate (physical energy extraction — no outer-rate lag). `commitAttitude` (step 13) receives the
+    substep-swept bank; the aggregate (substep-MEAN) force/moment feeds §5b/§5c and the EOM.
+       gear ← beginContact(...) + N× substepContact(evolving pose)   ;   ⊕ _bodyCollider->step(...)
+    Roll stays velocity-slaved (no rigid-body EOM). `inner_dt` must resolve the gear righting mode for
+    the roll to settle fully (small-UAS fixture: `substeps = 16` at dt = 0.01).
 
 5b. Gear → n_z command handoff (landing_gear.md §2b). On weight-on-wheels, the shaped n_z is
     relaxed by the gear's share of the load and biased by the steady axial-force deficit so the
@@ -1084,6 +1091,7 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | --- | --- | --- |
 | OQ-AC-1 | Whether/how the load-factor `Aircraft` should depart into a post-stall regime from flight commands (the allocator currently caps at CL_max) | Blocking — blocks the stall-recovery scenario notebook and any flown-stall behavior |
 | OQ-AC-2 | Velocity-slaved `q_nw` attitude is ill-conditioned as ground speed → 0; how to bound the attitude rate without breaking the strict `q_nw`↔velocity relationship (a direct rotation cap decouples the attitude and launches a crabbed touchdown) | Resolved — speed-proportional saturation of the attitude-reference velocity slew, $\theta_{\max}=(V/R_{\min})\,dt$ (2026-07-11) |
+| OQ-AC-3 | Roll limit cycle on banked rollout: the gear strut damper is mis-phased because the gear runs at the outer rate on a one-step-stale body rate (its substep loop freezes the pose), so it acts as a spring not a dissipator | Resolved — co-integrate the roll DOF with the strut forces on the gear substep loop (Tustin, `inner_dt`); tangent plane stays outer (2026-07-12) |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1230,14 +1238,88 @@ the direct-rotation-cap crab launch is removed (the 12 m/s gear-only crabbed tou
 than lifting off). Implemented as IP-CRB-8 in
 [contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).
 
-**Two low-speed effects are out of this OQ's scope and remain open** (they are not velocity-slaving
-attitude ill-conditioning): (a) the banked-rollout **roll-channel limit cycle** — a residual body-rate
-oscillation (~40°/s) at rest driven by the gear roll moment feeding `roll_rate_state` (IP-CRB-5), not
-by the reference velocity; and (b) a **gentle-approach (near-stall) crab launch** — at ~1.2× stall a
-sustained-`n_y` crabbed approach lifts off even with a fixed `n_z` command, an aero-lift / stall-shaping
-interaction of the OQ-BC-11 family, independent of the attitude reference. Both are tracked separately.
+**Related low-speed effects.** (a) The banked-rollout **roll-channel limit cycle** is **not** a
+velocity-slaving effect — it is a discrete gear-coupling artifact, resolved separately in
+**[OQ-AC-3](#oq-ac-3--roll-strut-coupling-mis-phased-by-outer-rate-gear-integration-resolved)**. An
+interim helix-angle bound on `roll_rate_state` — $p_{\max}(V)=\texttt{kRollRateLimit\_rps}\cdot
+V/V_{\text{stall}}$ (the correct roll nondimensionalization $\hat p = p\,b/(2V)$ anchored at stall so
+the span cancels, **not** the path-curvature $V/R_{\min}$) — only **caps the cycle amplitude ∝ V**; it
+does not extract the energy, so the oscillation persists at smaller amplitude. OQ-AC-3 removes it. (b) A
+**gentle-approach (near-stall) crab launch** — at ~1.2× stall a sustained-`n_y` crabbed approach lifts
+off even with a fixed `n_z` command — remains open; it is an aero-lift / stall-shaping interaction of
+the OQ-BC-11 family, independent of the attitude reference, and is tracked separately.
 
 **Status:** Resolved (2026-07-11) — Alternative 4.
+
+---
+
+### OQ-AC-3 — Roll-strut coupling mis-phased by outer-rate gear integration *(Resolved)*
+
+**Problem.** The gear-contact reaction is evaluated once per **outer** timestep on `_state.snapshot()`,
+whose body rate is the *previous* step's `commitAttitude` output, and the gear's internal substep loop
+holds the aircraft pose and rates **frozen** — it re-runs only the wheel spin, while the contact
+velocity `contact_vel = v_body + ω × r` and the per-strut penetration are computed **once, outside** the
+loop ([LandingGear.cpp](../../src/landing_gear/LandingGear.cpp)). The strut **damper** — the physical
+roll energy-extraction path, and one that *is* already present in `M_x` — therefore always reacts to a
+one-step-stale roll rate. On a banked rollout, as ground speed → 0 (where path-curvature coupling no
+longer masks it) this phase error makes the damper behave like a *spring* rather than a dissipator
+(measured: `corr(M_x_damp, roll_rate) ≈ −0.1`, `corr(M_x_damp, roll_angle) ≈ +0.5`; effective
+`C_φ ≈ 0.6 N·m/(rad/s)`, ~36% of the FBW-`τ` term, but nearly all of it out of phase), so the roll DOF
+limit-cycles. The residual scales with the timestep (≈6°/s at `dt=0.01`, →1°/s at `dt=0.0025`) — a
+discrete artifact, **not** missing damping.
+
+The question: how should the gear-contact reaction and the roll DOF be co-integrated so the strut
+damping extracts energy *in phase*, **without** converting the trim model into a 6-DOF rigid-body
+integration?
+
+**Alternatives.**
+
+1. **Amplitude cap only (the interim helix bound, OQ-AC-2a).** Bound `roll_rate_state`
+   speed-proportionally.
+   - *Drawbacks — band-aid:* caps the cycle amplitude ∝ V but dissipates nothing; the cycle persists at
+     smaller amplitude. Interim only.
+
+2. **Outer-rate predictor–corrector.** Step the gear twice per outer step — predictor with the stale
+   rate → update `roll_rate_state` → re-step the gear with the corrected rate.
+   - *Benefits:* correct; breaks the lag.
+   - *Drawbacks:* a second full gear evaluation per step; still resolves the coupling only at the outer
+     `dt`.
+
+3. **Substep co-integration (chosen).** Keep the terrain **tangent-plane approximation** (terrain height
+   + surface normal) on the **outer** loop, but move the **strut/tire force & moment** evaluation and
+   the **roll DOF** integration onto the gear **substep** loop (`inner_dt = dt / substeps`): each substep
+   recompute the per-strut penetration and `contact_vel` from the *current* bank against the fixed
+   tangent plane, form `M_x`, **Tustin**-integrate `roll_rate_state` at `inner_dt`, and advance the bank
+   so the next substep's geometry sees it. The strut damper then reacts to the in-phase roll rate at
+   `1/substeps` the lag; the FBW rate damping and the strut damping (both retained) co-integrate.
+   - *Scope:* only the roll bank / `roll_rate_state` co-integrates on the substep — that is the
+     mis-phased, limit-cycling DOF. The pitch/yaw `Δθ` channels and the `n_z` apportionment continue to
+     consume the aggregate (substep-summed) force at the outer step; the CG translational state stays on
+     the outer RK4.
+   - *Interface:* `Aircraft` owns the substep loop; `LandingGear` splits into an outer
+     `computeTangentPlane()` and a per-substep `contactForces(pose, rates, inner_dt)` evaluator against
+     the stored plane. The roll state stays in `Aircraft`/`KinematicState`; only the current bank is
+     threaded into the per-substep call — **no roll dynamics move into `LandingGear`**.
+   - *Benefits:* physically-consistent co-integration — the strut dissipation actually reaches the roll
+     DOF; ~`substeps`× smaller phase lag kills the limit cycle at the root; Tustin keeps the stiff gear
+     mode stable; no second gear evaluation; stays trimaero (the roll axis remains the FBW rate-command
+     channel, **not** a free rigid-body DOF — no 6-DOF EOM). Removes the interim helix clamp.
+   - *Drawbacks:* restructures the gear interface (tangent-plane vs per-substep force split) and threads
+     the current bank into the per-substep force call.
+
+**Resolution (Alternative 3 — substep co-integration).** Terrain tangent-plane approximation stays on
+the outer loop; the strut/tire forces & moments and the `roll_rate_state` integration move onto the gear
+substep loop at `inner_dt`, Tustin-integrated, with the bank advanced each substep so the strut damper
+reacts to the in-phase roll rate. Scope and interface are as in Alternative 3 above (roll DOF only;
+`Aircraft` owns the loop; `LandingGear` splits `computeTangentPlane()` / per-substep `contactForces`).
+The interim helix-angle roll clamp (OQ-AC-2a) is **removed**. The model stays trimaero — the roll axis is
+still the FBW rate-command channel, not a rigid-body rotational EOM. Implemented as IP-CRB-9 in
+[contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).
+
+**Status:** Resolved (2026-07-12) — Alternative 3; **implemented (IP-CRB-9).** The 90°/s limit-cycle
+onset is eliminated at every dt and the mode is now stable/converging (it grew before). Full settle to
+0°/s at rest requires `inner_dt` fine enough to resolve the gear righting mode — the small-UAS fixture
+uses `substeps = 16` at dt = 0.01; `substeps = 8` leaves a ~10°/s converging residual.
 
 ---
 

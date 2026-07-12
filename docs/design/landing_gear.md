@@ -529,17 +529,27 @@ normal rather than the strut travel axis eliminates a phantom $V_N\sin\alpha$ te
 aircraft is pitched — see `WheelUnit::step`). This avoids integrating a second-order ODE
 and eliminates the Euler stability constraint $\Delta t < 2\sqrt{m/k}$.
 
-**What `substeps` actually does.** The `substeps` parameter subdivides the outer step only
-for the **wheel-spin (Pacejka longitudinal) ODE** in `WheelUnit::step`. The per-wheel
-penetration, contact point, and contact-patch velocity are computed once per outer step in
-`LandingGear::step` (from the frozen aircraft state) and held constant across the sub-loop,
-so $\delta$, $\dot\delta$, and the normal force $F_z$ are identical on every sub-step.
-`substeps` therefore does **not** refine $\delta$, $\dot\delta$, $F_z$, or the contact
-geometry, and does not advance the aircraft state; it only refines the wheel-spin transient.
-The class default is `substeps = 4`; some fixtures override it (the `LandingGear_FullStop`
-fixture sets `substeps = 1`). Raising `substeps` does not mitigate the deep-penetration force
-spikes — those are a single-step penetration artifact (see §7, Gear Oscillation Stability), not a
-wheel-spin transient that finer substepping would resolve.
+**What `substeps` does.** `substeps` subdivides the outer step at $\text{inner\_dt} =
+\text{outer\_dt}/\text{substeps}$, and the class exposes two entry points:
+
+- **`LandingGear::step` (wrapper).** Computes the contact geometry once (frozen pose) and holds it
+  across the sub-loop, so $\delta$, $\dot\delta$, and $F_z$ are identical every sub-step; here
+  `substeps` refines only the **wheel-spin (Pacejka) ODE**. This is the no-co-integration path (tests
+  / callers without a roll DOF).
+- **`Aircraft` roll co-integration ([aircraft.md OQ-AC-3](aircraft.md#oq-ac-3--roll-strut-coupling-mis-phased-by-outer-rate-gear-integration-resolved), IP-CRB-9).** `Aircraft` calls
+  `beginContact` once — the **terrain tangent-plane approximation** (height + surface normal, outer) —
+  then `substepContact(pose, rates, inner_dt)` per inner step against that plane. Because the pose
+  carries the **evolving bank**, $\delta$, $\dot\delta$, and $F_z$ **are** recomputed each substep and
+  the strut damper reacts to the in-phase roll rate (`roll_rate_state` is Tustin-integrated in
+  `Aircraft`; no roll dynamics enter `LandingGear`, no rigid-body EOM). On this path `substeps` also
+  sets the resolution of the roll-strut coupling: `inner_dt` must resolve the gear righting mode for
+  the banked-rollout roll to settle to rest (small-UAS fixture: `substeps = 16` at dt = 0.01;
+  `substeps = 8` leaves a small converging residual).
+
+The class default is `substeps = 4`; some fixtures override it (`LandingGear_FullStop` sets
+`substeps = 1`). Raising `substeps` does not mitigate the deep-penetration force spikes — those are a
+single-step penetration artifact (see §7, Gear Oscillation Stability), not a wheel-spin transient that
+finer substepping would resolve.
 
 **Note:** unsprung mass and tyre spring compliance are second-order effects relevant only
 to a full 6DOF equations-of-motion model (`Aircraft6DOF`). The quasi-static strut is

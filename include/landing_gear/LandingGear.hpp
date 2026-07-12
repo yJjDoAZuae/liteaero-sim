@@ -38,6 +38,26 @@ public:
                        float brake_right_nd,
                        float outer_dt_s);
 
+    // OQ-AC-3 substep co-integration interface. The terrain tangent-plane approximation is computed
+    // once per OUTER step by `beginContact`; `substepContact` then evaluates the strut/tire forces for
+    // ONE inner step from the (possibly evolving) pose against that stored plane. `step()` is a
+    // behavior-preserving wrapper: beginContact + N× substepContact on a fixed pose. The caller
+    // (`Aircraft`) drives the substep loop and advances the roll bank between calls so the strut
+    // damper reacts to the in-phase roll rate; no roll dynamics live here.
+    struct ContactPlane {
+        float           terrain_h_m = 0.f;
+        Eigen::Vector3f surface_normal_ned{0.f, 0.f, -1.f};
+        bool            active = false;   // false => fully airborne / nothing to integrate
+    };
+    ContactPlane  beginContact(const liteaero::nav::KinematicStateSnapshot& snap,
+                               const liteaero::terrain::Terrain&            terrain);
+    ContactForces substepContact(const liteaero::nav::KinematicStateSnapshot& snap,
+                                 const ContactPlane&                          plane,
+                                 float nose_wheel_angle_rad,
+                                 float brake_left_nd,
+                                 float brake_right_nd,
+                                 float inner_dt_s);
+
     const ContactForces& contactForces() const { return _contact_forces; }
 
     // Read-only access for Python instrumentation (bind_aircraft.cpp).
