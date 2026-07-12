@@ -36,6 +36,7 @@ _GA_JSON = json.dumps(
             "ny_zeta_nd": 0.7,
             "roll_rate_wn_rad_s": 20.0,
             "roll_rate_zeta_nd": 0.7,
+            "qnw_min_turn_radius_m": 10.0,
             "dtheta_zeta_nd": 0.7,
             "dtheta_wn_pitch_ratio": 7.34,
             "dtheta_wn_roll_ratio": 9.79,

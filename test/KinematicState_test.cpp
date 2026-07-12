@@ -1135,3 +1135,78 @@ TEST(KinematicStateTerrainQnwTest, NearVerticalClimb_InvariantHolds) {
     s.commitAttitude(0.f, dt);
     expectQnwInvariant(s, 1e-3f);
 }
+
+// ── OQ-AC-2 Alt 4: speed-proportional saturation of the attitude-reference velocity slew ──────
+// The 3-arg commitAttitude limits the per-step direction change of v_att_ref to
+// theta_max = (V/R_min)·dt and feeds the saturated reference forward; q_nw tracks it STRICTLY.
+// A first call initializes the reference (no rotation); subsequent calls induce the change.
+
+TEST(KinematicStateQnwSlewTest, ReferenceSlewBoundsRateAtLowSpeed) {
+    const float kappa_max = 0.1f;   // 1 / R_min, R_min = 10 m
+    const float V = 0.3f;           // low ground speed
+    const float dt = 0.02f;
+    const Eigen::Vector3f v_north = {V, 0.f, 0.f};
+    KinematicState s(0.0, WGS84_Datum(), v_north, Eigen::Vector3f::Zero(),
+                     qnwFromVelocity(v_north), 0.f, 0.f, 0.f, 0.f, 0.f,
+                     Eigen::Vector3f::Zero());
+
+    s.commitAttitude(0.f, dt, v_north, kappa_max);       // init reference
+    const Eigen::Quaternionf q_before = s.q_nw();
+
+    // Reference swings 90 deg (north -> east). Unsaturated this rotates q_nw by ~pi/2 in one step;
+    // the reference slew must hold the applied rotation to <= theta_max = omega_max * dt.
+    const Eigen::Vector3f v_east = {0.f, V, 0.f};
+    s.commitAttitude(0.f, dt, v_east, kappa_max);
+    const float applied = q_before.angularDistance(s.q_nw());
+
+    const float omega_max = V * kappa_max;               // 0.03 rad/s
+    EXPECT_GT(applied, 0.f);                              // slews toward the target
+    EXPECT_LE(applied, omega_max * dt * 1.05f);          // but is rate-limited
+}
+
+TEST(KinematicStateQnwSlewTest, DisabledSaturationAllowsFullSlew) {
+    // With the saturation disabled (max_curvature_per_m = 0) the same 90 deg swing rotates q_nw
+    // fully in one step — the unsaturated whip the slew limit exists to bound.
+    const float V = 0.3f, dt = 0.02f;
+    const Eigen::Vector3f v_north = {V, 0.f, 0.f};
+    KinematicState s(0.0, WGS84_Datum(), v_north, Eigen::Vector3f::Zero(),
+                     qnwFromVelocity(v_north), 0.f, 0.f, 0.f, 0.f, 0.f,
+                     Eigen::Vector3f::Zero());
+    s.commitAttitude(0.f, dt, v_north, 0.f);
+    const Eigen::Quaternionf q_before = s.q_nw();
+    const Eigen::Vector3f v_east = {0.f, V, 0.f};
+    s.commitAttitude(0.f, dt, v_east, 0.f);
+    EXPECT_NEAR(q_before.angularDistance(s.q_nw()), static_cast<float>(M_PI) / 2.f, 1e-3f);
+}
+
+TEST(KinematicStateQnwSlewTest, SlackAtFlightSpeed) {
+    // At flight speed the slew limit is slack: a modest (1 deg) direction change passes unsaturated.
+    const float kappa_max = 0.1f, V = 50.f, dt = 0.02f;    // theta_max = 0.1 rad -> 5.7 deg/step
+    const Eigen::Vector3f v0 = {V, 0.f, 0.f};
+    KinematicState s(0.0, WGS84_Datum(), v0, Eigen::Vector3f::Zero(),
+                     qnwFromVelocity(v0), 0.f, 0.f, 0.f, 0.f, 0.f, Eigen::Vector3f::Zero());
+    s.commitAttitude(0.f, dt, v0, kappa_max);
+    const Eigen::Quaternionf q_before = s.q_nw();
+    const float ang = 1.0f * static_cast<float>(M_PI) / 180.f;   // 1 deg heading change
+    const Eigen::Vector3f v1 = {V * std::cos(ang), V * std::sin(ang), 0.f};
+    s.commitAttitude(0.f, dt, v1, kappa_max);
+    EXPECT_NEAR(q_before.angularDistance(s.q_nw()), ang, 2e-3f);   // unsaturated
+}
+
+TEST(KinematicStateQnwSlewTest, SaturatedReferenceConvergesForSteadyDirection) {
+    // The defining Alt 4 property: with the reference direction held steady, the saturated reference
+    // slews toward it at theta_max per step and CONVERGES — no permanent lag. This is what stops a
+    // sustained-sideslip crab from decoupling q_nw from the velocity and launching the aircraft.
+    const float kappa_max = 0.1f, V = 0.3f, dt = 0.02f;
+    const Eigen::Vector3f v_north = {V, 0.f, 0.f};
+    KinematicState s(0.0, WGS84_Datum(), v_north, Eigen::Vector3f::Zero(),
+                     qnwFromVelocity(v_north), 0.f, 0.f, 0.f, 0.f, 0.f, Eigen::Vector3f::Zero());
+    s.commitAttitude(0.f, dt, v_north, kappa_max);        // init
+
+    // Hold a 90-deg-swung reference (east) steady; q_nw must converge to align with it.
+    const Eigen::Vector3f v_east = {0.f, V, 0.f};
+    for (int i = 0; i < 20000; ++i) s.commitAttitude(0.f, dt, v_east, kappa_max);
+
+    const Eigen::Vector3f x_wind = (s.q_nw() * Eigen::Vector3f::UnitX()).normalized();
+    EXPECT_GT(x_wind.dot(v_east.normalized()), 0.999f);   // strict tracking converged, no residual lag
+}

@@ -86,8 +86,13 @@ public:
     // instead of the raw velocity, and derives the body angular rate from the resulting
     // committed attitude (consistent — near zero for a quiescent vehicle). The stored
     // velocity is unchanged; only the attitude/rate use the reference.
+    // OQ-AC-2 Alt 4: max_curvature_per_m (= 1/R_min) speed-proportionally saturates the per-step
+    // direction change of the attitude-reference velocity to theta_max = (V·max_curvature_per_m)·dt.
+    // The saturated reference is fed forward and tracked strictly by q_nw, so the attitude rate is
+    // bounded as V → 0 without ever breaking q_nw.x = v_hat. Pass ≤ 0 to disable the saturation.
     void commitAttitude(float rollRate_Wind_rps, float dt_s,
-                        const Eigen::Vector3f& attitude_ref_velocity_ned_mps);
+                        const Eigen::Vector3f& attitude_ref_velocity_ned_mps,
+                        float max_curvature_per_m);
 
     // ── Snapshot access ───────────────────────────────────────────────────────
 
@@ -175,6 +180,8 @@ protected:
     Eigen::Quaternionf q_nb_prev_{Eigen::Quaternionf::Identity()}; // previous committed q_nb (for rate)
     bool               att_ref_init_ = false;
 
+    // q_nw tracks the (reference) velocity strictly (q_nw.x = v_hat). The OQ-AC-2 speed-proportional
+    // rate limit is applied upstream, by saturating the reference-velocity slew in commitAttitude.
     static void stepQnw(const Eigen::Vector3f& velocity_prev_NED_mps,
                         const Eigen::Vector3f& velocity_NED_mps,
                         float rollRate_Wind_rps,

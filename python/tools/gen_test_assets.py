@@ -434,6 +434,7 @@ _TEST_AIRCRAFT_CONFIG = {
         "ny_zeta_nd": 0.7,
         "roll_rate_wn_rad_s": 10.0,
         "roll_rate_zeta_nd": 0.7,
+        "qnw_min_turn_radius_m": 10.0,
     },
     "airframe": {
         "g_max_nd": 4.0,

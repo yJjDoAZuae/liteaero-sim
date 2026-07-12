@@ -105,6 +105,12 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     _ny_zeta_nd          = ac.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = ac.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = ac.at("roll_rate_zeta_nd").get<float>();
+    // OQ-AC-2: minimum turn radius for the speed-proportional q_nw angular-rate cap. Required —
+    // .at() throws if the key is absent, and a non-positive radius is rejected (no default tolerated).
+    _qnw_min_turn_radius_m = ac.at("qnw_min_turn_radius_m").get<float>();
+    if (!(_qnw_min_turn_radius_m > 0.f))
+        throw std::invalid_argument(
+            "Aircraft::initialize: qnw_min_turn_radius_m must be specified and positive");
     // --- Aircraft physical scale: the non-dimensionalization basis for all gear-model knobs ---
     // V_stall is fixed by the already-specified mass / wing area / CL_max. Every gear-model
     // parameter below is given in the config as a non-dimensional ratio against this scale, so the
@@ -733,7 +739,14 @@ void Aircraft::step(double time_sec,
     // v_final and behavior is unchanged. The authority fade phi still uses the real speed.
     Eigen::Vector3f v_att_base = v_final_ned;
     if (m > 0.f) {
-        v_att_base -= (R_nb_mat * _contact_forces.force_body_n) * (dt_s / m);
+        // IP-CRB-4 low-speed guard: fade the contact-exclusion out as ground speed → 0. At rest the
+        // vertical contact force balances gravity, so subtracting (F_contact/m)·dt leaves a spurious
+        // downward residual (~g·dt) that, once the horizontal speed vanishes, dominates the reference
+        // velocity and pitches the velocity-slaved attitude nose-down. The whip this exclusion corrects
+        // is a touchdown-speed phenomenon, so it is gated above a few m/s (full ≥ 4 m/s, off ≤ 1 m/s).
+        const float v_gs = v_final_ned.head<2>().norm();
+        const float excl = std::clamp((v_gs - 1.0f) / 3.0f, 0.0f, 1.0f);
+        v_att_base -= excl * (R_nb_mat * _contact_forces.force_body_n) * (dt_s / m);
     }
     if (!_v_filt_init) {
         _v_filt_ned  = v_att_base;
@@ -746,7 +759,8 @@ void Aircraft::step(double time_sec,
     const float phi_att = phiAuthority(v_final_ned.norm(), _dtheta_vref_mps);
     const Eigen::Vector3f v_att_ref = phi_att * v_att_base + (1.0f - phi_att) * _v_filt_ned;
 
-    _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s, v_att_ref);
+    _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s, v_att_ref,
+                          1.0f / _qnw_min_turn_radius_m);   // OQ-AC-2 speed-proportional cap
 }
 
 // ---------------------------------------------------------------------------
@@ -767,6 +781,7 @@ nlohmann::json Aircraft::serializeJson() const {
     j["ny_zeta_nd"]           = _ny_zeta_nd;
     j["roll_rate_wn_rad_s"]   = _roll_rate_wn_rad_s;
     j["roll_rate_zeta_nd"]    = _roll_rate_zeta_nd;
+    j["qnw_min_turn_radius_m"] = _qnw_min_turn_radius_m;   // OQ-AC-2
     j["nz_relax_filter"]      = _nz_relax_filter.serializeJson();
     j["dtheta_pitch_filter"]  = _dtheta_pitch_filter.serializeJson();
     j["dtheta_roll_filter"]   = _dtheta_roll_filter.serializeJson();
@@ -850,6 +865,7 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _ny_zeta_nd          = j.at("ny_zeta_nd").get<float>();
     _roll_rate_wn_rad_s  = j.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = j.at("roll_rate_zeta_nd").get<float>();
+    _qnw_min_turn_radius_m = j.at("qnw_min_turn_radius_m").get<float>();   // OQ-AC-2
     _dtheta_wn_pitch_rad_s = j.value("dtheta_wn_pitch_rad_s", _dtheta_wn_pitch_rad_s);
     _dtheta_wn_roll_rad_s  = j.value("dtheta_wn_roll_rad_s",  _dtheta_wn_roll_rad_s);
     _dtheta_wn_yaw_rad_s   = j.value("dtheta_wn_yaw_rad_s",   _dtheta_wn_yaw_rad_s);
@@ -967,6 +983,7 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_ny_zeta_nd(_ny_zeta_nd);
     proto.set_roll_rate_wn_rad_s(_roll_rate_wn_rad_s);
     proto.set_roll_rate_zeta_nd(_roll_rate_zeta_nd);
+    proto.set_qnw_min_turn_radius_m(_qnw_min_turn_radius_m);   // OQ-AC-2
     proto.set_nz_filter_x0(_nz_filter.x()(0, 0));
     proto.set_nz_filter_x1(_nz_filter.x()(1, 0));
     proto.set_ny_filter_x0(_ny_filter.x()(0, 0));
@@ -1083,6 +1100,7 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _ny_zeta_nd          = proto.ny_zeta_nd();
     _roll_rate_wn_rad_s  = proto.roll_rate_wn_rad_s();
     _roll_rate_zeta_nd   = proto.roll_rate_zeta_nd();
+    _qnw_min_turn_radius_m = proto.qnw_min_turn_radius_m();   // OQ-AC-2
     _dtheta_wn_pitch_rad_s = proto.dtheta_wn_pitch_rad_s();
     _dtheta_wn_roll_rad_s  = proto.dtheta_wn_roll_rad_s();
     _dtheta_wn_yaw_rad_s   = proto.dtheta_wn_yaw_rad_s();

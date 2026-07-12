@@ -731,6 +731,10 @@ its full configuration and internal state.
     // OQ-LG-21: v_att_ref = Φ(V)·v_final + (1−Φ(V))·LP(v_final) — a dynamic-pressure blend of the
     // instantaneous and low-pass-filtered final velocity. At speed Φ→1 (raw velocity); toward stop
     // Φ→0 (filtered), rejecting per-step gear-bounce wobble. Updates q_nw and the body rate.
+    // OQ-AC-2: commitAttitude saturates the per-step direction change of v_att_ref to θ_max=(V/R_min)·dt
+    // and feeds the saturated reference forward; stepQnw then tracks it STRICTLY (q_nw.x = v̂ always).
+    // This bounds the attitude rate as V→0 without decoupling the attitude from velocity (a direct
+    // rotation cap would launch a crabbed touchdown). R_min = qnw_min_turn_radius_m (no default).
 ```
 
 Steps 5a–5c and the Δθ / n_z-handoff terms are specific to the load-factor `Aircraft`; their
@@ -1079,6 +1083,7 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | ID | Summary | Status |
 | --- | --- | --- |
 | OQ-AC-1 | Whether/how the load-factor `Aircraft` should depart into a post-stall regime from flight commands (the allocator currently caps at CL_max) | Blocking — blocks the stall-recovery scenario notebook and any flown-stall behavior |
+| OQ-AC-2 | Velocity-slaved `q_nw` attitude is ill-conditioned as ground speed → 0; how to bound the attitude rate without breaking the strict `q_nw`↔velocity relationship (a direct rotation cap decouples the attitude and launches a crabbed touchdown) | Resolved — speed-proportional saturation of the attitude-reference velocity slew, $\theta_{\max}=(V/R_{\min})\,dt$ (2026-07-11) |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1148,6 +1153,91 @@ defines the deep-stall depth; and (b) whether to gate departure on a config flag
 command-interface change better suited to `Aircraft6DOF`.
 
 **Status:** Open — awaiting decision.
+
+---
+
+### OQ-AC-2 — Velocity-slaved `q_nw` attitude ill-conditioned at V → 0 *(Resolved)*
+
+**Problem.** The velocity-slaved attitude model keeps `q_nw` aligned with the (attitude-reference)
+velocity vector: `commitAttitude` rotates `q_nw` by `setFromTwoVectors(v_ref_prev, v_ref)` each step
+([KinematicState.cpp](../../src/KinematicState.cpp)), so **by construction `q_nw.x = v̂_ref`** — the
+strict velocity↔attitude relationship the whole model depends on. That rotation is the *full angle*
+between the two reference-velocity vectors with no magnitude weighting, i.e. the applied heading /
+flight-path rate is $\text{angle}(v_{\text{ref,prev}}, v_{\text{ref}})/dt$ irrespective of speed. As
+ground speed → 0 the velocity *direction* becomes numerically ill-conditioned: a small lateral
+perturbation (a gear side force, an RK4 residual) swings the direction by a large angle in a single
+step, so the slaved attitude whips. Observed on a banked touchdown rolled out to a stop: past
+$V \approx 0.4$ m/s the airframe rests level on its struts, yet the attitude grinds in a bounded
+limit cycle that never settles. The former guard was a discontinuous `kMinSpeed = 0.1 m/s` cliff that
+froze curvature below the threshold.
+
+The constraint that shapes the answer: any fix must **bound the attitude rate as V → 0 while
+preserving `q_nw.x = v̂`**. Rate-limiting the *rotation itself* is not acceptable — when the velocity
+keeps turning (a sustained-sideslip crab), a rotation-capped `q_nw` decouples from and lags the
+velocity, and the accumulated mismatch **launches the aircraft** (empirically: a crabbed touchdown
+lifts off, struts unloaded, $F_z \to 0$).
+
+**Alternatives.**
+
+1. **Hard low-speed floor (the `kMinSpeed` cliff).** Freeze path curvature below a fixed ground-speed
+   threshold.
+   - *Benefits:* trivial; avoids the exact-zero-norm singularity in `setFromTwoVectors`.
+   - *Drawbacks:* discontinuous — an on/off transition; does not bound the rate *approaching* the
+     threshold (the whip happens just above it). The interaction of this cliff with the low-speed
+     rollout is the measured source of both the banked limit cycle and the crab catapult.
+
+2. **Direct speed-proportional cap on the `q_nw` rotation.** Clamp the per-step curvature angle (and
+   applied roll) to $\omega_{\max}\,dt = (V/R_{\min})\,dt$ inside `stepQnw`.
+   - *Benefits:* one kinematic law; smooth to zero at rest; fixes the banked limit cycle.
+   - *Drawbacks — rejected:* **breaks `q_nw.x = v̂`.** Bounding the *rotation* lets a sustained-sideslip
+     velocity outrun the capped attitude, which decouples and lags; the crab case launches off the
+     runway (verified — struts unload, $F_z = 0$). Rate-limiting the rotation is the wrong lever.
+
+3. **Explicit attitude-hold latch at low speed.** Latch `q_nw` (or its heading) below a speed
+   threshold, releasing on speed-up.
+   - *Benefits:* fully freezes the attitude at rest.
+   - *Drawbacks:* a new latch state plus release hysteresis; still threshold-based (discontinuous);
+     does not generalize to the intermediate low-speed regime where a *reduced but nonzero* rate is
+     correct.
+
+4. **Speed-proportional saturation of the attitude-reference velocity slew.** Do not touch the
+   rotation. Instead bound the per-step *direction change of the reference velocity* `v_att_ref` (the
+   vector `q_nw` tracks) to $\theta_{\max} = (V/R_{\min})\,dt$, and feed the **saturated** reference
+   forward as the next step's "previous." `q_nw` then tracks the saturated reference *strictly*
+   (`setFromTwoVectors`, no rotation cap), so `q_nw.x = v̂` (the saturated reference) holds at every step.
+   Because the saturated reference *slews toward* the true velocity at a bounded rate (the excess is
+   carried forward, not discarded), it **converges** whenever the velocity direction is steady — so a
+   sustained crab produces no permanent lag (no launch), while a fast low-speed swing (noise) is
+   smoothed. As V → 0, $\theta_{\max} \to 0$, so direction noise cannot slew the reference or the
+   attitude at rest.
+   - *Benefits:* preserves the strict `q_nw`↔velocity relationship (no decouple, no launch); the same
+     V-proportional physics as the steering law $\dot\psi = V\tan\delta / L \propto V$; smooth to zero
+     at rest; a single parameter ($R_{\min}$); the physical RK4 velocity and the EOM are untouched —
+     only the attitude reference is conditioned.
+   - *Drawbacks:* the attitude reference lags the true velocity during a fast transient (by design — a
+     bounded slew that then converges); one config parameter.
+
+**Resolution (Alternative 4 — saturate the attitude-reference velocity slew).** `commitAttitude`
+limits the per-step direction change of `v_att_ref` to $\theta_{\max} = (V/R_{\min})\,dt$ (rotating
+the stored previous reference toward the new one by at most $\theta_{\max}$), stores the saturated
+reference as the previous for the next step, and passes it to `stepQnw`, which tracks it **strictly**
+(`setFromTwoVectors`, no rotation cap; a small epsilon guard only keeps it from normalizing an
+exact-zero vector, replacing the `kMinSpeed` cliff). $R_{\min}$ is an aircraft config field
+(`qnw_min_turn_radius_m`) with **no default — initialization fails if it is unset** (per user
+directive; a nominal value is 10 m). This bounds the attitude rate speed-proportionally as V → 0
+without ever breaking `q_nw.x = v̂` — the velocity-slaved attitude no longer whips or decouples, and
+the direct-rotation-cap crab launch is removed (the 12 m/s gear-only crabbed touchdown settles rather
+than lifting off). Implemented as IP-CRB-8 in
+[contact_reaction_alt_b.md](../implementation/contact_reaction_alt_b.md).
+
+**Two low-speed effects are out of this OQ's scope and remain open** (they are not velocity-slaving
+attitude ill-conditioning): (a) the banked-rollout **roll-channel limit cycle** — a residual body-rate
+oscillation (~40°/s) at rest driven by the gear roll moment feeding `roll_rate_state` (IP-CRB-5), not
+by the reference velocity; and (b) a **gentle-approach (near-stall) crab launch** — at ~1.2× stall a
+sustained-`n_y` crabbed approach lifts off even with a fixed `n_z` command, an aero-lift / stall-shaping
+interaction of the OQ-BC-11 family, independent of the attitude reference. Both are tracked separately.
+
+**Status:** Resolved (2026-07-11) — Alternative 4.
 
 ---
 

@@ -258,7 +258,8 @@ void KinematicState::commitAttitude(float rollRate_Wind_rps, float dt_s)
 // (the dynamic-pressure blend of instantaneous and low-pass-filtered velocity) and derive
 // the body rate from the resulting committed attitude (consistent, no (v×a)/|V|² spike).
 void KinematicState::commitAttitude(float rollRate_Wind_rps, float dt_s,
-                                    const Eigen::Vector3f& attitude_ref_velocity_ned_mps)
+                                    const Eigen::Vector3f& attitude_ref_velocity_ned_mps,
+                                    float max_curvature_per_m)
 {
     snapshot_.roll_rate_wind_rad_s = rollRate_Wind_rps;
 
@@ -268,10 +269,31 @@ void KinematicState::commitAttitude(float rollRate_Wind_rps, float dt_s,
         att_ref_init_         = true;
     }
 
-    // Propagate q_nw toward the reference velocity (whips are filtered out of the reference).
-    stepQnw(att_ref_prev_ned_mps_, attitude_ref_velocity_ned_mps,
-            rollRate_Wind_rps, dt_s, snapshot_.q_nw);
-    att_ref_prev_ned_mps_ = attitude_ref_velocity_ned_mps;
+    // OQ-AC-2 Alt 4: saturate the per-step direction change of the attitude-reference velocity to
+    // theta_max = (V/R_min)·dt (R_min = 1/max_curvature_per_m). Rotate the stored previous reference
+    // toward the new one by at most theta_max, keeping the current speed. Feeding this SATURATED
+    // reference forward makes it slew toward — and converge to — the true velocity when the direction
+    // is steady (no permanent lag), while bounding the rate as V → 0. q_nw then tracks the saturated
+    // reference STRICTLY in stepQnw, so q_nw.x = v_hat always holds (no decouple, no crab launch).
+    Eigen::Vector3f v_ref_sat = attitude_ref_velocity_ned_mps;
+    if (max_curvature_per_m > 0.f && dt_s > 0.f) {
+        const float speed_mps        = attitude_ref_velocity_ned_mps.norm();
+        const float theta_max_rad    = max_curvature_per_m * speed_mps * dt_s;
+        static constexpr float kMinNorm = 1e-4f;
+        if (att_ref_prev_ned_mps_.norm() > kMinNorm && speed_mps > kMinNorm) {
+            Eigen::Quaternionf q_dir;
+            q_dir.setFromTwoVectors(att_ref_prev_ned_mps_, attitude_ref_velocity_ned_mps);
+            const Eigen::AngleAxisf aa(q_dir);      // desired direction change (angle in [0, pi])
+            if (aa.angle() > theta_max_rad) {
+                v_ref_sat = Eigen::AngleAxisf(theta_max_rad, aa.axis())
+                            * att_ref_prev_ned_mps_.normalized() * speed_mps;
+            }
+        }
+    }
+
+    // Propagate q_nw toward the saturated reference velocity; q_nw tracks it strictly.
+    stepQnw(att_ref_prev_ned_mps_, v_ref_sat, rollRate_Wind_rps, dt_s, snapshot_.q_nw);
+    att_ref_prev_ned_mps_ = v_ref_sat;   // feed the SATURATED reference forward (rate-limited slew)
 
     // Body rate = genuine rate of change of the committed attitude (consistent with it).
     const Eigen::Quaternionf q_nb_now = liteaero::nav::KinematicStateUtil::q_nb(snapshot_);
@@ -293,15 +315,18 @@ void KinematicState::stepQnw(const Eigen::Vector3f& velocity_prev_NED_mps,
                               float dt_s,
                               Eigen::Quaternionf& q_nw)
 {
-    // Roll rotation around Wind X axis
+    // Roll rotation around Wind X axis.
     const Eigen::Quaternionf roll_delta(
         Eigen::AngleAxisf(rollRate_Wind_rps * dt_s, Eigen::Vector3f::UnitX()));
 
-    // Path-curvature rotation: differential rotation from the velocity vector change.
-    // setFromTwoVectors is undefined when either vector has zero norm (it normalizes
-    // internally), so skip the curvature term when the aircraft is nearly stationary.
-    static constexpr float kMinSpeed = 0.1f;
-    if (velocity_prev_NED_mps.norm() < kMinSpeed || velocity_NED_mps.norm() < kMinSpeed) {
+    // Path-curvature rotation: the differential rotation from the velocity-vector change. q_nw tracks
+    // the (reference) velocity STRICTLY — q_nw.x = v_hat — by construction. The OQ-AC-2 speed-proportional
+    // rate limit is applied UPSTREAM, by saturating the reference-velocity slew in commitAttitude, NOT
+    // here (a cap on the rotation itself would decouple q_nw from the velocity and launch a crabbed
+    // touchdown). setFromTwoVectors normalizes internally, so guard only against an exact-zero norm — a
+    // numerical epsilon, replacing the former discontinuous kMinSpeed cutoff.
+    static constexpr float kMinNorm = 1e-4f;
+    if (velocity_prev_NED_mps.norm() < kMinNorm || velocity_NED_mps.norm() < kMinNorm) {
         q_nw = (q_nw * roll_delta).normalized();
         return;
     }

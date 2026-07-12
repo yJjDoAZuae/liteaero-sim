@@ -21,7 +21,7 @@ per-symptom patches OQ-BC-12 subsumes.
 **Design authority:** [body_collider.md (OQ-BC-12 → Alt B, Decided design)](../design/body_collider.md),
 [landing_gear.md §2a (filtered-deviation pattern), §OQ-LG-21 (`v_att_ref`)](../design/landing_gear.md)
 
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-11
 
 ---
 
@@ -38,6 +38,7 @@ per-symptom patches OQ-BC-12 subsumes.
 | IP-CRB-5c | todo | Retarget the §5c **yaw** channel onto the FBW `n_y` loop (`ny_wn`/`ny_zeta`), keep `Izz`, hold authority effective to zero ground speed while WoW. For the crosswind crab: the roll is now stable, but a sustained `n_y` crab command still swings the velocity vector (path-curvature) → residual roll; assess whether the yaw retarget + a fuller contact-exclusion is needed | IP-CRB-5 | [body_collider.md OQ-BC-12 Alt B mech.3 (yaw)](../design/body_collider.md) |
 | IP-CRB-6 | blocked (IP-CRB-5) | Acceptance harness: add the roll-persistence time-history regression (banked touchdown rolls to wings-level and *stays*, P-B4) and verify P-B1…P-B6 across `GearLanding_WithRollAndYaw_GearOnly_Settles`, `GearLanding_WingtipGraze_DoesNotCatapultOrLaunch`, the impact-envelope suite, and the existing gear regressions | IP-CRB-5 | [body_collider.md OQ-BC-12 Alt B invariants](../design/body_collider.md) |
 | IP-CRB-7 | blocked (IP-CRB-5, IP-CRB-6) | Remove the superseded §5c roll deviation-derivative path and mark IP-BC-13/14/15 superseded in [body_collider_dynamics.md](body_collider_dynamics.md) | IP-CRB-5, IP-CRB-6 | [body_collider.md OQ-BC-12 Alt B mech.3 (roll)](../design/body_collider.md) |
+| IP-CRB-8 | todo | Speed-proportional saturation of the attitude-reference velocity slew (OQ-AC-2 Alt 4): in `commitAttitude` limit the per-step direction change of `v_att_ref` to `θ_max = (V/R_min)·dt` (rotate the stored previous reference toward the new one by at most `θ_max`), store the **saturated** reference as the previous, and pass it to `stepQnw`, which tracks it **strictly** (`setFromTwoVectors`, NO rotation cap — remove the direct-cap code; keep only a tiny epsilon guard, replacing the `kMinSpeed` cliff). Plumb `qnw_min_turn_radius_m` through `Aircraft` config (**fail init if unset — no default**); JSON+proto serialize + round-trip; TDD (reference slew bounded ∝ V; strict `q_nw.x = v̂` preserved; converges for steady direction). **Done + verified:** unit tests green; the 12 m/s gear crab settles (no launch, `max_agl` 2.5→0.29 m). **Out of scope / still open:** the banked roll-channel limit cycle (~40°/s at rest — IP-CRB-5 roll channel, not velocity-slaving) and the gentle-approach near-stall crab launch (OQ-BC-11 aero-lift family) | IP-CRB-5 | [aircraft.md OQ-AC-2](../design/aircraft.md) |
 
 > **IP-CRB-5 blocked reason:** the persistent-rate roll channel is coded, but its **explicit** integration
 > of the (correctly-righting) gear roll moment against the tiny airframe roll inertia is a stiff mode that

@@ -233,6 +233,9 @@ private:
     float                  _ny_zeta_nd            = 0.7f;
     float                  _roll_rate_wn_rad_s    = 20.f;
     float                  _roll_rate_zeta_nd     = 0.7f;
+    // OQ-AC-2: minimum turn radius bounding the velocity-slaved q_nw angular rate
+    // (omega_max = V / R_min). No default — initialize() requires it in config and fails if unset.
+    float                  _qnw_min_turn_radius_m = 0.f;
 };
 
 } // namespace liteaero::simulation
