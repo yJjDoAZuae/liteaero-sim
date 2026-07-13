@@ -1092,6 +1092,8 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | OQ-AC-1 | Whether/how the load-factor `Aircraft` should depart into a post-stall regime from flight commands (the allocator currently caps at CL_max) | Blocking — blocks the stall-recovery scenario notebook and any flown-stall behavior |
 | OQ-AC-2 | Velocity-slaved `q_nw` attitude is ill-conditioned as ground speed → 0; how to bound the attitude rate without breaking the strict `q_nw`↔velocity relationship (a direct rotation cap decouples the attitude and launches a crabbed touchdown) | Resolved — speed-proportional saturation of the attitude-reference velocity slew, $\theta_{\max}=(V/R_{\min})\,dt$ (2026-07-11) |
 | OQ-AC-3 | Roll limit cycle on banked rollout: the gear strut damper is mis-phased because the gear runs at the outer rate on a one-step-stale body rate (its substep loop freezes the pose), so it acts as a spring not a dissipator | Resolved — co-integrate the roll DOF with the strut forces on the gear substep loop (Tustin, `inner_dt`); tangent plane stays outer (2026-07-12) |
+| OQ-AC-4 | The "wind frame" `q_nw` is slaved to the GROUND velocity, but by definition it tracks the AERODYNAMIC velocity (relative wind); the steady-wind term is dropped from the kinematics, so a crosswind produces no crab | Resolved — `q_nw` tracks the aero velocity (incremental, Alt 2); the ground/aero velocity-azimuth-local-level frames are derived from `q_nw`/`v_g`; crab = χ_a − χ_g, β=0 (2026-07-12) |
+| OQ-AC-5 | On-ground yaw in wind: whether the aircraft weathervanes depends on the gear reacting the crosswind aero moment. Trimaero has no explicit `Cy_β`/`Cn_β` (emulate via the FBW `A_y`-hold loop) and no modeled nose-wheel deflection (estimate its steering-moment capability); must transition smoothly flight↔ground | Resolved — gear-aero moment balance with FBW-emulated capability scaled by contact force (Alt 3, 2026-07-12); depends on OQ-AC-4 |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1320,6 +1322,123 @@ still the FBW rate-command channel, not a rigid-body rotational EOM. Implemented
 onset is eliminated at every dt and the mode is now stable/converging (it grew before). Full settle to
 0°/s at rest requires `inner_dt` fine enough to resolve the gear righting mode — the small-UAS fixture
 uses `substeps = 16` at dt = 0.01; `substeps = 8` leaves a ~10°/s converging residual.
+
+---
+
+### OQ-AC-4 — Wind frame tracks ground velocity instead of aerodynamic velocity *(Open)*
+
+**Problem.** The wind frame `q_nw` (NED→wind) is by definition aligned with the **aerodynamic velocity**
+— the relative wind / airspeed `v_a = v_g − wind` — that is what "wind frame" *means*, and it is the frame
+the aerodynamic forces are resolved in. The model instead slaves `q_nw` to the **ground** velocity `v_g`
+and drops the wind from the kinematics: `stepPV` integrates `v_g` from `q_nw·accel_wind` and **stores but
+never uses** `wind_ned` ([KinematicState.cpp:198](../../src/KinematicState.cpp#L198)); `commitAttitude` /
+`stepQnw` slave `q_nw` to `v_g` via the path curvature; only the aero force *magnitude* uses the airspeed
+(`V_air = |v_g − wind|`, [Aircraft.cpp:361](../../src/Aircraft.cpp#L361)). So the aero force **magnitude**
+is airspeed-relative while its **direction** is ground-relative — an inconsistency invisible in still air
+(`v_a = v_g`) that, in wind, drops the whole directional effect: a steady crosswind produces **no crab and
+no side force** (measured: `vE ≡ 0`, `β ≡ 0` on a crosswind approach). The correct behavior is **β = 0
+(coordinated) with a nonzero, steady crab**.
+
+**Correct construction (Alt 2, chosen).** `q_nw` tracks the **aero** velocity `v_a = v_g − wind`: the
+incremental `setFromTwoVectors` update is driven by the aero-velocity change (the "from"/"to" vectors
+become `v_a`), preserving the D-1 anti-`(v×a)/|v|²`-spike conditioning and the OQ-AC-2 slew machinery. The
+two **velocity-azimuth-local-level** frames are **derived from `q_nw`** (accessors, *not* integrated in the
+update):
+
+- **Aero** VAL — `q_nw`'s own azimuth-local-level: z along local vertical, x along `q_nw`'s horizontal
+  projection (`χ_a`). Since `q_nw` tracks `v_a`, this is the airspeed azimuth.
+- **Ground** VAL — `R_z(χ_g)`, `χ_g = atan2(v_gE, v_gN)`, from the ground velocity (the track frame).
+
+The **crab = χ_a − χ_g** is then a derived quantity (the wind-triangle azimuth offset; likewise the
+flight-path offset). The aero forces resolve in `q_nw` (**β = 0** when coordinated); position integrates
+`v_g = v_a + wind`. In still air the two frames coincide (identity change). **Acceptance:** a crosswind
+approach holds **β = 0 with a steady, nonzero crab**, and the crabbed touchdown produces a real wheel
+side-scrub. The low-speed / parked-in-wind conditioning of the azimuth is **OQ-AC-5**.
+
+**Alternatives (construction + degeneracy handling).**
+
+1. **Explicit two-frame azimuth/γ construction** replacing `stepQnw`'s incremental `setFromTwoVectors`:
+   `q_nw = R_z(χ_a)·R_y(γ_a)·`bank each step from the aero velocity.
+   - *Benefits:* direct; the standard construction; wind handled by definition.
+   - *Drawbacks:* reintroduces the azimuth/γ-rate singularity as `|v_a| → 0` that the D-1 defect fix (the
+     incremental `setFromTwoVectors`) was adopted to avoid; must re-solve the low-speed conditioning.
+
+2. **Incremental azimuth/γ rates through the two frames** — keep the increment form (preserving the D-1
+   anti-`(v×a)/|v|²`-spike property) but drive it from the **aero** velocity change, carrying the ground VAL
+   for the track.
+   - *Benefits:* preserves D-1 conditioning and the OQ-AC-2 slew machinery; least disturbance to the
+     low-speed handling.
+   - *Drawbacks:* the wind must be folded into the increment consistently (the "from"/"to" vectors become
+     aero-velocity vectors).
+
+**Recommendation.** Alternative 2 — drive the existing incremental `q_nw` construction from the aero
+velocity (preserving D-1), with the two velocity-azimuth-local-level frames **derived from `q_nw`** (aero)
+and `v_g` (ground). The `v_att_ref` / OQ-LG-21 blend keys off the aero velocity consistently.
+
+**Status:** Resolved (2026-07-12) — Alternative 2. The on-ground / parked-in-wind yaw behavior (when the
+aircraft weathervanes vs. the gear holds it) is split into
+**[OQ-AC-5](#oq-ac-5--on-ground-yaw-and-weathervane-gear-aero-moment-balance-in-wind-open)**.
+
+---
+
+### OQ-AC-5 — On-ground yaw and weathervane: gear-aero moment balance in wind *(Open)*
+
+**Problem.** OQ-AC-4 makes the wind frame track the aero velocity, so on the ground in wind the airframe has
+a real sideslip (β = wind angle) and the crosswind produces an aero side force and yaw moment. Whether the
+aircraft **weathervanes** (yaws uncommanded to point into the wind) depends on whether the gear can
+**react** that aero moment: it should hold heading while the tyre side forces (mains) and the nose-gear
+steering balance the disturbance, and yaw only when they cannot. Two constraints make this non-trivial in
+the trimaero model:
+
+- **No explicit `Cy_β` / `Cn_β`.** The model carries no side-force / yaw-moment-vs-sideslip derivatives, so
+  the crosswind aero side force and yaw moment must be **emulated** from the closed-loop FBW rather than
+  computed from stability derivatives. Assume the FBW holds its **commanded `A_y`** (lateral load) through
+  aerodynamic and nose-wheel-steering means.
+- **The nose wheel is not modeled as deflected** (the castering-wheel abstraction, `F_y = 0`). Its
+  directional authority must be **estimated** as a moment-producing *capability* (from normal load ×
+  geometry), not simulated as a steering deflection.
+
+The behavior must transition **smoothly from flight to ground** as the contact forces build/weaken — a hard
+"no slip on the ground" rule is discontinuous at the flight↔ground boundary and is not acceptable.
+
+**Alternatives.**
+
+1. **Free weathervane (gate the azimuth rate on aero speed).** `q_nw` tracks the aero velocity to zero
+   ground speed; the airframe yaws to point into the wind at rest.
+   - *Benefits:* `q_nw` never singular; trivial.
+   - *Drawbacks:* non-physical on the ground — ignores the gear, which reacts the side load; the nose does
+     not free-castor into the wind.
+
+2. **Hard heading-hold on the ground ("slipping won't occur").** Freeze the heading (ground-speed gate);
+   the gear always holds; the aircraft never weathervanes uncommanded on the ground.
+   - *Benefits:* simplest; correct for light winds.
+   - *Drawbacks:* **discontinuous** at the flight↔ground transition — as the contact forces weaken there is
+     no smooth handover to aero weathervaning, and it cannot represent a wind strong enough to overpower the
+     gear. Rejected as a general solution.
+
+3. **Gear-aero moment balance with FBW-emulated capability (recommended).** Emulate the crosswind aero yaw
+   moment via the FBW `A_y`-hold loop; the gear reacts it with the tyre side forces plus an **estimated
+   nose-gear steering moment capability** (from normal load × geometry, no modeled deflection). Hold heading
+   while the required moment ≤ the gear/steering capability; on the excess, the aircraft yaws (weathervanes
+   / slips). Because the capability scales with the **normal / contact force**, it fades to zero as the
+   aircraft lifts off — a **smooth flight↔ground transition** into pure aero weathervaning.
+   - *Benefits:* physically correct across the regime (light wind → gear holds, static β; strong wind →
+     slips / weathervanes); smooth transition via the contact-force-scaled capability; stays within trimaero
+     (no explicit `Cy_β`/`Cn_β`, no nose-wheel deflection) by emulating through the FBW loop and a capability
+     estimate.
+   - *Drawbacks:* most complex; needs the aero-moment emulation and the nose-gear capability estimate
+     defined; the `A_y`-hold-on-the-ground assumption is a modeling abstraction.
+
+**Recommendation.** Alternative 3 — the gear-aero moment balance with an FBW-emulated aero moment and an
+estimated (not deflection-modeled) nose-gear steering capability, scaled by contact force for a smooth
+flight↔ground transition. Alternative 2 is a fallback only if Alt 3 proves too costly, but it is rejected as
+a general solution for the discontinuous transition.
+
+**Status:** Resolved (2026-07-12) — Alternative 3 (gear-aero moment balance with an FBW-emulated aero
+moment and an estimated, not deflection-modeled, nose-gear steering capability, scaled by contact force for
+a smooth flight↔ground transition). Depends on OQ-AC-4. Two sub-items are defined during implementation
+(rule 14): the aero yaw-moment emulation from the FBW `A_y`-hold loop, and the nose-gear steering
+moment-capability estimate.
 
 ---
 
