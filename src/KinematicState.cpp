@@ -125,23 +125,26 @@ KinematicState::KinematicState(double time_sec,
                                const Eigen::Vector3f& velocity_NED_mps,
                                const Eigen::Vector3f& acceleration_NED_mps,
                                const Eigen::Quaternionf& q_nb,
-                               const Eigen::Vector3f& rates_Body_rps)
+                               const Eigen::Vector3f& rates_Body_rps,
+                               const Eigen::Vector3f& wind_NED_mps)
 {
     snapshot_.time_s               = time_sec;
     snapshot_.position             = position_datum.geodeticPosition();
     snapshot_.velocity_ned_mps     = velocity_NED_mps;
     snapshot_.acceleration_ned_mps2 = acceleration_NED_mps;
     snapshot_.rates_body_rps       = rates_Body_rps;
-    snapshot_.wind_ned_mps         = Eigen::Vector3f::Zero();
+    snapshot_.wind_ned_mps         = wind_NED_mps;
     snapshot_.alpha_dot_rad_s      = 0.0f;
     snapshot_.beta_dot_rad_s       = 0.0f;
     snapshot_.roll_rate_wind_rad_s = 0.0f;
 
-    // Derive alpha and beta from the body-frame airmass velocity projection.
-    // With q_wb = Ry(alpha) * Rz(-beta), the body-frame airmass velocity is:
+    // Derive alpha and beta from the body-frame AIRMASS velocity projection (OQ-AC-4: the wind frame
+    // tracks the relative wind, so beta and q_nw are referenced to v_a = velocity_NED - wind, NOT the
+    // ground velocity). With q_wb = Ry(alpha) * Rz(-beta), the body-frame airmass velocity is:
     //   u = V·cos(α)·cos(β),  v = V·cos(α)·sin(β),  w = V·sin(α)
-    // Inverting: α = atan2(w, sqrt(u²+v²)),  β = atan2(v, u)
-    const Eigen::Vector3f v_body = q_nb.toRotationMatrix().transpose() * velocity_NED_mps;
+    // Inverting: α = atan2(w, sqrt(u²+v²)),  β = atan2(v, u). In still air v_a == v_g (unchanged).
+    const Eigen::Vector3f v_air_ned = velocity_NED_mps - wind_NED_mps;
+    const Eigen::Vector3f v_body = q_nb.toRotationMatrix().transpose() * v_air_ned;
     float alpha = 0.0f;
     float beta  = 0.0f;
     if (v_body.norm() > 0.1f) {

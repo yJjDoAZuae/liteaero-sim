@@ -1355,6 +1355,18 @@ flight-path offset). The aero forces resolve in `q_nw` (**β = 0** when coordina
 approach holds **β = 0 with a steady, nonzero crab**, and the crabbed touchdown produces a real wheel
 side-scrub. The low-speed / parked-in-wind conditioning of the azimuth is **OQ-AC-5**.
 
+**Steady wind is a constant offset — the crab must be *initialized*, not generated.** The incremental
+`setFromTwoVectors` rotates `q_nw` by the *change* in the velocity direction. For a **steady** wind
+`d(v_a)/dt = d(v_g)/dt`, so the constant aero-vs-ground azimuth offset — which *is* the crab — is invisible
+to the increment and **cannot be created** from steady wind (driving the increment from `v_a` vs `v_g` gives
+identical `q_nw` evolution). This is physically correct: a steady crab is a **steady state** with no
+restoring mechanism; you are either in it or not. It therefore manifests as an **initial-condition**
+requirement — the initial `q_nw` is built from the **aero** velocity `v_g,init − wind,init` (not the ground
+velocity, which would absorb a crabbed heading into β and drive it to zero). The increment then *maintains*
+the crab and tracks wind *changes* (gusts). A crabbed-landing scenario is set up purely by initial
+conditions (runway azimuth, crabbed heading, crosswind) with **no controller** — the aircraft simply lands
+with its ground velocity roughly down the runway and its heading offset by the crab.
+
 **Alternatives (construction + degeneracy handling).**
 
 1. **Explicit two-frame azimuth/γ construction** replacing `stepQnw`'s incremental `setFromTwoVectors`:

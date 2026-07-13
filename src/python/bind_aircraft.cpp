@@ -239,6 +239,16 @@ void bind_aircraft(py::module_& m)
         .def_property_readonly("yaw_rate_rad_s",
             [](const KinematicState& s) {
                 return static_cast<double>(s.headingRate_rps()); })
+        .def_property_readonly("crab_rad",
+            [](const KinematicState& s) {
+                return static_cast<double>(s.crab_rad()); },
+            "Crab angle (air-track azimuth − ground-track azimuth), rad (OQ-AC-4).")
+        .def_property_readonly("air_track_azimuth_rad",
+            [](const KinematicState& s) {
+                return static_cast<double>(s.airTrackAzimuth_rad()); })
+        .def_property_readonly("ground_track_azimuth_rad",
+            [](const KinematicState& s) {
+                return static_cast<double>(s.groundTrackAzimuth_rad()); })
         .def_property_readonly("acceleration_ned_mps2",
             [](const KinematicState& s) -> std::array<double, 3> {
                 const auto a = s.acceleration_NED_mps();
@@ -299,17 +309,21 @@ void bind_aircraft(py::module_& m)
              [](PyAircraft& self,
                 const AircraftCommand& cmd,
                 float dt_s,
-                float rho_kgm3) {
+                float rho_kgm3,
+                const std::array<float, 3>& wind_ned_mps) {
                  self.time_s += dt_s;
                  self.aircraft->step(self.time_s, cmd,
-                                     Eigen::Vector3f::Zero(),
+                                     Eigen::Vector3f{wind_ned_mps[0], wind_ned_mps[1],
+                                                     wind_ned_mps[2]},
                                      rho_kgm3);
              },
              py::arg("cmd"),
              py::arg("dt_s")      = 0.02f,
              py::arg("rho_kgm3") = 1.225f,
+             py::arg("wind_ned_mps") = std::array<float, 3>{0.f, 0.f, 0.f},
              "Advance simulation by one timestep.\n\n"
-             "Wind is assumed zero; use rho_kgm3 to override ISA sea-level density.")
+             "wind_ned_mps: steady NED wind vector (m/s), default zero; rho_kgm3 overrides\n"
+             "ISA sea-level density.")
         .def("state",
              [](const PyAircraft& self) -> const KinematicState& {
                  return self.aircraft->state();

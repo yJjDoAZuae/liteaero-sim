@@ -40,13 +40,17 @@ public:
                    float betaDot_rps,
                    const Eigen::Vector3f& wind_NED_mps);
 
-    // Constructor 2: supply q_nb directly; alpha, beta, q_nw are derived.
+    // Constructor 2: supply q_nb directly; alpha, beta, q_nw are derived. OQ-AC-4: q_nw (the wind
+    // frame) and beta are derived from the AIRMASS velocity v_a = velocity_NED - wind, so q_nw aligns
+    // with the relative wind (a crabbed q_nb over a steady crosswind yields beta = 0 with q_nw at the
+    // airspeed azimuth — the crab is the azimuth offset to the ground track). wind defaults to zero.
     KinematicState(double time_sec,
                    const WGS84_Datum& position_datum,
                    const Eigen::Vector3f& velocity_NED_mps,
                    const Eigen::Vector3f& acceleration_NED_mps,
                    const Eigen::Quaternionf& q_nb,
-                   const Eigen::Vector3f& rates_Body_rps);
+                   const Eigen::Vector3f& rates_Body_rps,
+                   const Eigen::Vector3f& wind_NED_mps = Eigen::Vector3f::Zero());
 
     ~KinematicState() = default;
 
@@ -140,6 +144,10 @@ public:
     float rollRate_rps()           const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(0); }
     float pitchRate_rps()          const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(1); }
     float headingRate_rps()        const { return liteaero::nav::KinematicStateUtil::euler_rates_rad_s(snapshot_)(2); }
+    // OQ-AC-4 wind-triangle azimuths: air-track (from q_nw), ground-track (from v_g), and the crab.
+    float crab_rad()               const { return liteaero::nav::KinematicStateUtil::crab_rad(snapshot_); }
+    float airTrackAzimuth_rad()    const { return liteaero::nav::KinematicStateUtil::air_track_azimuth_rad(snapshot_); }
+    float groundTrackAzimuth_rad() const { return liteaero::nav::KinematicStateUtil::ground_track_azimuth_rad(snapshot_); }
 
     liteaero::nav::PlaneOfMotion POM()        const { return liteaero::nav::KinematicStateUtil::plane_of_motion(snapshot_); }
     liteaero::nav::TurnCircle    turnCircle() const { return liteaero::nav::KinematicStateUtil::turn_circle(snapshot_); }

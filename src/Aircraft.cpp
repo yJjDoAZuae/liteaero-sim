@@ -270,6 +270,15 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
         is.at("velocity_down_mps").get<float>()
     };
 
+    // OQ-AC-4 (IP-CRB-10): initial steady wind, so the wind frame q_nw (and beta) are built from the
+    // airmass velocity v_a = v_g − wind. This is what makes a crabbed initial condition hold — the
+    // increment is blind to a steady wind's constant offset, so the crab must be present at init.
+    const Eigen::Vector3f wind_NED{
+        is.value("wind_north_mps", 0.0f),
+        is.value("wind_east_mps",  0.0f),
+        is.value("wind_down_mps",  0.0f)
+    };
+
     // Optional Euler angles (ZYX: heading, pitch, roll) — all default to 0.
     const float heading_rad = is.value("heading_rad", 0.0f);
     const float pitch_rad   = is.value("pitch_rad",   0.0f);
@@ -285,7 +294,8 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
         vel_NED,
         Eigen::Vector3f::Zero(),
         q_nb,
-        Eigen::Vector3f::Zero()
+        Eigen::Vector3f::Zero(),
+        wind_NED
     );
     _initial_state = _state;
 
@@ -778,7 +788,14 @@ void Aircraft::step(double time_sec,
     // aerodynamic flight path, and contact-induced rotation is delivered only through the
     // §5c channels (once, not twice). In free flight force_body_n == 0 so v_att_base ==
     // v_final and behavior is unchanged. The authority fade phi still uses the real speed.
-    Eigen::Vector3f v_att_base = v_final_ned;
+    //
+    // OQ-AC-4 (IP-CRB-10): the wind frame tracks the AERODYNAMIC velocity, so the velocity-slaving
+    // reference is the airspeed vector v_a = v_g − wind (this is the steady-wind term that was missing).
+    // In still air (wind = 0) v_att_base == v_final and behavior is unchanged; in a crosswind the aircraft
+    // crabs — the heading tracks the airspeed azimuth (β = 0) while the ground velocity, still integrated
+    // for position, runs along the track. Position/EOM keep integrating v_g; only the attitude reference
+    // (hence q_nw) uses v_a.
+    Eigen::Vector3f v_att_base = v_final_ned - wind_NED_mps;
     if (m > 0.f) {
         // IP-CRB-4 low-speed guard: fade the contact-exclusion out as ground speed → 0. At rest the
         // vertical contact force balances gravity, so subtracting (F_contact/m)·dt leaves a spurious
