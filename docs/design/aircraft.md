@@ -1130,6 +1130,8 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | OQ-AC-4 | The "wind frame" `q_nw` is slaved to the GROUND velocity, but by definition it tracks the AERODYNAMIC velocity (relative wind); the steady-wind term is dropped from the kinematics, so a crosswind produces no crab | Resolved — `q_nw` tracks the aero velocity (incremental, Alt 2); the ground/aero velocity-azimuth-local-level frames are derived from `q_nw`/`v_g`; crab = χ_a − χ_g, β=0 (2026-07-12) |
 | OQ-AC-5 | On-ground yaw in wind: whether the aircraft weathervanes depends on the gear reacting the crosswind aero moment. Trimaero has no explicit `Cy_β`/`Cn_β` (emulate via the FBW `A_y`-hold loop) and no modeled nose-wheel deflection (estimate its steering-moment capability); must transition smoothly flight↔ground | Resolved — gear-aero moment balance with FBW-emulated capability scaled by contact force (Alt 3, 2026-07-12); depends on OQ-AC-4 |
 | OQ-AC-6 | Constant `Ny` command authority at all speeds is unphysical: on the ground it implies an arbitrarily tight turn radius as the vehicle slows, and airborne it drives the emulated β without bound as `q`→0. The flight vs ground-steering minimum radii differ significantly, and a purely speed-based transition would false-shift the dynamics in a strong headwind | Resolved — authority-limit `Ny` to a maximum path curvature (Ny magnitude bounded by V²/(g·R)), blending flight (airspeed, `R_flight`) and ground (ground speed, `R_ground`) regimes by a WoW-load-fraction × below-stall-smoothstep weight (2026-07-14) |
+| OQ-AC-7 | On-ground weathervane needs an aero yaw moment for the gear to react (OQ-AC-5 Alt 3), but trimaero has no `Cn_β` — how is the aero weathervane yaw moment `N_aero` emulated from the quantities the model does carry (β, `Cy_β`, FBW `A_y`)? | Blocking — blocks IP-CRB-11 (on-ground gear-aero yaw balance) |
+| OQ-AC-8 | The gear-aero balance (OQ-AC-5 Alt 3) holds heading while the required yaw moment ≤ the gear yaw capability `N_gear,max`, but with the nose modeled as castering (`F_y=0`) that capability is undefined — how is `N_gear,max` (main-tyre + estimated nose-steering, contact-force-scaled) estimated? | Blocking — blocks IP-CRB-11 (on-ground gear-aero yaw balance) |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1425,11 +1427,11 @@ and `v_g` (ground). The `v_att_ref` / OQ-LG-21 blend keys off the aero velocity 
 
 **Status:** Resolved (2026-07-12) — Alternative 2. The on-ground / parked-in-wind yaw behavior (when the
 aircraft weathervanes vs. the gear holds it) is split into
-**[OQ-AC-5](#oq-ac-5--on-ground-yaw-and-weathervane-gear-aero-moment-balance-in-wind-open)**.
+**[OQ-AC-5](#oq-ac-5--on-ground-yaw-and-weathervane-gear-aero-moment-balance-in-wind-resolved)**.
 
 ---
 
-### OQ-AC-5 — On-ground yaw and weathervane: gear-aero moment balance in wind *(Open)*
+### OQ-AC-5 — On-ground yaw and weathervane: gear-aero moment balance in wind *(Resolved)*
 
 **Problem.** OQ-AC-4 makes the wind frame track the aero velocity, so on the ground in wind the airframe has
 a real sideslip (β = wind angle) and the crosswind produces an aero side force and yaw moment. Whether the
@@ -1484,9 +1486,9 @@ a general solution for the discontinuous transition.
 
 **Status:** Resolved (2026-07-12) — Alternative 3 (gear-aero moment balance with an FBW-emulated aero
 moment and an estimated, not deflection-modeled, nose-gear steering capability, scaled by contact force for
-a smooth flight↔ground transition). Depends on OQ-AC-4. Two sub-items are defined during implementation
-(rule 14): the aero yaw-moment emulation from the FBW `A_y`-hold loop, and the nose-gear steering
-moment-capability estimate.
+a smooth flight↔ground transition). Depends on OQ-AC-4. Two design sub-items remain **open** and block
+IP-CRB-11: the emulation of the aero weathervane yaw moment (**OQ-AC-7**) and the estimate of the
+gear yaw reaction capability including nose steering (**OQ-AC-8**).
 
 ### OQ-AC-6 — `Ny` command authority is speed-independent (unphysical curvature) *(Resolved)*
 
@@ -1507,6 +1509,129 @@ gear load (not ground speed) keeps full flight authority in a headwind; the belo
 fast touchdown into `R_ground` rather than stepping to it. The full model, symbols, and blend are in
 [§Lateral Authority Limit](#lateral-authority-limit). This is a command-authority limit on the existing
 `Ny` channel only — no channel remap, no curvature/β input, no steerable-gear use, no control loop.
+
+### OQ-AC-7 — Emulating the on-ground aero weathervane yaw moment (no `Cn_β`) *(Open)*
+
+**Problem.** On the ground in sideslip, the airframe has an aerodynamic yaw moment that tends to
+**weathervane** it — yaw the nose toward the relative wind. Sideslip arises on the ground because the
+wind frame tracks the aerodynamic velocity (OQ-AC-4): a crosswind gives an aerodynamic sideslip
+`β = wind angle`, and a commanded lateral load factor `Ny` also drives a `β` through the allocator. The
+resolved on-ground yaw model (OQ-AC-5, Alternative 3) reacts this aero yaw moment with the landing gear
+— holding heading while the required moment is within the gear's capability and weathervaning only on the
+excess. But the aero yaw moment the gear must react is **not computed anywhere in the model**. The
+trimaero aero set carries a side-force-vs-sideslip derivative `Cy_β` (config `cl_y_beta`, the lateral
+force `F_aero,y = Cy_β·β·q·S`, with `q = ½ρV²` the dynamic pressure in Pa and `S` the reference area in
+m²) but **no** yaw-moment-vs-sideslip derivative `Cn_β`. With no `Cn_β` there is no yaw moment in the
+force/moment build, so the balance of OQ-AC-5 has nothing to react and cannot decide when the aircraft
+holds heading versus weathervanes. Concretely, the on-ground velocity-azimuth slew is currently ungated:
+a sustained 0.02 g lateral command grows `β` to about 90°, and a 0.04 g command diverges (yaw rate above
+11000°/s, launching the aircraft above 4 m AGL). Affected use cases: crosswind / crab landings, rollout
+with a lateral input, and parked-in-wind. Not affected: coordinated flight and straight rollout (`β ≈ 0`,
+so `N_aero ≈ 0`).
+
+Symbols: `N_aero` = emulated aero weathervane yaw moment (N·m); `x_acy` = longitudinal distance from the
+CG to the aerodynamic side-force center of pressure (m, positive aft); `A_y` = commanded lateral load
+factor (g); `b` = reference span (m).
+
+**Alternatives.**
+
+1. **Side-force × aerodynamic lever.** `N_aero = F_aero,y · x_acy` — treat the already-modeled
+   `Cy_β·β` side force as acting at a point `x_acy` aft of the CG (a directional-stability moment arm;
+   equivalently a `Cn_β` expressed as a lever on the modeled side force).
+   - *Benefits:* minimal (one parameter `x_acy`); physical — the weathervane strength scales with the `β`
+     the model already has and with `q` through the side force, and fades to zero as `q → 0` (no
+     low-speed singularity); reuses the existing `Cy_β` side force.
+   - *Drawbacks:* `x_acy` is a new parameter not otherwise in the trimaero set; treats the side-force
+     center of pressure as a fixed lever (no `α`/`β` dependence).
+   - *Prerequisite:* an estimate of `x_acy` from geometry (vertical-tail + fuselage side-area centroid
+     aft of the CG).
+
+2. **FBW `A_y`-hold residual.** Derive `N_aero` from the mismatch between the commanded `A_y` and the
+   crosswind-induced side force the FBW must null — interpret the FBW effort to hold `A_y` in sideslip as
+   the moment the gear/steering must supply (the literal reading of the OQ-AC-5 "emulate via the FBW
+   `A_y`-hold loop" text).
+   - *Benefits:* introduces no new aero parameter; ties directly to the FBW-authority framing OQ-AC-5
+     adopts.
+   - *Drawbacks:* abstract — converting an `A_y`-hold effort into a yaw moment still requires an assumed
+     lever/geometry, so it does not actually avoid the parameter of Alternative 1; harder to calibrate;
+     risks circularity with the `Ny` authority channel (OQ-AC-6), which already shapes `A_y`.
+   - *Prerequisite:* a defined mapping from `A_y`-hold effort to a yaw moment (which reintroduces a lever
+     assumption).
+
+3. **Add an explicit `Cn_β` term.** Extend the aero set with a directional-stability derivative and
+   compute `N_aero = Cn_β·β·q·S·b` directly.
+   - *Benefits:* standard and unambiguous; consistent with a conventional `α`/`β` aero build.
+   - *Drawbacks:* departs from the trimaero premise (the model deliberately carries no `Cn_β`/moment
+     derivatives); adds an aero build path and parameters (`Cn_β`, `b`) that nothing else in the model
+     uses; a larger change than OQ-AC-5 Alternative 3 intended.
+   - *Prerequisite:* a `Cn_β` estimate and reference span `b`; a decision to extend the trimaero aero set.
+
+**Recommendation.** Alternative 1 — the side-force × aerodynamic lever. It reuses the `Cy_β·β` side force
+the model already computes, needs a single geometric parameter (`x_acy`), and fades correctly with
+dynamic pressure. Alternative 2 collapses into Alternative 1 once a lever is required to turn an
+`A_y`-hold effort into a moment, so Alternative 1 states that lever explicitly rather than hiding it.
+Alternative 3 is correct but over-reaches the trimaero premise for what is a single emulated moment.
+
+**Status:** Open. Blocks IP-CRB-11.
+
+### OQ-AC-8 — Estimating the gear yaw reaction capability (nose steering, no modeled deflection) *(Open)*
+
+**Problem.** The on-ground yaw model (OQ-AC-5, Alternative 3) reacts the aero weathervane moment `N_aero`
+(OQ-AC-7) with the landing gear, holding heading while the required moment is within the gear's yaw
+capability `N_gear,max` and yawing (weathervaning / scrubbing) on the excess, with `N_gear,max` scaling
+with contact normal force so it fades to zero at liftoff (a smooth flight↔ground transition). The
+main-tyre side forces are already modeled and friction-limited (`SurfaceFrictionUniform` lateral peak
+`μ_y`), and they produce a yaw moment through their longitudinal offset from the CG. But the nose gear is
+modeled as **castering** (`is_castering → F_y = 0`, IP-CRB-5b), so it contributes no directional
+authority — even though nose-wheel steering is the primary heading-hold mechanism during rollout. Its
+steering moment capability must be **estimated** (not simulated as a deflection, per OQ-AC-5). Without a
+defined `N_gear,max` the balance has no threshold and cannot decide when the gear holds versus releases:
+with no capability the azimuth is ungated (ground loop); with only the mains it is under-represented and
+the aircraft weathervanes/scrubs at winds it should hold against.
+
+Symbols: `F_z,i` = vertical (normal) load on wheel `i` (N); `μ_y` = lateral friction coefficient (nd,
+from `SurfaceFrictionUniform`); `x_i` = longitudinal distance from the CG to wheel `i` (m, positive aft);
+`N_gear,max` = total gear yaw capability (N·m); `N_main = Σ μ_y·F_z,main·x_main` = main-tyre yaw
+capability (N·m); `N_nose` = estimated nose-steering yaw capability (N·m); `k_steer` = a nose steering
+authority coefficient (m).
+
+**Alternatives.**
+
+1. **Reuse modeled main-tyre moment; add an estimated nose-steering term.** `N_gear,max = N_main + N_nose`
+   with `N_nose = μ_y·F_z,nose·x_nose` — the maximum steerable side force the nose can develop times its
+   longitudinal arm to the CG. Both terms scale with their normal loads, so `N_gear,max → 0` at liftoff.
+   - *Benefits:* reuses the already-modeled friction-limited main-tyre side forces directly; adds only the
+     missing nose term with a single geometric arm `x_nose` (already the nose attach point in the gear
+     config); contact-force scaling is automatic.
+   - *Drawbacks:* assumes the nose can always develop its full friction-limited side force (an upper bound
+     on a real steering system's authority); shares `μ_y` with the main-tyre lateral friction.
+   - *Prerequisite:* the nose longitudinal arm `x_nose` (already available); confirmation that `μ_y` is the
+     right coefficient for a steered (versus free-rolling) tyre.
+
+2. **Single lumped capability from total normal load.** `N_gear,max = μ_y·W_gear·x_eff` from the total
+   gear vertical load `W_gear` and an effective arm `x_eff`, without separating main and nose.
+   - *Benefits:* simplest; one effective arm; smooth contact scaling.
+   - *Drawbacks:* loses the main-versus-nose distinction (nose and mains have opposite-sign arms about the
+     CG, so a lumped arm mis-weights them); `x_eff` is an abstract lumped parameter; less physical.
+   - *Prerequisite:* an `x_eff` estimate.
+
+3. **Nose steering-moment coefficient decoupled from tyre friction.** Model `N_nose = k_steer·F_z,nose`
+   with a steering authority coefficient `k_steer` independent of the surface friction `μ_y`, added to the
+   modeled `N_main`.
+   - *Benefits:* lets the nose authority be tuned independently of surface `μ` (a steered wheel's cornering
+     stiffness differs from a sliding-friction limit).
+   - *Drawbacks:* adds a new parameter `k_steer` not tied to the existing friction model; another config
+     knob to justify.
+   - *Prerequisite:* a `k_steer` estimate.
+
+**Recommendation.** Alternative 1 — reuse the existing friction-limited main-tyre moment and add
+`N_nose = μ_y·F_z,nose·x_nose`. It builds on what the gear already models, adds only the geometric nose
+arm (already configured), and gives automatic contact-force scaling. The friction-limited nose side force
+is a defensible upper bound for the steering capability; if rollout behavior later shows the nose
+authority must be decoupled from the surface `μ`, Alternative 3's `k_steer` can replace the nose term
+without touching the main-tyre path.
+
+**Status:** Open. Blocks IP-CRB-11.
 
 ---
 
