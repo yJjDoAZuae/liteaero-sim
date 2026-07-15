@@ -69,6 +69,9 @@ static nlohmann::json makeConfig() {
             "roll_rate_wn_rad_s": 20.0,
             "roll_rate_zeta_nd": 0.7,
             "qnw_min_turn_radius_m": 10.0,
+            "ground_steering_min_turn_radius_m": 3.0,
+            "ground_steering_vblend_lower_ratio": 0.6,
+            "ground_steering_vblend_upper_ratio": 1.0,
             "dtheta_zeta_nd": 0.7,
             "dtheta_wn_pitch_ratio": 7.34,
             "dtheta_wn_roll_ratio": 9.79,
@@ -509,6 +512,66 @@ TEST(AircraftTest, BandEdges_Valid_DoesNotThrow) {
 }
 
 // ---------------------------------------------------------------------------
+// OQ-AC-6 — Ny command curvature authority limit
+//   n_y_max = ((1−w)·V_air²/R_flight + w·V_ground²/R_ground)/g
+//   w = wow_load_fraction · (1 − smoothstep(V_ground; v_lo, v_hi))
+// ---------------------------------------------------------------------------
+
+TEST(AircraftTest, LateralLoadAuthority_RegimeBlend) {
+    constexpr float g = 9.80665f;
+    constexpr float Rf = 100.0f, Rg = 8.0f, vlo = 6.0f, vhi = 10.0f;
+    using liteaero::simulation::Aircraft;
+
+    // A — airborne (wow=0): flight regime (airspeed), independent of ground speed.
+    EXPECT_NEAR(Aircraft::lateralLoadAuthority(40.f, 8.f, 0.f, Rf, Rg, vlo, vhi),
+                (40.f*40.f/Rf)/g, 1e-4f);
+    // B — weighted & slow (wow=1, V_ground ≤ v_lo): full ground regime (ground speed).
+    EXPECT_NEAR(Aircraft::lateralLoadAuthority(40.f, 5.f, 1.f, Rf, Rg, vlo, vhi),
+                (5.f*5.f/Rg)/g, 1e-4f);
+    // C — weighted & fast (wow=1, V_ground ≥ v_hi): reverts to flight regime.
+    EXPECT_NEAR(Aircraft::lateralLoadAuthority(40.f, 12.f, 1.f, Rf, Rg, vlo, vhi),
+                (40.f*40.f/Rf)/g, 1e-4f);
+    // D — strong headwind (airborne, high airspeed, low ground speed): no shift; stays flight.
+    EXPECT_NEAR(Aircraft::lateralLoadAuthority(40.f, 3.f, 0.f, Rf, Rg, vlo, vhi),
+                (40.f*40.f/Rf)/g, 1e-4f);
+    // E — mid-band blend (wow=1, V_ground=8 → smoothstep t=0.5 → s=0.5 → w=0.5).
+    const float a_flight = 40.f*40.f/Rf, a_ground = 8.f*8.f/Rg;
+    EXPECT_NEAR(Aircraft::lateralLoadAuthority(40.f, 8.f, 1.f, Rf, Rg, vlo, vhi),
+                (0.5f*a_flight + 0.5f*a_ground)/g, 1e-4f);
+}
+
+// Airborne (no gear → wow=0 → flight regime), StubPropulsion(0) so the β solve is
+// β = n_y·mg/(qS·C_Yβ). A large Ny is curvature-limited to V_air²/(g·R_flight); the V² cancels q,
+// so β saturates at a SPEED-INDEPENDENT β_limit = 2m/(ρS·R_flight·|C_Yβ|). Without the clamp β would
+// scale ∝ 1/V² and differ between the two speeds. R_flight is enlarged so β_limit is a sane angle.
+static nlohmann::json makeNyAuthorityConfig(float v_north_mps, float r_flight_m) {
+    auto c = makeConfig();
+    c["aircraft"]["qnw_min_turn_radius_m"] = r_flight_m;
+    c["initial_state"]["velocity_north_mps"] = v_north_mps;
+    c["initial_state"]["velocity_down_mps"]  = 0.0;
+    return c;
+}
+
+TEST(AircraftTest, NyCurvatureAuthority_AirborneBetaSpeedIndependentAtBind) {
+    constexpr float R_flight = 878.0f, rho = 1.225f;
+    auto run_beta = [&](float v0) {
+        auto ac = std::make_unique<liteaero::simulation::Aircraft>(std::make_unique<StubPropulsion>(0.0f));
+        ac->initialize(makeNyAuthorityConfig(v0, R_flight), 0.02f);
+        liteaero::simulation::AircraftCommand cmd;
+        cmd.n_z = 1.0f; cmd.n_y = 2.0f; cmd.rollRate_Wind_rps = 0.0f;   // large Ny → clamp binds
+        for (int i = 1; i <= 100; ++i)                                   // 2 s settle
+            ac->step(i * 0.02, cmd, Eigen::Vector3f::Zero(), rho);
+        return ac->state().beta();
+    };
+    const float b_fast = run_beta(55.0f);
+    const float b_slow = run_beta(30.0f);
+    const float beta_limit = 2.0f * 1045.0f / (rho * 16.2f * R_flight * 0.60f);  // ≈ 0.20 rad
+    EXPECT_NEAR(std::abs(b_fast), beta_limit, 0.03f);
+    EXPECT_NEAR(std::abs(b_slow), beta_limit, 0.03f);
+    EXPECT_NEAR(b_fast, b_slow, 0.02f);   // speed-independent at the authority limit
+}
+
+// ---------------------------------------------------------------------------
 // Step F — LandingGear integration tests
 // ---------------------------------------------------------------------------
 
@@ -849,6 +912,9 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
             "ny_wn_rad_s": 10.0, "ny_zeta_nd": 0.7,
             "roll_rate_wn_rad_s": 20.0, "roll_rate_zeta_nd": 0.7,
             "qnw_min_turn_radius_m": 10.0,
+            "ground_steering_min_turn_radius_m": 3.0,
+            "ground_steering_vblend_lower_ratio": 0.6,
+            "ground_steering_vblend_upper_ratio": 1.0,
             "dtheta_zeta_nd": 0.7, "dtheta_wn_pitch_ratio": 7.34,
             "dtheta_wn_roll_ratio": 9.79, "dtheta_wn_yaw_ratio": 4.89,
             "dtheta_vref_ratio": 1.0, "att_filt_tau_ratio": 1.22,

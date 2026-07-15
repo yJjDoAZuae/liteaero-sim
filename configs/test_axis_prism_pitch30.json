@@ -1,97 +1,100 @@
 {
-    "schema_version": 1,
-    "propulsion": {
-        "type": "none"
-    },
-    "aircraft": {
-        "S_ref_m2": 2.0,
-        "cl_y_beta": 0.0,
-        "ar": 1.0,
-        "e": 1.0,
-        "cd0": 0.02,
-        "cmd_filter_substeps": 1,
-        "nz_wn_rad_s": 10.0,
-        "nz_zeta_nd": 0.7,
-        "ny_wn_rad_s": 10.0,
-        "ny_zeta_nd": 0.7,
-        "roll_rate_wn_rad_s": 10.0,
-        "roll_rate_zeta_nd": 0.7,
-        "qnw_min_turn_radius_m": 10.0,
-        "dtheta_zeta_nd": 0.7,
-        "dtheta_wn_pitch_ratio": 7.34,
-        "dtheta_wn_roll_ratio": 9.79,
-        "dtheta_wn_yaw_ratio": 4.89,
-        "dtheta_vref_ratio": 1.0,
-        "aero_authority_v_lower_ratio": 0.55,
-        "aero_authority_v_upper_ratio": 0.8,
-        "att_filt_tau_ratio": 1.22,
-        "nz_relax_wn_ratio": 2.45,
-        "nz_relax_zeta_nd": 0.8,
-        "settle_gain_nd": 25.0,
-        "settle_clip_nd": 1.0,
-        "settle_tau_ratio": 0.52,
-        "settle_wheel_rr_nd": 0.05,
-        "settle_vland_ratio": 1.0,
-        "settle_vtakeoff_ratio": 1.15,
-        "settle_vwidth_ratio": 0.5
-    },
-    "airframe": {
-        "g_max_nd": 4.0,
-        "g_min_nd": -2.0,
-        "tas_max_mps": 50.0,
-        "mach_max_nd": 0.15
-    },
-    "load_factor_allocator": {
-        "alpha_dot_max_ratio": 0.41
-    },
-    "inertia": {
-        "mass_kg": 10.0,
-        "Ixx_kgm2": 1.0,
-        "Iyy_kgm2": 2.0,
-        "Izz_kgm2": 3.0
-    },
-    "lift_curve": {
-        "cl_alpha": 5.7,
-        "cl_max": 1.5,
-        "cl_min": -0.8,
-        "delta_alpha_stall": 0.175,
-        "delta_alpha_stall_neg": 0.175,
-        "cl_sep": 0.9,
-        "cl_sep_neg": -0.5,
-        "alpha_max_rad": 0.35,
-        "alpha_min_rad": -0.17
-    },
-    "body_collider": {
-        "volumes": [
-            {
-                "name": "prism",
-                "half_extents_body_m": [
-                    0.55,
-                    0.85,
-                    0.7
-                ],
-                "center_offset_body_m": [
-                    0.15,
-                    0.0,
-                    0.35
-                ]
-            }
+  "schema_version": 1,
+  "propulsion": {
+    "type": "none"
+  },
+  "aircraft": {
+    "S_ref_m2": 2.0,
+    "cl_y_beta": 0.0,
+    "ar": 1.0,
+    "e": 1.0,
+    "cd0": 0.02,
+    "cmd_filter_substeps": 1,
+    "nz_wn_rad_s": 10.0,
+    "nz_zeta_nd": 0.7,
+    "ny_wn_rad_s": 10.0,
+    "ny_zeta_nd": 0.7,
+    "roll_rate_wn_rad_s": 10.0,
+    "roll_rate_zeta_nd": 0.7,
+    "qnw_min_turn_radius_m": 10.0,
+    "dtheta_zeta_nd": 0.7,
+    "dtheta_wn_pitch_ratio": 7.34,
+    "dtheta_wn_roll_ratio": 9.79,
+    "dtheta_wn_yaw_ratio": 4.89,
+    "dtheta_vref_ratio": 1.0,
+    "aero_authority_v_lower_ratio": 0.55,
+    "aero_authority_v_upper_ratio": 0.8,
+    "att_filt_tau_ratio": 1.22,
+    "nz_relax_wn_ratio": 2.45,
+    "nz_relax_zeta_nd": 0.8,
+    "settle_gain_nd": 25.0,
+    "settle_clip_nd": 1.0,
+    "settle_tau_ratio": 0.52,
+    "settle_wheel_rr_nd": 0.05,
+    "settle_vland_ratio": 1.0,
+    "settle_vtakeoff_ratio": 1.15,
+    "settle_vwidth_ratio": 0.5,
+    "ground_steering_min_turn_radius_m": 3.0,
+    "ground_steering_vblend_lower_ratio": 0.6,
+    "ground_steering_vblend_upper_ratio": 1.0
+  },
+  "airframe": {
+    "g_max_nd": 4.0,
+    "g_min_nd": -2.0,
+    "tas_max_mps": 50.0,
+    "mach_max_nd": 0.15
+  },
+  "load_factor_allocator": {
+    "alpha_dot_max_ratio": 0.41
+  },
+  "inertia": {
+    "mass_kg": 10.0,
+    "Ixx_kgm2": 1.0,
+    "Iyy_kgm2": 2.0,
+    "Izz_kgm2": 3.0
+  },
+  "lift_curve": {
+    "cl_alpha": 5.7,
+    "cl_max": 1.5,
+    "cl_min": -0.8,
+    "delta_alpha_stall": 0.175,
+    "delta_alpha_stall_neg": 0.175,
+    "cl_sep": 0.9,
+    "cl_sep_neg": -0.5,
+    "alpha_max_rad": 0.35,
+    "alpha_min_rad": -0.17
+  },
+  "body_collider": {
+    "volumes": [
+      {
+        "name": "prism",
+        "half_extents_body_m": [
+          0.55,
+          0.85,
+          0.7
+        ],
+        "center_offset_body_m": [
+          0.15,
+          0.0,
+          0.35
         ]
-    },
-    "visualization": {
-        "mesh_res_path": "res://assets/test_prism.glb"
-    },
-    "initial_state": {
-        "_comment": "terrain=10 m, gear=1 m, CG altitude=11 m, +30 deg pitch nose up, no gear.",
-        "latitude_rad": 0.0,
-        "longitude_rad": 0.0,
-        "altitude_m": 11.0,
-        "pitch_rad": 0.5236,
-        "velocity_north_mps": 0.0,
-        "velocity_east_mps": 0.0,
-        "velocity_down_mps": 0.0,
-        "wind_north_mps": 0.0,
-        "wind_east_mps": 0.0,
-        "wind_down_mps": 0.0
-    }
+      }
+    ]
+  },
+  "visualization": {
+    "mesh_res_path": "res://assets/test_prism.glb"
+  },
+  "initial_state": {
+    "_comment": "terrain=10 m, gear=1 m, CG altitude=11 m, +30 deg pitch nose up, no gear.",
+    "latitude_rad": 0.0,
+    "longitude_rad": 0.0,
+    "altitude_m": 11.0,
+    "pitch_rad": 0.5236,
+    "velocity_north_mps": 0.0,
+    "velocity_east_mps": 0.0,
+    "velocity_down_mps": 0.0,
+    "wind_north_mps": 0.0,
+    "wind_east_mps": 0.0,
+    "wind_down_mps": 0.0
+  }
 }

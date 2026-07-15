@@ -282,7 +282,11 @@ message AircraftState {
     float              wa_q_hi_pa            = 75;
     float              roll_rate_state_rps   = 76;  // OQ-BC-12 Alt B (IP-CRB-5) persistent wind-axis roll rate
     float              roll_torque_accel_prev = 77;  // OQ-BC-13 Tustin previous-input term
-    float              qnw_min_turn_radius_m  = 78;  // OQ-AC-2 speed-proportional q_nw rate cap (R_min)
+    float              qnw_min_turn_radius_m  = 78;  // OQ-AC-2 speed-proportional q_nw rate cap (R_min = R_flight)
+    float              ground_steering_min_turn_radius_m  = 79;  // OQ-AC-6 Ny authority ground radius
+    float              ground_steering_vblend_lower_ratio = 80;  // OQ-AC-6 below-stall smoothstep band (× V_stall)
+    float              ground_steering_vblend_upper_ratio = 81;
+    float              prev_wow_load_fraction = 82;  // OQ-AC-6 WoW gate state
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

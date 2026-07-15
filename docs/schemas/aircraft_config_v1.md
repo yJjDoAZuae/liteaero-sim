@@ -67,8 +67,13 @@ natural frequencies must satisfy `wn * inner_dt < π` (Nyquist); `initialize()` 
 | `ny_zeta_nd` | float | — | > 0 | Ny command response damping ratio. |
 | `roll_rate_wn_rad_s` | float | rad/s | > 0; `wn·inner_dt < π` | Roll rate command response natural frequency. |
 | `roll_rate_zeta_nd` | float | — | > 0 | Roll rate command response damping ratio. |
+| `qnw_min_turn_radius_m` | float | m | > 0 | Minimum turn radius bounding the velocity-slaved `q_nw` angular-rate cap (OQ-AC-2); also the **flight-regime** radius `R_flight` for the Ny curvature authority limit (OQ-AC-6). |
+| `ground_steering_min_turn_radius_m` | float | m | > 0 | Ground-steering minimum turn radius `R_ground` for the Ny curvature authority limit (OQ-AC-6); tighter than `R_flight`. |
+| `ground_steering_vblend_lower_ratio` | float | × `V_stall` | `0 ≤ lower < upper` | Lower edge of the below-stall ground-speed smoothstep band blending flight↔ground authority (OQ-AC-6). |
+| `ground_steering_vblend_upper_ratio` | float | × `V_stall` | `> lower` | Upper edge of that band (right below stall). |
 
 See [docs/design/aircraft.md §Command Processing Architecture](../design/aircraft.md#command-processing-architecture)
+and [§Lateral Authority Limit](../design/aircraft.md#lateral-authority-limit) (OQ-AC-6 curvature-authority blend).
 for the filter design, substep mechanics, analytical derivative sourcing, and Nyquist
 constraints.
 

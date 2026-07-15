@@ -235,7 +235,26 @@ private:
     float                  _roll_rate_zeta_nd     = 0.7f;
     // OQ-AC-2: minimum turn radius bounding the velocity-slaved q_nw angular rate
     // (omega_max = V / R_min). No default — initialize() requires it in config and fails if unset.
+    // Doubles as R_flight for the OQ-AC-6 Ny curvature authority limit (flight regime).
     float                  _qnw_min_turn_radius_m = 0.f;
+    // OQ-AC-6: Ny command curvature authority limit. Ground-steering minimum turn radius (R_ground,
+    // tighter than R_flight) and the below-stall smoothstep band (× V_stall) blending flight↔ground.
+    // No defaults — initialize() requires them in config and fails if unset.
+    float                  _ground_steering_min_turn_radius_m = 0.f;
+    float                  _ground_steering_vblend_lower_ratio = 0.f;
+    float                  _ground_steering_vblend_upper_ratio = 0.f;
+    // Previous-step weight-on-wheels vertical-load fraction (gear F_z / m g, clamped [0,1]); the
+    // headwind-immune gate for the OQ-AC-6 flight↔ground authority blend. Serialized state.
+    float                  _prev_wow_load_fraction = 0.f;
+
+public:
+    // OQ-AC-6 Ny curvature authority limit (§Lateral Authority Limit). Returns the maximum lateral
+    // load-factor magnitude n_y_max = ((1−w)·V_air²/R_flight + w·V_ground²/R_ground)/g, with blend
+    // weight w = wow_load_fraction·(1 − smoothstep(V_ground; v_blend_lo, v_blend_hi)). Pure/static
+    // for direct testing; the caller intersects the result with the structural g-envelope.
+    static float lateralLoadAuthority(float v_air_mps, float v_ground_mps, float wow_load_fraction,
+                                      float r_flight_m, float r_ground_m,
+                                      float v_blend_lo_mps, float v_blend_hi_mps);
 };
 
 } // namespace liteaero::simulation

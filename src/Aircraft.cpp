@@ -50,6 +50,23 @@ static inline float smootherstepEdges(float x, float lo, float hi) {
 Aircraft::Aircraft(std::unique_ptr<Propulsion> propulsion)
     : _propulsion(std::move(propulsion)) {}
 
+// OQ-AC-6: Ny curvature authority limit (aircraft.md §Lateral Authority Limit). Maximum lateral
+// load-factor magnitude for a path-curvature bound |a_y| ≤ V²/R, blending a flight regime (airspeed,
+// R_flight) and a ground-steering regime (ground speed, R_ground) by weight
+// w = wow·(1 − smoothstep(V_ground; v_lo, v_hi)) — the ground regime engages only when weighted and
+// slowed toward taxi (band right below stall). Airspeed in the flight term keeps full authority in a
+// headwind (low ground speed, high airspeed).
+float Aircraft::lateralLoadAuthority(float v_air_mps, float v_ground_mps, float wow_load_fraction,
+                                     float r_flight_m, float r_ground_m,
+                                     float v_blend_lo_mps, float v_blend_hi_mps) {
+    constexpr float kGravity_mps2 = 9.80665f;
+    const float a_flight = (v_air_mps    * v_air_mps)    / r_flight_m;   // airspeed²  / R_flight
+    const float a_ground = (v_ground_mps * v_ground_mps) / r_ground_m;   // groundspd² / R_ground
+    const float speed_taper = 1.0f - smoothstepEdges(v_ground_mps, v_blend_lo_mps, v_blend_hi_mps);
+    const float w = std::clamp(wow_load_fraction, 0.0f, 1.0f) * speed_taper;
+    return ((1.0f - w) * a_flight + w * a_ground) / kGravity_mps2;
+}
+
 // ---------------------------------------------------------------------------
 // initialize()
 // ---------------------------------------------------------------------------
@@ -111,6 +128,19 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     if (!(_qnw_min_turn_radius_m > 0.f))
         throw std::invalid_argument(
             "Aircraft::initialize: qnw_min_turn_radius_m must be specified and positive");
+    // OQ-AC-6: Ny curvature authority limit. Ground-steering minimum turn radius and the below-stall
+    // smoothstep band blending flight↔ground. All required — no defaults tolerated.
+    _ground_steering_min_turn_radius_m  = ac.at("ground_steering_min_turn_radius_m").get<float>();
+    _ground_steering_vblend_lower_ratio = ac.at("ground_steering_vblend_lower_ratio").get<float>();
+    _ground_steering_vblend_upper_ratio = ac.at("ground_steering_vblend_upper_ratio").get<float>();
+    if (!(_ground_steering_min_turn_radius_m > 0.f))
+        throw std::invalid_argument(
+            "Aircraft::initialize: ground_steering_min_turn_radius_m must be specified and positive");
+    if (!(_ground_steering_vblend_lower_ratio >= 0.f &&
+          _ground_steering_vblend_lower_ratio < _ground_steering_vblend_upper_ratio))
+        throw std::invalid_argument(
+            "Aircraft::initialize: require 0 <= ground_steering_vblend_lower_ratio "
+            "< ground_steering_vblend_upper_ratio");
     // --- Aircraft physical scale: the non-dimensionalization basis for all gear-model knobs ---
     // V_stall is fixed by the already-specified mass / wing area / CL_max. Every gear-model
     // parameter below is given in the config as a non-dimensional ratio against this scale, so the
@@ -347,6 +377,7 @@ void Aircraft::reset() {
     _bc_force_x.setZero();
     _prev_dtheta_roll  = 0.f;
     _prev_dtheta_yaw   = 0.f;
+    _prev_wow_load_fraction = 0.f;  // OQ-AC-6: WoW gate for the Ny authority blend
     _roll_rate_state_rps = 0.f;  // IP-CRB-5: persistent wind-axis roll-rate state
     _roll_torque_accel_prev = 0.f;  // OQ-BC-13: Tustin previous-input term
     _v_filt_ned.setZero();
@@ -373,9 +404,23 @@ void Aircraft::step(double time_sec,
     // 2. Dynamic pressure
     const float q_inf = 0.5f * rho_kgm3 * V_air * V_air;
 
-    // 3. Clamp load factors to airframe structural limits
-    const float n_cmd   = std::clamp(cmd.n_z, _airframe.g_min_nd, _airframe.g_max_nd);
-    const float n_y_cmd = std::clamp(cmd.n_y, _airframe.g_min_nd, _airframe.g_max_nd);
+    // 3. Clamp load factors. Nz is bounded by the structural g-envelope. Ny is additionally
+    //    authority-limited to a maximum path curvature (OQ-AC-6): a constant Ny authority at all
+    //    speeds is unphysical (an arbitrarily tight ground turn as V→0; unbounded emulated β as q→0).
+    //    n_y_max = ((1−w)·V_air²/R_flight + w·V_ground²/R_ground)/g blends a flight regime (airspeed,
+    //    R_flight) and a ground-steering regime (ground speed, R_ground) by the WoW-load × below-stall
+    //    smoothstep weight; the flight term's airspeed keeps full authority in a headwind. w uses the
+    //    PREVIOUS step's gear vertical-load fraction (this step's contact is computed later).
+    const float n_cmd    = std::clamp(cmd.n_z, _airframe.g_min_nd, _airframe.g_max_nd);
+    const float v_ground = _state.velocity_NED_mps().head<2>().norm();
+    const float ny_authority = lateralLoadAuthority(
+        V_air, v_ground, _prev_wow_load_fraction,
+        _qnw_min_turn_radius_m, _ground_steering_min_turn_radius_m,
+        _ground_steering_vblend_lower_ratio * _stall_speed_mps,
+        _ground_steering_vblend_upper_ratio * _stall_speed_mps);
+    const float n_y_cmd = std::clamp(cmd.n_y,
+                                     std::max(_airframe.g_min_nd, -ny_authority),
+                                     std::min(_airframe.g_max_nd,  ny_authority));
 
     // 4. Inner filter loop: 2nd-order LP command response for Nz, Ny, and roll rate.
     //    Runs _cmd_filter_substeps times at dt = outer_dt / substeps.
@@ -531,6 +576,9 @@ void Aircraft::step(double time_sec,
                 -gear_force_body.z() / (_inertia.mass_kg * kGravity_mps2));
         }
         nz_relax = _nz_relax_filter.step(nz_gear_input);
+        // OQ-AC-6: cache the WoW vertical-load fraction (clamped [0,1]) for next step's Ny
+        // curvature-authority flight↔ground blend gate.
+        _prev_wow_load_fraction = std::min(1.0f, nz_gear_input);
 
         // (b-ii) additive axial-acceleration settle/rotation term (OQ-LG-23). The eligible signal
         // is the STEADY modeled longitudinal-force deficit
@@ -839,7 +887,10 @@ nlohmann::json Aircraft::serializeJson() const {
     j["ny_zeta_nd"]           = _ny_zeta_nd;
     j["roll_rate_wn_rad_s"]   = _roll_rate_wn_rad_s;
     j["roll_rate_zeta_nd"]    = _roll_rate_zeta_nd;
-    j["qnw_min_turn_radius_m"] = _qnw_min_turn_radius_m;   // OQ-AC-2
+    j["qnw_min_turn_radius_m"] = _qnw_min_turn_radius_m;   // OQ-AC-2 (also R_flight for OQ-AC-6)
+    j["ground_steering_min_turn_radius_m"]  = _ground_steering_min_turn_radius_m;   // OQ-AC-6
+    j["ground_steering_vblend_lower_ratio"] = _ground_steering_vblend_lower_ratio;  // OQ-AC-6
+    j["ground_steering_vblend_upper_ratio"] = _ground_steering_vblend_upper_ratio;  // OQ-AC-6
     j["nz_relax_filter"]      = _nz_relax_filter.serializeJson();
     j["dtheta_pitch_filter"]  = _dtheta_pitch_filter.serializeJson();
     j["dtheta_roll_filter"]   = _dtheta_roll_filter.serializeJson();
@@ -853,6 +904,7 @@ nlohmann::json Aircraft::serializeJson() const {
     j["bc_force_x"]             = nlohmann::json::array({_bc_force_x(0, 0), _bc_force_x(1, 0)});
     j["prev_dtheta_roll"]     = _prev_dtheta_roll;
     j["prev_dtheta_yaw"]      = _prev_dtheta_yaw;
+    j["prev_wow_load_fraction"] = _prev_wow_load_fraction;  // OQ-AC-6 WoW gate state
     j["roll_rate_state_rps"]  = _roll_rate_state_rps;  // IP-CRB-5
     j["roll_torque_accel_prev"] = _roll_torque_accel_prev;  // OQ-BC-13 Tustin state
     j["att_filt_tau_s"]       = _att_filt_tau_s;
@@ -924,6 +976,9 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _roll_rate_wn_rad_s  = j.at("roll_rate_wn_rad_s").get<float>();
     _roll_rate_zeta_nd   = j.at("roll_rate_zeta_nd").get<float>();
     _qnw_min_turn_radius_m = j.at("qnw_min_turn_radius_m").get<float>();   // OQ-AC-2
+    _ground_steering_min_turn_radius_m  = j.value("ground_steering_min_turn_radius_m",  _ground_steering_min_turn_radius_m);   // OQ-AC-6
+    _ground_steering_vblend_lower_ratio = j.value("ground_steering_vblend_lower_ratio", _ground_steering_vblend_lower_ratio);
+    _ground_steering_vblend_upper_ratio = j.value("ground_steering_vblend_upper_ratio", _ground_steering_vblend_upper_ratio);
     _dtheta_wn_pitch_rad_s = j.value("dtheta_wn_pitch_rad_s", _dtheta_wn_pitch_rad_s);
     _dtheta_wn_roll_rad_s  = j.value("dtheta_wn_roll_rad_s",  _dtheta_wn_roll_rad_s);
     _dtheta_wn_yaw_rad_s   = j.value("dtheta_wn_yaw_rad_s",   _dtheta_wn_yaw_rad_s);
@@ -977,6 +1032,7 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     }
     _prev_dtheta_roll  = j.value("prev_dtheta_roll",  0.f);
     _prev_dtheta_yaw   = j.value("prev_dtheta_yaw",   0.f);
+    _prev_wow_load_fraction = j.value("prev_wow_load_fraction", 0.f);  // OQ-AC-6
     _roll_rate_state_rps = j.value("roll_rate_state_rps", 0.f);  // IP-CRB-5
     _roll_torque_accel_prev = j.value("roll_torque_accel_prev", 0.f);  // OQ-BC-13
     _att_filt_tau_s    = j.value("att_filt_tau_s", _att_filt_tau_s);
@@ -1041,7 +1097,11 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_ny_zeta_nd(_ny_zeta_nd);
     proto.set_roll_rate_wn_rad_s(_roll_rate_wn_rad_s);
     proto.set_roll_rate_zeta_nd(_roll_rate_zeta_nd);
-    proto.set_qnw_min_turn_radius_m(_qnw_min_turn_radius_m);   // OQ-AC-2
+    proto.set_qnw_min_turn_radius_m(_qnw_min_turn_radius_m);   // OQ-AC-2 (R_flight)
+    proto.set_ground_steering_min_turn_radius_m(_ground_steering_min_turn_radius_m);   // OQ-AC-6
+    proto.set_ground_steering_vblend_lower_ratio(_ground_steering_vblend_lower_ratio);
+    proto.set_ground_steering_vblend_upper_ratio(_ground_steering_vblend_upper_ratio);
+    proto.set_prev_wow_load_fraction(_prev_wow_load_fraction);   // OQ-AC-6 WoW gate state
     proto.set_nz_filter_x0(_nz_filter.x()(0, 0));
     proto.set_nz_filter_x1(_nz_filter.x()(1, 0));
     proto.set_ny_filter_x0(_ny_filter.x()(0, 0));
@@ -1158,7 +1218,11 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _ny_zeta_nd          = proto.ny_zeta_nd();
     _roll_rate_wn_rad_s  = proto.roll_rate_wn_rad_s();
     _roll_rate_zeta_nd   = proto.roll_rate_zeta_nd();
-    _qnw_min_turn_radius_m = proto.qnw_min_turn_radius_m();   // OQ-AC-2
+    _qnw_min_turn_radius_m = proto.qnw_min_turn_radius_m();   // OQ-AC-2 (R_flight)
+    _ground_steering_min_turn_radius_m  = proto.ground_steering_min_turn_radius_m();   // OQ-AC-6
+    _ground_steering_vblend_lower_ratio = proto.ground_steering_vblend_lower_ratio();
+    _ground_steering_vblend_upper_ratio = proto.ground_steering_vblend_upper_ratio();
+    _prev_wow_load_fraction = proto.prev_wow_load_fraction();   // OQ-AC-6 WoW gate state
     _dtheta_wn_pitch_rad_s = proto.dtheta_wn_pitch_rad_s();
     _dtheta_wn_roll_rad_s  = proto.dtheta_wn_roll_rad_s();
     _dtheta_wn_yaw_rad_s   = proto.dtheta_wn_yaw_rad_s();

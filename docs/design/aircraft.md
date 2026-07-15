@@ -661,9 +661,11 @@ its full configuration and internal state.
 
 2. T_prev = _propulsion->thrust_n()        // from previous step (or 0 at t=0)
 
-3. Clamp commanded load factors to airframe structural limits:
+3. Clamp commanded load factors. Nz is clamped to the airframe structural g-envelope; Ny is
+   additionally authority-limited to a maximum path curvature (OQ-AC-6, see §Lateral Authority Limit):
        n_z_cmd = clamp(cmd.n_z, _airframe.g_min_nd, _airframe.g_max_nd)
-       n_y_cmd = clamp(cmd.n_y, _airframe.g_min_nd, _airframe.g_max_nd)
+       n_y_max = ((1−w)·V_air²/R_flight + w·V_ground²/R_ground) / g        // curvature authority
+       n_y_cmd = clamp(cmd.n_y, max(g_min_nd, −n_y_max), min(g_max_nd, n_y_max))
 
 4. Inner filter loop — runs cmd_filter_substeps times at cmd_filter_dt_s:
        for i in [0, cmd_filter_substeps):
@@ -756,6 +758,39 @@ gear force/moment directly to the 6-DOF EOM instead.
 > See [defect_kinematic_attitude_model.md](defect_kinematic_attitude_model.md) (D-1) for
 > the full defect analysis and [equations_of_motion.md](../algorithms/equations_of_motion.md)
 > §Integration Scheme Summary — Trim Aero for the corrected algorithm.
+
+### Lateral Authority Limit
+
+The lateral load-factor command `Ny` is authority-limited so a commanded lateral acceleration
+cannot demand a **path curvature** tighter than the vehicle's minimum turn radius (OQ-AC-6). A
+constant `Ny` authority at all speeds is unphysical: on the ground it would imply an
+arbitrarily small turn radius as the vehicle slows, and in the air it would drive the emulated
+sideslip β without bound as dynamic pressure vanishes. Since the achievable lateral acceleration
+is `a_y = V²·κ` for path curvature `κ`, bounding `κ ≤ 1/R` yields `|Ny| ≤ V²/(g·R)`, which fades
+to zero as speed drops.
+
+The applicable minimum turn radius differs significantly between flight and ground steering, so
+the limit blends two regimes:
+
+$$n_{y,\max} = \frac{1}{g}\left[(1-w)\,\frac{V_\text{air}^2}{R_\text{flight}} + w\,\frac{V_\text{ground}^2}{R_\text{ground}}\right]$$
+
+- **Flight term** uses **airspeed** `V_air` and the flight minimum radius `R_flight`
+  (`qnw_min_turn_radius_m`, shared with the OQ-AC-2 azimuth-slew cap so the command stays
+  consistent with the achievable slew). Using airspeed keeps full lateral authority in a strong
+  headwind — a low ground speed at high airspeed must not shift the dynamics.
+- **Ground term** uses **ground speed** `V_ground` and the tighter ground-steering minimum radius
+  `R_ground` (`ground_steering_min_turn_radius_m`), the wheeled-turn curvature.
+- **Blend weight** `w = f_\text{WoW} · (1 − \text{smoothstep}(V_\text{ground}; V_\text{lo}, V_\text{hi}))`.
+  `f_WoW` is the weight-on-wheels vertical-load fraction (previous step's gear vertical load / weight,
+  clamped to [0,1]); because the gate is gear load, a headwind cannot engage the ground regime while
+  airborne. The speed factor is a C¹ smoothstep over a ground-speed band **right below stall**
+  (`V_lo, V_hi = ground_steering_vblend_lower_ratio, _upper_ratio × V_stall`): the ground radius is
+  approached only when the vehicle is both weighted and slowed toward taxi, so a fast touchdown eases
+  into `R_ground` rather than stepping to it.
+
+The result is intersected with the structural g-envelope `[g_min_nd, g_max_nd]`. This is a pure
+command-authority limit on the existing `Ny` channel — it does not remap the channel, add a
+curvature or β input, use the steerable gear, or introduce a control loop.
 
 ### Stall Recovery (CL Rate Limiting)
 
@@ -1094,6 +1129,7 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | OQ-AC-3 | Roll limit cycle on banked rollout: the gear strut damper is mis-phased because the gear runs at the outer rate on a one-step-stale body rate (its substep loop freezes the pose), so it acts as a spring not a dissipator | Resolved — co-integrate the roll DOF with the strut forces on the gear substep loop (Tustin, `inner_dt`); tangent plane stays outer (2026-07-12) |
 | OQ-AC-4 | The "wind frame" `q_nw` is slaved to the GROUND velocity, but by definition it tracks the AERODYNAMIC velocity (relative wind); the steady-wind term is dropped from the kinematics, so a crosswind produces no crab | Resolved — `q_nw` tracks the aero velocity (incremental, Alt 2); the ground/aero velocity-azimuth-local-level frames are derived from `q_nw`/`v_g`; crab = χ_a − χ_g, β=0 (2026-07-12) |
 | OQ-AC-5 | On-ground yaw in wind: whether the aircraft weathervanes depends on the gear reacting the crosswind aero moment. Trimaero has no explicit `Cy_β`/`Cn_β` (emulate via the FBW `A_y`-hold loop) and no modeled nose-wheel deflection (estimate its steering-moment capability); must transition smoothly flight↔ground | Resolved — gear-aero moment balance with FBW-emulated capability scaled by contact force (Alt 3, 2026-07-12); depends on OQ-AC-4 |
+| OQ-AC-6 | Constant `Ny` command authority at all speeds is unphysical: on the ground it implies an arbitrarily tight turn radius as the vehicle slows, and airborne it drives the emulated β without bound as `q`→0. The flight vs ground-steering minimum radii differ significantly, and a purely speed-based transition would false-shift the dynamics in a strong headwind | Resolved — authority-limit `Ny` to a maximum path curvature (Ny magnitude bounded by V²/(g·R)), blending flight (airspeed, `R_flight`) and ground (ground speed, `R_ground`) regimes by a WoW-load-fraction × below-stall-smoothstep weight (2026-07-14) |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1451,6 +1487,26 @@ moment and an estimated, not deflection-modeled, nose-gear steering capability, 
 a smooth flight↔ground transition). Depends on OQ-AC-4. Two sub-items are defined during implementation
 (rule 14): the aero yaw-moment emulation from the FBW `A_y`-hold loop, and the nose-gear steering
 moment-capability estimate.
+
+### OQ-AC-6 — `Ny` command authority is speed-independent (unphysical curvature) *(Resolved)*
+
+**Problem.** The `Ny` command was clamped only to the structural g-envelope, so its lateral-acceleration
+authority was constant at all speeds. Physically the achievable lateral acceleration is `a_y = V²·κ`, so
+a fixed `Ny` implies a turn curvature `κ = Ny·g/V²` that grows without bound as speed drops — an
+arbitrarily tight ground turn at taxi speed, and an unbounded emulated β airborne as `q`→0. The minimum
+turn radius in flight (aero turn capability) and in ground steering (wheeled) differ significantly, and a
+transition keyed on ground speed alone would false-shift the dynamics when flying into a strong headwind
+(low ground speed, high airspeed).
+
+**Resolution.** Authority-limit `Ny` to a maximum path curvature, `Ny` magnitude bounded by `V²/(g·R)`,
+blending a flight regime (airspeed, `R_flight = qnw_min_turn_radius_m`) and a ground regime (ground speed,
+`R_ground = ground_steering_min_turn_radius_m`) by a weight `w = f_WoW · (1 − smoothstep(V_ground; V_lo,
+V_hi))`, where `f_WoW` is the weight-on-wheels vertical-load fraction and the smoothstep band sits right
+below stall (`ground_steering_vblend_lower_ratio, _upper_ratio × V_stall`). Gating the ground regime on
+gear load (not ground speed) keeps full flight authority in a headwind; the below-stall smoothstep eases a
+fast touchdown into `R_ground` rather than stepping to it. The full model, symbols, and blend are in
+[§Lateral Authority Limit](#lateral-authority-limit). This is a command-authority limit on the existing
+`Ny` channel only — no channel remap, no curvature/β input, no steerable-gear use, no control loop.
 
 ---
 
