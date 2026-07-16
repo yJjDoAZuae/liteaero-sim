@@ -246,8 +246,27 @@ private:
     // Previous-step weight-on-wheels vertical-load fraction (gear F_z / m g, clamped [0,1]); the
     // headwind-immune gate for the OQ-AC-6 flight↔ground authority blend. Serialized state.
     float                  _prev_wow_load_fraction = 0.f;
+    // IP-CRB-11 (OQ-AC-5/7): aerodynamic side-force lever aft of the CG (m). Sets the aero weathervane
+    // stiffness k_a = |Cy_β|·q·S·x_acy for the on-ground gear-aero yaw balance (which velocity the
+    // heading slaves to). No default — initialize() requires it in config and fails if unset. Cached
+    // reference area and side-force derivative are used with it.
+    float                  _x_acy_m   = 0.f;
+    float                  _s_ref_m2  = 0.f;
+    float                  _cl_y_beta = 0.f;
+    // IP-CRB-11 (OQ-AC-5/8): FBW steering-authority arm (m). The on-ground steering-moment authority the
+    // FBW can apply to enforce n_y is N_steer,max = steering_authority_m · F_z_contact (a control moment,
+    // not a gear-friction force). No default — initialize() requires it and fails if unset.
+    float                  _steering_authority_m = 0.f;
 
 public:
+    // IP-CRB-11 gear hold fraction (§On-Ground Gear-Aero Yaw Balance; ground_directional_dynamics.md).
+    // w_hold = min(1, N_steer,max/(k_a·|crab|)) ∈ [0,1]: the FBW enforces the commanded n_y with a
+    // contact-scaled steering moment of authority N_steer,max against the aero weathervane moment k_a·|crab|.
+    // 0 = free weathervane (heading slaves to the aero velocity, airborne), 1 = fully held (heading slaves
+    // to the ground velocity, static β = crab). Pure/static for direct testing; k_a is the aero weathervane
+    // stiffness, N_steer,max the FBW steering authority, crab_rad the aero−ground azimuth offset.
+    static float gearHoldFraction(float k_a_nm_per_rad, float steer_authority_nm, float crab_rad);
+
     // OQ-AC-6 Ny curvature authority limit (§Lateral Authority Limit). Returns the maximum lateral
     // load-factor magnitude n_y_max = ((1−w)·V_air²/R_flight + w·V_ground²/R_ground)/g, with blend
     // weight w = wow_load_fraction·(1 − smoothstep(V_ground; v_blend_lo, v_blend_hi)). Pure/static

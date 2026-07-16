@@ -1,6 +1,8 @@
 #include "landing_gear/LandingGear.hpp"
 #include "liteaerosim.pb.h"
 #include <liteaero/nav/KinematicStateUtil.hpp>
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <vector>
 

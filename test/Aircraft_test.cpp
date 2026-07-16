@@ -69,6 +69,8 @@ static nlohmann::json makeConfig() {
             "roll_rate_wn_rad_s": 20.0,
             "roll_rate_zeta_nd": 0.7,
             "qnw_min_turn_radius_m": 10.0,
+            "x_acy_m": 0.5,
+            "steering_authority_m": 0.3,
             "ground_steering_min_turn_radius_m": 3.0,
             "ground_steering_vblend_lower_ratio": 0.6,
             "ground_steering_vblend_upper_ratio": 1.0,
@@ -572,6 +574,29 @@ TEST(AircraftTest, NyCurvatureAuthority_AirborneBetaSpeedIndependentAtBind) {
 }
 
 // ---------------------------------------------------------------------------
+// IP-CRB-11 (OQ-AC-5) — on-ground gear-aero yaw balance: the gear hold fraction
+//   w_hold = min(1, N_steer,max/(k_a·|crab|))   (FBW steering authority vs aero weathervane)
+// ---------------------------------------------------------------------------
+
+TEST(AircraftTest, GearHoldFraction_RegimeBehaviour) {
+    using liteaero::simulation::Aircraft;
+    // Airborne (no steering authority): free weathervane, w_hold = 0.
+    EXPECT_NEAR(Aircraft::gearHoldFraction(/*k_a*/12.f, /*N_steer*/0.f, /*crab*/0.16f), 0.0f, 1e-6f);
+    // On ground, moderate wind: N_steer,max >> k_a·|crab| → FBW fully holds the heading, w_hold = 1.
+    EXPECT_NEAR(Aircraft::gearHoldFraction(12.f, 14.7f, 0.16f), 1.0f, 1e-6f);
+    // Authority-saturated (strong wind / high q, or light contact): w_hold = N_steer,max/(k_a·|crab|).
+    EXPECT_NEAR(Aircraft::gearHoldFraction(100.f, 5.f, 0.5f),
+                5.f / (100.f * 0.5f), 1e-5f);              // = 0.10, weathervanes on the excess
+    // Zero crab (no wind): no weathervane demand → fully held (with authority present).
+    EXPECT_NEAR(Aircraft::gearHoldFraction(12.f, 14.7f, 0.0f), 1.0f, 1e-6f);
+    // No authority and no demand → free (w_hold = 0), no division by zero.
+    EXPECT_NEAR(Aircraft::gearHoldFraction(0.f, 0.f, 0.3f), 0.0f, 1e-6f);
+    // Result is always in [0, 1].
+    EXPECT_GE(Aircraft::gearHoldFraction(50.f, 20.f, 0.4f), 0.0f);
+    EXPECT_LE(Aircraft::gearHoldFraction(50.f, 20.f, 0.4f), 1.0f);
+}
+
+// ---------------------------------------------------------------------------
 // Step F — LandingGear integration tests
 // ---------------------------------------------------------------------------
 
@@ -912,6 +937,8 @@ TEST(AircraftTest, TerrainHardConstraint_KeepsAircraftAboveTerrain) {
             "ny_wn_rad_s": 10.0, "ny_zeta_nd": 0.7,
             "roll_rate_wn_rad_s": 20.0, "roll_rate_zeta_nd": 0.7,
             "qnw_min_turn_radius_m": 10.0,
+            "x_acy_m": 0.5,
+            "steering_authority_m": 0.3,
             "ground_steering_min_turn_radius_m": 3.0,
             "ground_steering_vblend_lower_ratio": 0.6,
             "ground_steering_vblend_upper_ratio": 1.0,

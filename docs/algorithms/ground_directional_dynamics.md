@@ -85,116 +85,77 @@ and the crab $c$ is constant. The heading is slaved: $\dot\psi=\dot\chi_a$.
 On the runway the wheels roll along the heading (nose-steering handled below). Three directional effects
 act on the heading, and the same forces curve the ground track.
 
-### Tyre lateral force and the ground directional stiffness
+### FBW-enforced heading hold and its steering authority
 
-The component of the CG ground velocity perpendicular to the heading is the tyre lateral slip velocity
+On the ground the heading is held by the **flight control law actively enforcing the commanded lateral
+load factor $n_y$**, not by a passive tyre stiffness. When the FBW commands $n_y$ (with $n_y=0$ the
+straight-rollout case) it applies a **yaw control moment** to the airframe to null the lateral/yaw
+disturbance, up to an estimated steering authority. This moment is a control input applied to the airframe
+— it is **not** produced through the gear friction forces (not differential braking, not tyre side
+forces) and **not** through a modeled nose-wheel deflection. It is the emulated moment-producing
+capability of the on-ground directional control (OQ-AC-5): its magnitude is *estimated* and *scaled with
+contact*, rather than derived from a friction mechanism.
 
-$$V_{\text{lat}} = V_g\,\sin\lambda,\qquad \lambda=\chi_g-\psi .$$
+The authority is estimated as a moment-arm coefficient times the contact normal load:
 
-Each wheel $i$ develops a cornering (side) force opposing the slip, linear for small slip and saturating
-at the friction circle:
+$$N_{\text{steer,max}} \;=\; c_\text{steer}\,F_{z,\text{contact}},
+\qquad F_{z,\text{contact}}=\sum_i F_{z,i}\;\;\propto\;\text{weight on wheels},$$
 
-$$F_{y,i} = -\,\operatorname{sat}\!\big(C_{\alpha,i}\,\lambda,\ \mu_y F_{z,i}\big),$$
-
-with cornering stiffness $C_{\alpha,i}$ (N/rad), lateral friction $\mu_y$ (`SurfaceFrictionUniform`
-lateral peak), and normal load $F_{z,i}$. These side forces produce a yaw moment about the CG through
-each wheel's longitudinal arm $x_i$ (positive aft):
-
-$$N_\text{tyre} = \sum_i F_{y,i}\,x_i .$$
-
-For small, unsaturated slip this is a restoring moment toward $\lambda=0$ with **ground directional
-stiffness**
-
-$$k_g \;=\; \frac{\partial N_\text{tyre}}{\partial(\psi-\chi_g)}
-       \;=\; \sum_i C_{\alpha,i}\,x_i \;\;\propto\; F_z .$$
-
-Because $C_{\alpha,i}\propto F_{z,i}$, $k_g$ scales with the total contact normal force and $\to 0$ at
-lift-off — this is the smooth flight↔ground handover.
+with $c_\text{steer}$ (m) the effective steering-authority arm (config parameter). Because it scales with
+the contact normal load, $N_{\text{steer,max}}\to 0$ at lift-off — the smooth flight↔ground handover — and
+grows in proportion to how firmly the aircraft is on its wheels. It is deliberately not tied to a specific
+effector; the trimaero model emulates the closed-loop directional-control capability, not the linkage that
+produces it.
 
 ### Aerodynamic weathervane stiffness
 
 The airframe carries a side-force-versus-sideslip derivative $C_{Y_\beta}$ (`cl_y_beta`) but **no**
 $C_{n_\beta}$. The weathervane yaw moment is emulated (OQ-AC-7) as the modeled side force
 $F_{\text{aero},y}=C_{Y_\beta}\,\beta\,qS$ acting at the aerodynamic side-force lever $x_\text{acy}$ aft of
-the CG:
+the CG, $N_\text{aero}=C_{Y_\beta}\,qS\,x_\text{acy}\,\beta$ with $q=\tfrac12\rho V_a^2$. Its magnitude per
+unit sideslip is the **aerodynamic weathervane stiffness**
 
-$$N_\text{aero} = F_{\text{aero},y}\,x_\text{acy} = C_{Y_\beta}\,qS\,x_\text{acy}\;\beta,
-\qquad q=\tfrac12\rho V_a^2 .$$
+$$k_a \;=\; |C_{Y_\beta}|\,qS\,x_\text{acy}\;\;\propto\; q\;\propto\;V_a^2 ,$$
 
-With $C_{Y_\beta}<0$ this is a **restoring** moment toward $\beta=0$ (nose into the relative wind), with
-**aerodynamic weathervane stiffness**
+so a strong wind / high airspeed weathervanes harder. The moment that would fully weathervane the heading
+(from $\beta=c$ down to $\beta=0$) is $k_a\,|c|$.
 
-$$k_a \;=\; \left|\frac{\partial N_\text{aero}}{\partial\beta}\right|
-       \;=\; |C_{Y_\beta}|\,qS\,x_\text{acy}\;\;\propto\; q\;\propto\;V_a^2 .$$
+### Commanded directional input
 
-$k_a$ grows with dynamic pressure — a strong wind / high airspeed weathervanes harder.
-
-### Commanded directional moment
-
-The FBW lateral channel commands a lateral load factor $n_y$ (the directional command). On the ground the
-FBW realizes it through nose-wheel steering and differential braking as a commanded yaw that steers the
-**ground track**. This is *not* gated by the weathervane balance — it is the pilot/autopilot directional
-input, and it is the reason a commanded input still turns the aircraft on the runway. It enters as the
-commanded lateral specific force $a_{y,\text{cmd}}=n_y g$ curving the ground track (below), authority-limited
-by the ground minimum radius $R_\text{ground}$ (OQ-AC-6).
-
-### Gear yaw capability
-
-The maximum restoring yaw moment the gear can supply before the tyres/steering saturate is (OQ-AC-8)
-
-$$N_{\text{gear,max}} = N_\text{main} + N_\text{nose},\qquad
-  N_\text{main}=\!\!\sum_{\text{mains}}\!\mu_y F_{z,i}\,|x_i|,\qquad
-  N_\text{nose}=\mu_y F_{z,\text{nose}}\,x_\text{nose},$$
-
-each term $\propto F_z$ so $N_{\text{gear,max}}\to 0$ at lift-off.
+The same lateral channel commands $n_y$. On the ground the FBW realizes a **nonzero** $n_y$ as a commanded
+yaw that steers the **ground track** $\chi_g$ (through the wind-frame lateral force, below,
+authority-limited by the ground minimum radius $R_\text{ground}$, OQ-AC-6). A sustained $n_y$ keeps curving
+the track — a commanded ground loop. The heading-hold here is the $n_y=0$ (straight) enforcement; a
+commanded steer and the crosswind hold draw on the same steering-moment budget $N_{\text{steer,max}}$.
 
 ---
 
-## Heading: the Yaw-Moment Balance
+## Heading: FBW Authority Against the Weathervane
 
-The trimaero model carries no yaw inertia term, so the heading is set by the **quasi-static yaw-moment
-balance** — the heading sits where the aerodynamic weathervane moment and the gear restoring moment cancel
-(the commanded directional input acts on the ground track, not on this balance):
+The trimaero model carries no yaw inertia term; the heading is set by the FBW enforcing $n_y$ against the
+aerodynamic weathervane, up to the steering-moment authority. A fully weathervaned heading
+($\psi=\chi_a$, $\beta=0$) is opposed by the FBW holding it toward the ground track ($\psi=\chi_g$,
+$\beta=c$); the fraction it can hold is the moment authority over the demand — the **gear hold fraction**
 
-$$N_\text{aero}(\beta) + N_\text{tyre}(\lambda) = 0 .$$
+$$\boxed{\ w_\text{hold} \;=\; \min\!\left(1,\ \frac{N_{\text{steer,max}}}{k_a\,|c|}\right)\in[0,1]\ }
+\qquad (w_\text{hold}=1 \text{ when } c\to 0),$$
 
-Using the linear stiffnesses and $\beta=\chi_a-\psi$, $\lambda=\chi_g-\psi$ (restoring toward $\chi_a$ and
-$\chi_g$ respectively):
-
-$$k_a\,(\chi_a-\psi) + k_g\,(\chi_g-\psi) = 0
-\qquad\Longrightarrow\qquad
-\boxed{\ \psi = \frac{k_a\,\chi_a + k_g\,\chi_g}{k_a + k_g}\ }.$$
-
-The heading is the **stiffness-weighted mean** of the airspeed azimuth (pulled by the aero weathervane)
-and the ground-track azimuth (pulled by the tyres). Define the **gear hold fraction**
-
-$$\boxed{\ w_\text{hold} \;\equiv\; \frac{k_g}{k_a+k_g} \;\in[0,1]\ } .$$
-
-Then $\psi = \chi_a - w_\text{hold}\,c$ (since $\chi_a-\chi_g=c$), and from $\beta=\chi_a-\psi$:
+with heading $\psi=\chi_a-w_\text{hold}\,c$ and sideslip
 
 $$\boxed{\ \beta = w_\text{hold}\,c\ },\qquad \lambda=-(1-w_\text{hold})\,c .$$
 
-- $w_\text{hold}=0$ (no gear, $k_g=0$): $\psi=\chi_a$, $\beta=0$ — **free weathervane** (flight model).
-- $w_\text{hold}=1$ ($k_g\gg k_a$): $\psi=\chi_g$, $\beta=c$ — **track held, static sideslip = crab**.
+- $N_{\text{steer,max}}\ge k_a|c|$ (normal contact, moderate wind): $w_\text{hold}=1$ — the FBW **fully
+  holds** the heading to the ground track with a static $\beta=c$ (the crab). This is the firm hold a
+  wheeled aircraft has on the runway.
+- $N_{\text{steer,max}} < k_a|c|$ (strong wind / high dynamic pressure, or light contact near
+  touchdown/lift-off): $w_\text{hold}=N_{\text{steer,max}}/(k_a|c|)<1$ — the FBW authority saturates and the
+  heading weathervanes partway toward the wind on the excess.
+- $N_{\text{steer,max}}=0$ (airborne): $w_\text{hold}=0$ — free weathervane (the flight model).
 
-### Capability saturation
+There is **no passive-stiffness term**: the hold is a true authority limit (a saturating FBW loop against a
+finite, contact-scaled steering moment), not a soft spring. $N_{\text{steer,max}}\propto F_z$ carries the
+transition smoothly through touchdown/lift-off.
 
-The unsaturated balance holds only while the tyre moment it demands is within the gear capability. The
-moment the gear must supply to hold the heading at $\psi$ is $|N_\text{tyre}| = k_g\,|\lambda| =
-k_g(1-w_\text{hold})|c|$; equivalently it must balance the aero moment $|N_\text{aero}| = k_a|\beta| =
-k_a\,w_\text{hold}\,|c|$. Setting the required moment equal to the aero weathervane moment at full hold and
-capping it at $N_{\text{gear,max}}$ gives the **saturated hold fraction**
-
-$$\boxed{\ w_\text{hold} = \min\!\left(\frac{k_g}{k_a+k_g},\ \frac{N_{\text{gear,max}}}{k_a\,|c|}\right)\ }
-\qquad(w_\text{hold}=1 \text{ when } c\to 0).$$
-
-- When $k_a|c|\le N_{\text{gear,max}}$ the gear holds the heading as fully as the stiffness ratio allows.
-- When $k_a|c| > N_{\text{gear,max}}$ (strong wind / high dynamic pressure, or light contact) the gear
-  saturates: $w_\text{hold}=N_{\text{gear,max}}/(k_a|c|)<1$, the heading weathervanes partway toward the
-  wind, and the static sideslip $\beta=w_\text{hold}\,c$ is the fraction the gear can still hold.
-
-Both $k_g$ and $N_{\text{gear,max}}$ carry the $F_z$-scaling, so $w_\text{hold}$ transitions smoothly from
-$0$ (airborne) to near $1$ (firmly on the wheels at taxi speed).
 
 ---
 
@@ -218,16 +179,18 @@ crosswind-driven aero side force ($\beta=w_\text{hold}c\neq 0$ once on the groun
 
 The two channels are cleanly separated: **the commanded directional input ($n_y$) steers the ground track
 $\chi_g$; the crosswind weathervane balance ($w_\text{hold}$) sets the heading $\psi$ relative to it.** Both
-are mediated by the gear (through $R_\text{ground}$ and through $k_g,N_{\text{gear,max}}$ respectively).
+are mediated by the gear (through $R_\text{ground}$ and through the contact-scaled steering authority
+$N_{\text{steer,max}}$ respectively).
 
 ---
 
 ## Reduction to the Flight Model (verification)
 
-At lift-off/rotation the contact normal loads vanish, $F_{z,i}\to 0$, so **both** gear couplings vanish:
+At lift-off/rotation the contact normal load vanishes, $F_{z,\text{contact}}\to 0$, so the steering
+authority vanishes:
 
-$$k_g=\sum_i C_{\alpha,i}x_i\to 0 \quad\text{and}\quad N_{\text{gear,max}}\to 0
-\quad\Longrightarrow\quad w_\text{hold}=\min\!\Big(\tfrac{k_g}{k_a+k_g},\tfrac{N_{\text{gear,max}}}{k_a|c|}\Big)\to 0 .$$
+$$N_{\text{steer,max}}=c_\text{steer}\,F_{z,\text{contact}}\to 0
+\quad\Longrightarrow\quad w_\text{hold}=\min\!\Big(1,\tfrac{N_{\text{steer,max}}}{k_a|c|}\Big)\to 0 .$$
 
 Then
 
@@ -258,9 +221,9 @@ attitude rate stays bounded as $V\to 0$. Per step:
 
 1. From the current state form $\mathbf v_g$, $\mathbf v_a=\mathbf v_g-\mathbf w$, $\chi_g$, $\chi_a$,
    $c=\chi_a-\chi_g$, $q=\tfrac12\rho V_a^2$.
-2. $k_a=|C_{Y_\beta}|\,qS\,x_\text{acy}$; from the gear normal loads $F_{z,i}$ and geometry,
-   $k_g=\sum_i C_{\alpha,i}x_i$ and $N_{\text{gear,max}}=N_\text{main}+N_\text{nose}$ (OQ-AC-8).
-3. $w_\text{hold}=\min\!\big(k_g/(k_a+k_g),\ N_{\text{gear,max}}/(k_a|c|)\big)$, taking $w_\text{hold}=1$ as
+2. $k_a=|C_{Y_\beta}|\,qS\,x_\text{acy}$; from the total contact normal load $F_{z,\text{contact}}$ the
+   steering authority $N_{\text{steer,max}}=c_\text{steer}\,F_{z,\text{contact}}$ (OQ-AC-8).
+3. $w_\text{hold}=\min\!\big(1,\ N_{\text{steer,max}}/(k_a|c|)\big)$, taking $w_\text{hold}=1$ as
    $|c|\to0$.
 4. $\mathbf v_\text{att,ref}=\mathbf v_g-(1-w_\text{hold})\mathbf w$; pass to `commitAttitude`.
 
@@ -281,14 +244,11 @@ the identically-zero $\beta$ of the airborne coordinated model.
 | $V_g,\ V_a$ | m/s | ground speed, airspeed (horizontal) |
 | $q=\tfrac12\rho V_a^2$ | Pa | dynamic pressure |
 | $C_{Y_\beta}$ | 1/rad | side-force-vs-sideslip derivative (`cl_y_beta`, $<0$) |
-| $x_\text{acy}$ | m | aerodynamic side-force lever aft of CG (config) |
-| $C_{\alpha,i}$ | N/rad | tyre cornering stiffness of wheel $i$ ($\propto F_{z,i}$) |
-| $x_i,\ x_\text{nose}$ | m | wheel longitudinal arms from CG (positive aft) |
-| $\mu_y$ | — | lateral friction (`SurfaceFrictionUniform` lateral peak) |
-| $F_{z,i}$ | N | wheel normal load |
+| $x_\text{acy}$ | m | aerodynamic side-force lever aft of CG (config `x_acy_m`) |
+| $c_\text{steer}$ | m | FBW steering-authority arm (config `steering_authority_m`) |
+| $F_{z,\text{contact}}$ | N | total contact normal load (weight on wheels) |
 | $k_a=|C_{Y_\beta}|qS\,x_\text{acy}$ | N·m/rad | aerodynamic weathervane stiffness ($\propto V_a^2$) |
-| $k_g=\sum_i C_{\alpha,i}x_i$ | N·m/rad | ground directional stiffness ($\propto F_z$) |
-| $N_{\text{gear,max}}$ | N·m | gear yaw capability ($\propto F_z$) |
+| $N_{\text{steer,max}}=c_\text{steer}F_{z,\text{contact}}$ | N·m | FBW steering-moment authority ($\propto F_z$) |
 | $w_\text{hold}$ | — | gear hold fraction $\in[0,1]$ |
 | $R_\text{flight},\ R_\text{ground}$ | m | flight / ground minimum turn radii (OQ-AC-6) |
 

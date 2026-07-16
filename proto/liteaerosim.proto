@@ -287,6 +287,10 @@ message AircraftState {
     float              ground_steering_vblend_lower_ratio = 80;  // OQ-AC-6 below-stall smoothstep band (× V_stall)
     float              ground_steering_vblend_upper_ratio = 81;
     float              prev_wow_load_fraction = 82;  // OQ-AC-6 WoW gate state
+    float              x_acy_m   = 83;  // IP-CRB-11 aero side-force lever
+    float              s_ref_m2  = 84;  // IP-CRB-11 cached reference area (for k_a)
+    float              cl_y_beta = 85;  // IP-CRB-11 cached side-force derivative (for k_a)
+    float              steering_authority_m = 86;  // IP-CRB-11 FBW steering-authority arm
     oneof propulsion {
         PropulsionJetState  jet  = 9;
         PropulsionEdfState  edf  = 10;

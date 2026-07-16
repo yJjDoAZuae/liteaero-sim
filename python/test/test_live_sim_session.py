@@ -56,6 +56,8 @@ _GA_JSON = json.dumps(
             "roll_rate_wn_rad_s": 20.0,
             "roll_rate_zeta_nd": 0.7,
             "qnw_min_turn_radius_m": 10.0,
+            "x_acy_m": 0.5,
+            "steering_authority_m": 0.3,
             "ground_steering_min_turn_radius_m": 3.0,
             "ground_steering_vblend_lower_ratio": 0.6,
             "ground_steering_vblend_upper_ratio": 1.0,

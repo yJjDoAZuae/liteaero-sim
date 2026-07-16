@@ -67,6 +67,18 @@ float Aircraft::lateralLoadAuthority(float v_air_mps, float v_ground_mps, float 
     return ((1.0f - w) * a_flight + w * a_ground) / kGravity_mps2;
 }
 
+// IP-CRB-11 gear hold fraction (§On-Ground Gear-Aero Yaw Balance; ground_directional_dynamics.md). The FBW
+// enforces the commanded n_y by applying a contact-scaled steering moment of authority N_steer,max against
+// the aero weathervane moment k_a·|crab|. w_hold = min(1, N_steer,max/(k_a·|crab|)) ∈ [0,1]: 1 = fully held
+// (heading → ground velocity, static β = crab) while the authority suffices, dropping to the excess ratio
+// when it saturates. N_steer,max ∝ F_z_contact, so w_hold → 0 at lift-off and the flight model is recovered.
+// It is a true authority limit (a saturating FBW loop), not a passive stiffness.
+float Aircraft::gearHoldFraction(float k_a_nm_per_rad, float steer_authority_nm, float crab_rad) {
+    const float k_a_crab = k_a_nm_per_rad * std::abs(crab_rad);
+    if (!(k_a_crab > 1e-6f)) return steer_authority_nm > 0.f ? 1.0f : 0.f;  // no weathervane demand
+    return std::min(1.0f, steer_authority_nm / k_a_crab);
+}
+
 // ---------------------------------------------------------------------------
 // initialize()
 // ---------------------------------------------------------------------------
@@ -111,6 +123,8 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
     aero_cfg.cl_y_beta = ac.at("cl_y_beta").get<float>();
     const float S_ref_m2  = aero_cfg.s_ref_m2;
     const float cl_y_beta = aero_cfg.cl_y_beta;
+    _s_ref_m2  = S_ref_m2;    // IP-CRB-11: cached for the aero weathervane stiffness k_a
+    _cl_y_beta = cl_y_beta;
     _aeroPerf.emplace(aero_cfg);
 
     _cmd_filter_substeps  = ac.at("cmd_filter_substeps").get<int>();
@@ -141,6 +155,15 @@ void Aircraft::initialize(const nlohmann::json& config, float outer_dt_s) {
         throw std::invalid_argument(
             "Aircraft::initialize: require 0 <= ground_steering_vblend_lower_ratio "
             "< ground_steering_vblend_upper_ratio");
+    // IP-CRB-11 (OQ-AC-5/7): aerodynamic side-force lever for the on-ground gear-aero yaw balance.
+    // Required — no default; must be positive (a lever aft of the CG).
+    _x_acy_m = ac.at("x_acy_m").get<float>();
+    if (!(_x_acy_m > 0.f))
+        throw std::invalid_argument("Aircraft::initialize: x_acy_m must be specified and positive");
+    // IP-CRB-11: FBW on-ground steering-moment authority arm. N_steer,max = steering_authority_m·F_z.
+    _steering_authority_m = ac.at("steering_authority_m").get<float>();
+    if (!(_steering_authority_m > 0.f))
+        throw std::invalid_argument("Aircraft::initialize: steering_authority_m must be specified and positive");
     // --- Aircraft physical scale: the non-dimensionalization basis for all gear-model knobs ---
     // V_stall is fixed by the already-specified mass / wing area / CL_max. Every gear-model
     // parameter below is given in the config as a non-dimensional ratio against this scale, so the
@@ -843,7 +866,29 @@ void Aircraft::step(double time_sec,
     // crabs — the heading tracks the airspeed azimuth (β = 0) while the ground velocity, still integrated
     // for position, runs along the track. Position/EOM keep integrating v_g; only the attitude reference
     // (hence q_nw) uses v_a.
-    Eigen::Vector3f v_att_base = v_final_ned - wind_NED_mps;
+    //
+    // IP-CRB-11 (OQ-AC-5): on-ground gear-aero yaw balance. The FBW enforces the commanded n_y by applying a
+    // contact-scaled steering moment (authority N_steer,max = steering_authority_m·F_z_contact) against the
+    // aero weathervane moment k_a·|crab| (k_a = |Cy_β|·q·S·x_acy). The hold fraction w_hold ∈ [0,1]
+    // conditions WHICH velocity the heading slaves to: 0 → aero velocity (free weathervane, the OQ-AC-4
+    // reference), 1 → ground velocity (heading held to the track, static β = crab). The reference is the
+    // aero velocity with the wind added back in proportion to w_hold: v_att_base = v_g − (1 − w_hold)·wind.
+    // N_steer,max ∝ F_z, so w_hold → 0 at lift-off and the OQ-AC-4 flight reference is recovered.
+    // See ground_directional_dynamics.md.
+    float w_hold = 0.f;
+    if (_has_landing_gear && m > 0.f) {
+        const Eigen::Vector3f v_a = v_final_ned - wind_NED_mps;
+        const float V_a   = v_a.norm();
+        const float chi_a = std::atan2(v_a.y(), v_a.x());               // aero-velocity azimuth (E, N)
+        const float chi_g = std::atan2(v_final_ned.y(), v_final_ned.x());// ground-track azimuth
+        float crab = std::atan2(std::sin(chi_a - chi_g), std::cos(chi_a - chi_g));  // wrap to (−π, π]
+        const float q_a = 0.5f * rho_kgm3 * V_a * V_a;
+        const float k_a = std::abs(_cl_y_beta) * q_a * _s_ref_m2 * _x_acy_m;   // aero weathervane stiffness
+        const float f_z_contact = _prev_wow_load_fraction * m * kGravity_mps2; // contact normal load (this step)
+        const float n_steer_max = _steering_authority_m * f_z_contact;         // FBW steering authority
+        w_hold = gearHoldFraction(k_a, n_steer_max, crab);
+    }
+    Eigen::Vector3f v_att_base = v_final_ned - (1.0f - w_hold) * wind_NED_mps;
     if (m > 0.f) {
         // IP-CRB-4 low-speed guard: fade the contact-exclusion out as ground speed → 0. At rest the
         // vertical contact force balances gravity, so subtracting (F_contact/m)·dt leaves a spurious
@@ -891,6 +936,10 @@ nlohmann::json Aircraft::serializeJson() const {
     j["ground_steering_min_turn_radius_m"]  = _ground_steering_min_turn_radius_m;   // OQ-AC-6
     j["ground_steering_vblend_lower_ratio"] = _ground_steering_vblend_lower_ratio;  // OQ-AC-6
     j["ground_steering_vblend_upper_ratio"] = _ground_steering_vblend_upper_ratio;  // OQ-AC-6
+    j["x_acy_m"]   = _x_acy_m;      // IP-CRB-11 aero side-force lever
+    j["s_ref_m2"]  = _s_ref_m2;     // IP-CRB-11 cached for k_a
+    j["cl_y_beta"] = _cl_y_beta;
+    j["steering_authority_m"] = _steering_authority_m;   // IP-CRB-11 FBW steering authority arm
     j["nz_relax_filter"]      = _nz_relax_filter.serializeJson();
     j["dtheta_pitch_filter"]  = _dtheta_pitch_filter.serializeJson();
     j["dtheta_roll_filter"]   = _dtheta_roll_filter.serializeJson();
@@ -979,6 +1028,10 @@ void Aircraft::deserializeJson(const nlohmann::json& j) {
     _ground_steering_min_turn_radius_m  = j.value("ground_steering_min_turn_radius_m",  _ground_steering_min_turn_radius_m);   // OQ-AC-6
     _ground_steering_vblend_lower_ratio = j.value("ground_steering_vblend_lower_ratio", _ground_steering_vblend_lower_ratio);
     _ground_steering_vblend_upper_ratio = j.value("ground_steering_vblend_upper_ratio", _ground_steering_vblend_upper_ratio);
+    _x_acy_m   = j.value("x_acy_m",   _x_acy_m);      // IP-CRB-11
+    _s_ref_m2  = j.value("s_ref_m2",  _s_ref_m2);
+    _cl_y_beta = j.value("cl_y_beta", _cl_y_beta);
+    _steering_authority_m = j.value("steering_authority_m", _steering_authority_m);
     _dtheta_wn_pitch_rad_s = j.value("dtheta_wn_pitch_rad_s", _dtheta_wn_pitch_rad_s);
     _dtheta_wn_roll_rad_s  = j.value("dtheta_wn_roll_rad_s",  _dtheta_wn_roll_rad_s);
     _dtheta_wn_yaw_rad_s   = j.value("dtheta_wn_yaw_rad_s",   _dtheta_wn_yaw_rad_s);
@@ -1101,6 +1154,10 @@ std::vector<uint8_t> Aircraft::serializeProto() const {
     proto.set_ground_steering_min_turn_radius_m(_ground_steering_min_turn_radius_m);   // OQ-AC-6
     proto.set_ground_steering_vblend_lower_ratio(_ground_steering_vblend_lower_ratio);
     proto.set_ground_steering_vblend_upper_ratio(_ground_steering_vblend_upper_ratio);
+    proto.set_x_acy_m(_x_acy_m);       // IP-CRB-11
+    proto.set_s_ref_m2(_s_ref_m2);
+    proto.set_cl_y_beta(_cl_y_beta);
+    proto.set_steering_authority_m(_steering_authority_m);
     proto.set_prev_wow_load_fraction(_prev_wow_load_fraction);   // OQ-AC-6 WoW gate state
     proto.set_nz_filter_x0(_nz_filter.x()(0, 0));
     proto.set_nz_filter_x1(_nz_filter.x()(1, 0));
@@ -1222,6 +1279,10 @@ void Aircraft::deserializeProto(const std::vector<uint8_t>& bytes) {
     _ground_steering_min_turn_radius_m  = proto.ground_steering_min_turn_radius_m();   // OQ-AC-6
     _ground_steering_vblend_lower_ratio = proto.ground_steering_vblend_lower_ratio();
     _ground_steering_vblend_upper_ratio = proto.ground_steering_vblend_upper_ratio();
+    _x_acy_m   = proto.x_acy_m();       // IP-CRB-11
+    _s_ref_m2  = proto.s_ref_m2();
+    _cl_y_beta = proto.cl_y_beta();
+    _steering_authority_m = proto.steering_authority_m();
     _prev_wow_load_fraction = proto.prev_wow_load_fraction();   // OQ-AC-6 WoW gate state
     _dtheta_wn_pitch_rad_s = proto.dtheta_wn_pitch_rad_s();
     _dtheta_wn_roll_rad_s  = proto.dtheta_wn_roll_rad_s();
