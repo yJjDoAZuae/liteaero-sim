@@ -794,105 +794,92 @@ curvature or β input, use the steerable gear, or introduce a control loop.
 
 ### On-Ground Gear-Aero Yaw Balance *(Proposed — IP-CRB-11, not yet implemented)*
 
-On the ground in sideslip the airframe has an aerodynamic yaw moment that tends to **weathervane** it —
-yaw the nose toward the relative wind. Sideslip arises on the ground because the wind frame tracks the
-aerodynamic velocity: a crosswind gives an aerodynamic sideslip `β = wind azimuth − heading` and a
-commanded lateral load factor `Ny` also drives a `β` through the allocator. Whether the aircraft actually
-weathervanes depends on whether the **landing gear can react** that yaw moment. This model reacts the
-emulated aero yaw moment with the gear, holding heading while the gear has the authority and yawing only
-on the excess, with the authority scaled by contact force so the behavior transitions smoothly from
-flight (no gear authority — free aero weathervaning) to ground (gear holds).
+On the runway the landing gear ties the heading to the ground track. A crosswind then holds a **static
+sideslip** (the aircraft does not free-weathervane into the wind), the commanded lateral input steers the
+ground track, and the aircraft weathervanes only when the crosswind yaw moment exceeds the gear's yaw
+capability. The behavior reduces exactly to the coordinated flight model as the contact force fades at
+lift-off. The full derivation — frames, the yaw-moment balance, the reduction to the flight model, and the
+discretization — is in [ground_directional_dynamics.md](../algorithms/ground_directional_dynamics.md); this
+section states the model and its configuration.
 
-**Emulated aero weathervane moment.** The trimaero aero set carries a side-force-versus-sideslip
-derivative `Cy_β` (config `cl_y_beta`; the wind-frame side force `F_aero,y = Cy_β·β·q·S`, with
-`q = ½ρV²` and `S` the reference area) but **no** yaw-moment derivative `Cn_β`. The weathervane moment is
-therefore emulated as the modeled side force acting at an aerodynamic side-force lever aft of the CG:
+**Why the heading is a balance, not a slave.** In free flight the attitude is velocity-slaved to the
+**aerodynamic** velocity (§Aerodynamic Wind Frame and Crab): the heading `ψ` tracks the airspeed azimuth
+`χ_a`, so the sideslip `β = χ_a − ψ = 0`. Left unchanged on the ground this makes the nose track the
+airspeed — the aircraft free-weathervanes into the wind — because in this model `β` is the allocator's
+value for the commanded `Ny`, which is ≈ 0 when `Ny = 0`; there is no aero side force to "react", and the
+weathervane is purely kinematic (the heading following `χ_a`). The gear must therefore condition **which
+velocity the heading slaves to**, not an `a_y` side force.
 
-$$N_\text{aero} = F_\text{aero,y}\;x_\text{acy}$$
+**Heading = stiffness-weighted mean.** The quasi-static yaw-moment balance between the aerodynamic
+weathervane moment (pulling `ψ → χ_a`) and the gear/tyre restoring moment (pulling `ψ → χ_g`, the
+ground-track azimuth) gives the heading as their stiffness-weighted mean, i.e. the **gear hold fraction**
 
-where `x_acy` is the longitudinal distance from the CG to the aerodynamic side-force center of pressure
-(m, positive aft; a new required config parameter — equivalently a `Cn_β` expressed as a moment arm on
-the modeled `Cy_β` side force). `N_aero` scales with the sideslip `β` and dynamic pressure `q` the model
-already carries, and fades to zero as `q → 0`.
+$$\psi = \chi_a - w_\text{hold}\,c,\qquad
+  w_\text{hold} = \min\!\left(\frac{k_g}{k_a+k_g},\ \frac{N_\text{gear,max}}{k_a\,|c|}\right)\in[0,1],
+  \qquad c \equiv \chi_a - \chi_g\ (\text{crab}),$$
 
-**Gear yaw reaction capability.** The maximum yaw moment the gear can produce to hold heading is the sum
-of the already-modeled main-tyre contribution and an estimated nose-steering contribution:
+so the model sideslip is `β = w_hold·c` (with `w_hold = 1` taken as `c → 0`). `w_hold = 0` (no gear) is the
+free-flight weathervane (`ψ = χ_a`, `β = 0`); `w_hold = 1` (firm contact) holds the track (`ψ = χ_g`, `β =
+c` — a **static sideslip equal to the crab**). The `min` is the **capability saturation**: when the aero
+weathervane moment at full hold `k_a|c|` exceeds the gear capability `N_gear,max` (strong wind / high
+dynamic pressure, or light contact) the gear holds only the fraction it can and the heading weathervanes
+partway toward the wind.
 
-$$N_\text{gear,max} = N_\text{main} + N_\text{nose},\qquad
-  N_\text{main} = \sum_\text{mains} \mu_y\,F_{z,i}\,x_i,\qquad
-  N_\text{nose} = \mu_y\,F_{z,\text{nose}}\,x_\text{nose}$$
+**Stiffnesses and capability.**
 
-where `F_{z,i}` is the vertical (normal) load on wheel `i` (N), `x_i` its longitudinal distance from the
-CG (m), and `μ_y` the lateral friction coefficient (`SurfaceFrictionUniform` lateral peak). `N_main` is
-the friction limit of the main-tyre side forces the gear already computes; `N_nose` is the estimated
-capability of the (castering, `F_y = 0`) nose wheel treated as a steered wheel developing at most its
-friction-limited side force `μ_y·F_{z,nose}` at its arm `x_nose`. Both terms scale with their normal
-loads, so `N_gear,max → 0` at liftoff — the contact-force scaling that gives the smooth flight↔ground
-transition.
+- **Aerodynamic weathervane stiffness** `k_a = |Cy_β|·q·S·x_acy` (∝ `q ∝ V_a²`), from the modeled
+  side-force derivative `Cy_β` (`cl_y_beta`) acting at the aerodynamic side-force lever `x_acy` aft of the
+  CG (a new required config parameter — equivalently a `Cn_β` expressed as a moment arm on the `Cy_β` side
+  force, since the trimaero aero set carries no `Cn_β`).
+- **Ground directional stiffness** `k_g = Σ_i C_α,i·x_i` (∝ `F_z`), the tyre cornering stiffnesses `C_α,i`
+  weighted by their longitudinal arms `x_i` from the CG.
+- **Gear yaw capability** `N_gear,max = N_main + N_nose`, `N_main = Σ_mains μ_y·F_z,i·|x_i|`, `N_nose =
+  μ_y·F_z,nose·x_nose` (OQ-AC-8): the friction-limited main-tyre moment plus the estimated nose-steering
+  moment. Both `k_g` and `N_gear,max` scale with the contact normal load `F_z` and vanish at lift-off.
 
-**Balance and release.** The gear holds heading while the aero weathervane moment is within capability;
-the excess yaws the aircraft:
+**Discrete realization (attitude reference).** The balance is applied through the attitude-reference
+velocity that `commitAttitude` slaves `q_nw` to. It is the OQ-AC-4 aerodynamic-velocity reference with the
+wind added back in proportion to the hold fraction:
 
-$$N_\text{net} = \operatorname{sign}(N_\text{aero})\,\max\!\big(0,\ |N_\text{aero}| - N_\text{gear,max}\big)$$
+$$\mathbf v_\text{att,ref} = \mathbf v_g - (1-w_\text{hold})\,\mathbf w
+  \qquad(=\mathbf v_a \text{ at } w_\text{hold}=0;\ =\mathbf v_g \text{ at } w_\text{hold}=1),$$
 
-- `N_net = 0` (gear holds): no uncommanded weathervane — the heading holds, so a crosswind touchdown
-  keeps a **static** `β = wind angle` and a straight rollout.
-- `N_net ≠ 0` (gear saturated): the aircraft weathervanes / scrubs at the residual, turning the nose
-  toward the wind.
+whose azimuth interpolates `χ_a → χ_g` as `w_hold: 0 → 1`. This is the **sole** change from the OQ-AC-4
+reference `v_att,ref = v_a = v_g − wind`; `stepQnw` tracks it strictly under the OQ-AC-2 slew saturation, so
+`q_nw.x = v̂_ref` and the low-speed rate bound are preserved. No rigid-body yaw DOF is introduced — the
+heading stays velocity-slaved, only to a gear-conditioned reference.
 
-**Integration into the velocity-slaved azimuth channel.** The on-ground yaw is realized through the
-velocity-slaved azimuth (§Velocity-Slaved Attitude), not an independent yaw DOF. The sideslip-driven
-contribution to the wind-frame lateral specific force that curves the velocity azimuth is the aero side
-force `a_y,β = F_aero,y / m` ([Aircraft.cpp:773](../../src/Aircraft.cpp#L773)). The gear reaction opposes it
-up to the lateral-force equivalent of its yaw capability, `F_cap = N_gear,max / x_acy`, so the net
-sideslip-driven azimuth-curving specific force is the excess:
+**Commanded directional input is separate.** The commanded `Ny` steers the **ground track** `χ_g` through
+the wind-frame lateral force (`χ̇_g = a_y/V_g`), authority-limited by the ground minimum radius
+`R_ground` (§Lateral Authority Limit, OQ-AC-6) — a sustained `Ny` keeps curving the track (a commanded
+ground loop), and the heading follows via `w_hold`. The commanded input therefore still steers the aircraft
+on the runway; it is **not** gated by the weathervane balance, which conditions only the heading relative to
+the track.
 
-$$a_{y,\text{wv}} = \frac{N_\text{net}}{m\,x_\text{acy}}
-   = \frac{\operatorname{sign}(F_\text{aero,y})\,\max\!\big(0,\ |F_\text{aero,y}| - F_\text{cap}\big)}{m}$$
+**Reduction to the flight model.** At lift-off `F_z → 0` so `k_g → 0` and `N_gear,max → 0`, hence
+`w_hold → 0`, `ψ → χ_a`, `β → 0` — coordinated flight — and the OQ-AC-6 blended radius returns to
+`R_flight`. Every gear term is `∝ F_z` (continuous through touchdown), so there is no regime switch.
 
-`a_y,wv` replaces the raw aero-side-force term in the wind-frame `a_y` (step 10) that feeds the
-velocity-azimuth slew, which the OQ-AC-2 curvature cap `1/R_min` then bounds. When the gear holds
-(`N_aero ≤ N_gear,max`) `a_y,wv = 0`: the velocity azimuth is not slewed by sideslip, so the heading does
-not weathervane (the aero side force still acts translationally, so the aircraft may drift, but it does not
-turn). On the ground this supersedes the compliant returning `Δθ_yaw` channel's role for the *weathervane*
-response; the FBW `n_y` yaw-coordination loop is retained for *commanded* lateral maneuvering. Airborne
-(`F_z = 0 ⇒ N_gear,max = 0 ⇒ N_net = N_aero`) `a_y,wv = F_aero,y/m` — the full aero side force weathervanes
-the flight path, recovering free aero behavior with no discontinuity at touchdown or rotation.
+**Why not a simpler rule.** A **free weathervane** (`w_hold ≡ 0`, `q_nw` always tracks the aero velocity) is
+trivial and non-singular but non-physical on the ground — the aircraft yaws into the wind even firmly on
+its wheels. A **hard heading-hold** (`w_hold ≡ 1` below a ground-speed gate) is correct for light winds but
+**discontinuous** at the flight↔ground boundary and cannot represent a wind that overpowers the gear. The
+stiffness-weighted, capability-saturated `w_hold` is the only option physically correct across the regime
+(light wind → gear holds a static `β`; strong wind → slips) and smooth via the `F_z`-scaled stiffness and
+capability.
 
-**Sign conventions and edge cases.** `β > 0` is nose-left-of-relative-wind; `F_aero,y = Cy_β·β·q·S` with
-`Cy_β < 0`, so a positive `β` gives a restoring (into-wind) side force, and `x_acy > 0` (aft of the CG)
-makes `N_aero` a nose-into-wind weathervaning moment. `β = 0 ⇒ N_aero = 0`: no weathervane (coordinated
-flight / straight rollout). A wind reversal flips the sign of `β`, `N_aero`, and `N_net` consistently. The
-`1/x_acy` factor is finite (`x_acy > 0` is required); the balance is a per-step algebraic gate with **no
-free integrator**, so it introduces no new low-frequency mode.
+**Configuration and scope.** One new required config parameter — `x_acy`, the aerodynamic side-force lever
+(m, positive aft), validated at `initialize()` with no default and added to the
+[config schema](../schemas/aircraft_config_v1.md); `x_nose` reuses the nose-gear attach point, `μ_y` the
+`SurfaceFrictionUniform` lateral peak, and `C_α,i` the tyre cornering stiffnesses — all already present. The
+balance is **memoryless** (algebraic per step): no new serialized state; the contact scaling reads the
+current-step gear normal loads `F_z,i`. It stays inside the trimaero model — no 6-DOF EOM, no explicit
+`Cn_β`, no modeled nose-wheel deflection. The design decisions are recorded in
+[OQ-AC-5](#oq-ac-5--on-ground-yaw-and-weathervane-gear-aero-moment-balance-in-wind-resolved),
+[OQ-AC-7](#oq-ac-7--emulating-the-on-ground-aero-weathervane-yaw-moment-no-cn_β-resolved), and
+[OQ-AC-8](#oq-ac-8--estimating-the-gear-yaw-reaction-capability-nose-steering-no-modeled-deflection-resolved);
+implementation is tracked as IP-CRB-11.
 
-**Configuration and state.** One new required config parameter is introduced on implementation — `x_acy`,
-the aerodynamic side-force lever (m, positive aft), to be validated at `initialize()` with no default (per
-the project's no-tolerated-defaults rule) and added to the [config schema](../schemas/aircraft_config_v1.md)
-under the aircraft section. `x_nose` reuses the nose-gear attach point and `μ_y` the `SurfaceFrictionUniform`
-lateral peak — both already present. The balance is **memoryless** (algebraic per step): it adds no
-serialized state, and the contact-force scaling reads the current-step gear normal loads `F_z,i`.
-
-**Why the capability-balance and not a simpler rule.** Two simpler options are rejected. A **free
-weathervane** (gate the azimuth rate on aero speed only, so `q_nw` tracks the aero velocity to zero ground
-speed) keeps `q_nw` non-singular and is trivial, but is non-physical on the ground — it ignores the gear,
-which reacts the side load, so the aircraft would always yaw into the wind even firmly on its wheels. A
-**hard heading-hold on the ground** ("slipping won't occur"; freeze the heading below a ground-speed gate)
-is simplest and correct for light winds, but it is **discontinuous** at the flight↔ground boundary — as the
-contact forces weaken there is no smooth handover to aero weathervaning, and it cannot represent a wind
-strong enough to overpower the gear. The contact-force-scaled capability balance is the only option that is
-physically correct across the regime (light wind → gear holds a static `β`; strong wind → slips) *and*
-transitions smoothly as the contact force fades.
-
-**Scope.** This stays inside the trimaero model — no 6-DOF EOM, no explicit `Cn_β` in the aero build, and
-no modeled nose-wheel deflection (the nose contribution is a capability estimate, not a steering angle).
-It gates the existing on-ground yaw / velocity-azimuth channel by a contact-scaled capability; it does
-not add a control loop. The resolved design decisions are recorded in
-[OQ-AC-5](#oq-ac-5--on-ground-yaw-and-weathervane-gear-aero-moment-balance-in-wind-resolved) (balance
-approach), [OQ-AC-7](#oq-ac-7--emulating-the-on-ground-aero-weathervane-yaw-moment-no-cn_β-resolved)
-(`N_aero` emulation), and
-[OQ-AC-8](#oq-ac-8--estimating-the-gear-yaw-reaction-capability-nose-steering-no-modeled-deflection-resolved)
-(`N_gear,max` estimate). Implementation is tracked as IP-CRB-11.
 
 ### Stall Recovery (CL Rate Limiting)
 

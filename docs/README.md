@@ -95,6 +95,7 @@ Design documents live in `docs/design/` (see [`docs/design/README.md`](design/RE
 | [`algorithms/filters.md`](algorithms/filters.md) | Tustin discretization with frequency prewarping; first-order and second-order filter coefficients |
 | [`algorithms/aerodynamics.md`](algorithms/aerodynamics.md) | Aerodynamic coefficient models |
 | [`algorithms/equations_of_motion.md`](algorithms/equations_of_motion.md) | RK4 equations-of-motion integration |
+| [`algorithms/ground_directional_dynamics.md`](algorithms/ground_directional_dynamics.md) | On-ground lateral–directional dynamics: velocity-slaved heading, gear hold fraction, crab/sideslip, reduction to the flight model |
 | [`algorithms/integration.md`](algorithms/integration.md) | Numerical integration methods |
 | [`algorithms/air_data.md`](algorithms/air_data.md) | Air data computation — indicated airspeed, Mach, AGL |
 | [`algorithms/screen_space_lod_selection.md`](algorithms/screen_space_lod_selection.md) | Screen-space error → required LOD at any slant range; adequacy range, hysteresis dead-band |
