@@ -186,6 +186,19 @@ WheelContactForces WheelUnit::step(float                         penetration_m,
         F_y *= scale;
     }
 
+    // 8b. Low-speed lateral fade. The Pacejka side force is a sliding-friction force computed from the
+    // slip ANGLE alpha_t = atan2(V_cy, |V_cx|); as the contact speed → 0 this becomes ill-conditioned —
+    // a tiny residual V_cy at (near-)zero forward speed reads as a large slip angle, so a stationary
+    // wheel would develop a large spurious lateral force. Fade F_y out below a low-speed scale so a
+    // wheel at rest carries no slip-based side force (kVlat ≈ 0.5 m/s; full force by ~1 m/s, so rolling
+    // and ground-steering behavior above walking pace is unaffected). F_x needs no such fade — a free
+    // wheel has kappa = 0 (hence F_x = 0) at rest by construction.
+    {
+        constexpr float kVlat = 0.5f;   // m/s lateral-force low-speed fade scale
+        const float V_c2 = V_cx * V_cx + V_cy * V_cy;
+        F_y *= V_c2 / (V_c2 + kVlat * kVlat);
+    }
+
     // 9. Wheel speed integration — Tustin predictor-corrector (OQ-LG-5)
     // I_w = m_w * r_w^2 / 2,  m_w ≈ 0.3 * r_w  →  I_w = 0.15 * r_w^3
     //

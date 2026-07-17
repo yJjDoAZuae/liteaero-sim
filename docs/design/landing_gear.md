@@ -567,6 +567,16 @@ $$F(s) = D \sin\!\bigl(C \arctan(B s - E(B s - \arctan(B s)))\bigr)$$
 where $s$ is the relevant slip quantity (slip ratio $\kappa$ for longitudinal, slip angle
 $\alpha_t$ for lateral), and $B$, $C$, $D$, $E$ are shape parameters.
 
+**Low-speed lateral fade.** The lateral force is driven by the slip *angle*
+$\alpha_t = \arctan(V_{cy}/|V_{cx}|)$, which is ill-conditioned as the contact speed $\to 0$: at
+(near-)zero forward speed a tiny residual lateral velocity $V_{cy}$ reads as a large slip angle, so a
+*stationary* wheel would otherwise develop a large spurious side force ($\approx\mu F_z$) from velocity
+noise — and, worse, that spurious $F_y$ creeps the aircraft sideways at rest. $F_y$ is therefore faded out
+below a low-speed scale, $F_y \mathrel{*}= V_c^2/(V_c^2 + V_{lat}^2)$ with
+$V_c=\sqrt{V_{cx}^2+V_{cy}^2}$ and $V_{lat}\approx 0.5$ m/s, so a wheel at rest carries no slip-based
+lateral force while rolling and ground-steering behavior above walking pace is unaffected. $F_x$ needs no
+such fade — a free wheel has $\kappa=0$ (hence $F_x=0$) at rest by construction.
+
 **Castering (nose) wheel — no side force.** A wheel flagged `is_castering` is modeled as a
 free-castering wheel: it carries vertical load and rolls, is quasi-statically trimmed to align with its
 ground-relative velocity, and produces **no lateral (side) force** ($F_y \equiv 0$). It generates no

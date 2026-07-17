@@ -17,8 +17,11 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")               # headless raster backend in every worker
-import matplotlib.pyplot as plt     # noqa: E402
+import matplotlib.pyplot as plt
+# NOTE: do NOT force the Agg backend at import — this module is imported in the notebook's main
+# process, and switching the global backend there would break the notebook's inline plotting
+# (later `plt.show()` cells would warn "FigureCanvasAgg is non-interactive"). The headless Agg
+# backend is needed only in the worker processes, so it is set in init_worker() below.
 
 # Per-worker static geometry, populated by init_worker().
 _S: dict = {}
@@ -60,7 +63,10 @@ def body_to_enu(pts_body, R_nb, cg_enu):
 
 # ── Worker functions (module-level so spawn can pickle them) ───────────────────────────────
 def init_worker(static):
-    """Seed this worker with the static geometry (called once per worker)."""
+    """Seed this worker with the static geometry (called once per worker). Force the headless Agg
+    backend here — in the worker process only — so frame rasterization needs no display and the
+    notebook's main-process (inline) backend is left untouched."""
+    matplotlib.use("Agg", force=True)
     _S.clear()
     _S.update(static)
 

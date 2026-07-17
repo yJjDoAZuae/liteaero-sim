@@ -108,6 +108,34 @@ TEST(TireDynamics, FreeRoll_SettlingDoesNotPropel) {
 }
 
 // ---------------------------------------------------------------------------
+// Scenario A3 — low-speed lateral fade. A near-stationary wheel with a tiny residual lateral contact
+// velocity must NOT develop a large slip-angle side force: at V_cx → 0 the slip angle atan2(V_cy,|V_cx|)
+// is ill-conditioned, so a stopped tyre would otherwise spike F_y to ~mu*F_z from velocity noise. The
+// low-speed fade suppresses it, while a wheel rolling at speed keeps its cornering force.
+// ---------------------------------------------------------------------------
+TEST(TireDynamics, LowSpeed_NoSpuriousLateralForceAtRest) {
+    const float penetration = 0.10f;
+    const float F_z = 20000.0f * penetration;   // 2000 N
+
+    // Near rest: tiny forward + tiny lateral velocity (a large, ill-conditioned slip angle).
+    WheelUnit w; w.initialize(makeFreeWheel());
+    WheelContactForces cf;
+    const Eigen::Vector3f near_rest{0.02f, 0.02f, 0.0f};
+    for (int i = 0; i < 5; ++i)
+        cf = w.step(penetration, kContactPt, near_rest, kNormalUp, 0.0f, 0.0f, kMu, kDt);
+    EXPECT_LT(std::abs(cf.force_body_n.y()), 0.05f * kMu * F_z)
+        << "stationary wheel developed a spurious lateral force: F_y=" << cf.force_body_n.y() << " N";
+
+    // Rolling at speed with a real ~0.1 rad slip angle: the cornering force IS present (fade ≈ 1).
+    WheelUnit w2; w2.initialize(makeFreeWheel());
+    const Eigen::Vector3f rolling{5.0f, 5.0f * std::tan(0.1f), 0.0f};
+    for (int i = 0; i < 5; ++i)
+        cf = w2.step(penetration, kContactPt, rolling, kNormalUp, 0.0f, 0.0f, kMu, kDt);
+    EXPECT_GT(std::abs(cf.force_body_n.y()), 0.2f * kMu * F_z)
+        << "rolling wheel lost its cornering force to the low-speed fade: F_y=" << cf.force_body_n.y();
+}
+
+// ---------------------------------------------------------------------------
 // Scenario B — single tire under a sprung mass at constant forward speed, time-marched.
 // A 1-DOF vertical mass sits on the strut; the contact rolls forward at constant speed.
 // The longitudinal contact impulse over the run must be retarding (negative): the tire
