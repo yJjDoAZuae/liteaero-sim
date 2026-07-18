@@ -18,3 +18,8 @@ config/features=PackedStringArray("4.6", "Forward Plus")
 [editor]
 
 run/main_run_args="-- --terrain C:\\Users\\Alex\\avraero\\liteaero\\liteaero-sim\\data\\terrain\\small_uas_ksba\\terrain_config.json"
+
+[rendering]
+
+lights_and_shadows/directional_shadow/size=8192
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1

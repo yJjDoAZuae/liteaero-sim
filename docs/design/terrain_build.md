@@ -51,6 +51,8 @@ to the C++ `TerrainMesh` class.
 | OQ-TB-3 | How should LOD levels be exported to the Godot GLB so that the correct LOD renders at each camera distance without exceeding GPU VRAM? | **Resolved — see §OQ-TB-3 Analysis** |
 | OQ-TB-4 | The current `triangulate.py` produces sliver triangles (small interior angles, high aspect ratios) in flat and coastal regions.  How should the triangulation algorithm be redesigned to guarantee mesh quality? | **Open — see §OQ-TB-4 Analysis** |
 | OQ-TB-5 | How should surface imagery be bound to terrain geometry to achieve runway-visible detail without per-facet color aliasing? | **Resolved — see §OQ-TB-5 Addendum** |
+| OQ-TB-6 | Continuous features (roads, runways) shift discontinuously across tile boundaries — the per-cell `arange` grid does not land on the cell edges, so adjacent tiles do not share boundary vertices. How should the tile grid be sampled so neighbours meet seamlessly? | **Resolved — see §OQ-TB-6 Analysis** |
+| OQ-TB-7 | Continuous features still tear at tile seams after OQ-TB-6 — each tile's texture is rotated by ~the grid convergence angle because the projected (UTM) source is mapped onto the WGS84 tile grid without derotating grid-north to true-north. How should projected imagery be resampled onto the geographic tile grid so features stay registered across seams? | **Resolved — see §OQ-TB-7 Analysis** |
 
 ---
 
@@ -648,6 +650,20 @@ resolution from the source raster's `transform.a` field (UTM pixel size in metre
 This misinterprets metres as degrees, producing a 1×1-pixel output.  For NAIP tiles,
 `build_terrain` therefore skips `mosaic_imagery` entirely and passes the per-tile paths
 directly to `render_mosaic` as `(path, "naip")` pairs.
+
+**Projected-source resampling — full reprojection, not a linear window stretch:** NAIP is
+delivered in UTM (e.g. EPSG:26911).  When resampling a UTM source onto a tile's geographic
+(EPSG:4326) grid, `render_mosaic._read_source_rgb` performs a true reprojection
+(`rasterio.warp.reproject` on a bounded source window) — it does **not** read an
+axis-aligned UTM window and linearly stretch it onto the tile.  A linear stretch treats
+UTM grid-north as if it were true north, so every tile is rotated by the local grid
+convergence angle γ (≈ (λ − λ₀)·sin φ, ≈ 1.6° at KSBA) about its own centre; neighbouring
+tiles rotate about different centres and continuous features tear at the seam.  The
+reprojection derotates grid-north to true north per pixel, keeping features registered
+across seams.  The read stays windowed (only the source window covering the tile bbox is
+touched) so the per-tile memory bound from the sampling design (§Design Decisions) is
+preserved.  EPSG:4326 sources (Sentinel-2, Landsat) need no reprojection — their window
+maps linearly to the tile grid — and take the direct windowed-read path.  See §OQ-TB-7.
 
 ### Sentinel-2 and Landsat Imagery
 
@@ -1517,6 +1533,159 @@ OQ-TB-5 is resolved when:
 4. Total terrain texture VRAM is under 1 GB on the reference GTX 1050 Ti (4 GB).
 5. The pipeline detects `imagery_source="naip"` and bypasses `mosaic_imagery`,
    passing NAIP tile paths directly to `render_mosaic`.
+
+---
+
+## OQ-TB-6 Analysis — Tile-Boundary Seams (Shared Boundary Vertices)
+
+### Observed Problem
+
+In the Godot viewer, continuous ground features — a straight road or the KSBA runway —
+**shift discontinuously across tile boundaries**: the feature is drawn up to a few metres
+out of place on one side of the seam, breaking the "runway visible as a continuous strip"
+acceptance criterion (§OQ-TB-5 Addendum). The offset is largest at coarse LODs and shrinks
+at fine LODs, which rules out a source-imagery artifact (the DEM and imagery mosaics are
+continuous) and rules out the projection (each tile converts to ENU from its own centroid
+consistently, so a *shared* boundary vertex would project identically on both tiles).
+
+### Root Cause
+
+The tiling and the meshing use two different, unsynchronised grids.
+[`_compute_cell_grid`](../../python/tools/terrain/build_terrain.py) cuts the coverage bbox
+into cells that abut exactly (each cell's east edge is the next cell's west edge). But each
+cell is then meshed **independently**, starting from its own `lon_min`:
+
+```python
+lons = np.arange(lon_min, lon_max + spacing * 0.5, spacing)   # triangulate.py
+```
+
+Unless the cell width is an exact integer multiple of the LOD grid `spacing`, the last
+sampled vertex does **not** land on the cell's east edge — it undershoots (leaving a missing
+strip) or overshoots (leaving an overlap) by up to **half a grid step** (≈ 5 m at LOD 0,
+`spacing ≈ 10 m`; larger at coarser LODs). Adjacent tiles therefore do not share their
+boundary vertices: the terrain gaps/overlaps at the seam, and because each tile's texture
+`TEXCOORD_0` is mapped to its own mosaic bounds
+([`export_gltf.py`](../../python/tools/terrain/export_gltf.py)), a feature crossing the seam
+is drawn out of place on the mis-terminated side. The size tracking the grid spacing is the
+signature of this half-step error.
+
+### Alternatives
+
+1. **Endpoint-locked grid (`linspace`).** Replace the per-cell `arange` with
+   `np.linspace(lon_min, lon_max, nx)`, `nx = max(2, round((lon_max − lon_min)/spacing) + 1)`
+   (same for latitude). Every tile then spans its cell **exactly**, with the west/east and
+   south/north edges as vertices; a shared cell edge is a shared vertex on both neighbours.
+   - *Benefits:* one-line change, fully inside `triangulate.py`; guarantees shared boundary
+     vertices for all abutting same-LOD tiles; the interior spacing shifts by a sub-percent
+     amount (immaterial to the DEM/texture sampling); no change to `verify.py`, the cell
+     grid, LOD scheme, projection, or export.
+   - *Drawbacks:* the realized vertex spacing is the cell width divided by an integer rather
+     than exactly `spacing` — a negligible deviation, and the LOD footprint policy already
+     uses roughly square cells.
+2. **Global-grid snap of the cell boundaries.** Make `_compute_cell_grid` emit cells whose
+   edges are integer multiples of the LOD `spacing`, so the existing `arange` lands on them.
+   - *Benefits:* keeps `arange` and the exact nominal spacing.
+   - *Drawbacks:* the cells are shared across LODs but `spacing` is per-LOD, so no single set
+     of cell edges is a multiple of every LOD's spacing — a cell grid aligned for one LOD is
+     misaligned for the others, so this does not generalize.
+3. **Delaunay with locked boundary points.** Use the existing `triangulate()`
+   `boundary_points` path (Delaunay over the grid plus injected, locked shared-edge vertices).
+   - *Benefits:* already partly implemented; supports irregular adaptive sampling later.
+   - *Drawbacks:* pulls in `scipy.spatial.Delaunay` on the common build path (the regular-grid
+     path was deliberately kept numpy-only for memory/perf); heavier than needed to solve a
+     pure boundary-alignment problem.
+
+### Resolution
+
+**Alternative 1 — endpoint-locked `linspace` grid.** `triangulate.py` samples each cell on
+`np.linspace(lon_min, lon_max, nx) × np.linspace(lat_min, lat_max, ny)`, so every tile spans
+its cell exactly and abutting same-LOD tiles share boundary vertices. This closes the
+**shared-vertex geometry seam** (the meshing/tiling grid mismatch). It does **not** address
+the dominant residual seam — a per-tile texture azimuth rotation from projected-imagery
+resampling — which was diagnosed separately and resolved in §OQ-TB-7. It does not resolve
+OQ-TB-4 (triangle quality) — the connectivity is unchanged — and requires a terrain
+**rebuild** to regenerate the GLB tiles. A regression test asserts that two
+horizontally-adjacent cells produce identical lon/lat (and ENU-consistent) vertices along
+their shared edge.
+
+---
+
+## OQ-TB-7 Analysis — Per-Tile Texture Azimuth Rotation (Projected-Source Resampling)
+
+### Observed Problem
+
+After OQ-TB-6 closed the shared-vertex geometry seam, continuous features — the KSBA runway
+edge and centerline, straight roads — **still tear at every tile seam** in the Godot viewer:
+the marked edge jogs laterally by a metre or two across the boundary. The mesh is continuous
+(adjacent tiles' shared vertices coincide exactly and there is no gap in the surface), so it is
+purely a **texture** displacement. It is present at every LOD and **directly under the aircraft**
+(the finest LOD), which rules out an LOD-transition artifact, and the jog reads as a slight
+**azimuth rotation of each tile's imagery about its own centre**.
+
+### Root Cause
+
+NAIP is delivered in a projected CRS (UTM, e.g. EPSG:26911).
+[`render_mosaic._read_source_rgb`](../../python/tools/terrain/mosaic_render.py) resampled it onto
+each tile's geographic (EPSG:4326) grid by taking the UTM **bounding box** of the tile
+(`transform_bounds`) and doing a windowed read with `out_shape` — i.e. it read an axis-aligned
+UTM window and **linearly stretched** it onto the tile's lat/lon grid:
+
+```python
+bounds = transform_bounds("EPSG:4326", src.crs, lon_min, lat_min, lon_max, lat_max)
+window = _window_from_bounds(*bounds, src.transform)
+src.read(..., window=window, out_shape=(3, h_pixels, w_pixels), resampling=bilinear)
+```
+
+A linear stretch maps UTM **grid-north** onto the tile's **true north**. The two differ by the
+**grid convergence** angle
+
+$$\gamma \approx (\lambda - \lambda_0)\,\sin\varphi \approx 1.6^\circ \text{ at KSBA (zone 11, } \lambda_0 = -117^\circ).$$
+
+So every tile's imagery comes out rotated by ≈ γ about its own centre. Neighbouring tiles rotate
+about **different** centres, so at a shared edge the two contents are displaced in opposite
+directions and a continuous feature tears by up to ≈ γ · (tile size) — a few metres, largest at
+coarse LODs, non-zero even at the finest LOD. Verified: the raw NAIP reprojected properly with
+`rasterio.warp.reproject` is continuous, while the shipped per-tile texture is sheared relative to
+it (the our-vs-proper horizontal shift trends monotonically across the tile — a rotation
+signature — median ≈ 2.3 m, ≈ 5 m swing across a 280 m tile). The source is clean (both covering
+NAIP quads share a capture date), confirming the tear is introduced by our resampling, not the
+imagery.
+
+### Alternatives
+
+1. **Windowed reprojection (`rasterio.warp.reproject` on a bounded source window).** For a
+   projected source, read only the source window covering the tile bbox (padded a few pixels so
+   the rotation does not clip the corners), then `reproject` that array onto the tile's EPSG:4326
+   grid (`dst_transform = from_bounds(lon_min, lat_min, lon_max, lat_max, w, h)`).
+   - *Benefits:* correct per-pixel derotation of grid-north → true north; change is localized to
+     `_read_source_rgb`; the read stays windowed so the per-tile memory bound (§Design Decisions)
+     is preserved; EPSG:4326 sources (Sentinel-2, Landsat) are already north-aligned and keep the
+     existing direct windowed-read path unchanged.
+   - *Drawbacks:* one `reproject` per tile per projected source (modest CPU); needs a small source
+     window pad so the rotated tile corners are covered.
+2. **`WarpedVRT` wrapper.** Wrap the source in a `WarpedVRT(crs="EPSG:4326")` and windowed-read
+   from the virtual reprojected raster.
+   - *Benefits:* same correctness; rasterio manages source block reads.
+   - *Drawbacks:* per-call VRT construction; boundless/edge-fill behaviour is more opaque than an
+     explicit windowed `reproject`; no advantage over Alternative 1 for a single bbox read.
+3. **Pre-reproject each NAIP quad to EPSG:4326 once, then window-read (as `mosaic_imagery` does
+   for Sentinel-2).**
+   - *Benefits:* reprojection amortized across tiles; uniform EPSG:4326 read path downstream.
+   - *Drawbacks:* materializes full-resolution reprojected ~0.5 GB quads; `mosaic_imagery` already
+     mishandles UTM metre pixel size (the reason NAIP bypasses it), so this reintroduces that path;
+     heavier than the per-tile windowed reproject for no registration benefit.
+
+### Resolution
+
+**Alternative 1 — windowed reprojection.** `_read_source_rgb` reprojects any non-EPSG:4326 source
+onto the tile's geographic grid with `rasterio.warp.reproject` over a padded, bounded source
+window; EPSG:4326 sources keep the direct windowed read. This derotates grid-north to true north
+per pixel, so per-tile azimuth rotation is removed and features stay registered across seams,
+while memory stays window-bounded. It requires a terrain **rebuild** to regenerate the tile
+textures (the shear is baked into the shipped JPEGs). A regression test builds a UTM source off
+its central meridian (non-zero γ) carrying a true-north-aligned edge and asserts `render_mosaic`
+keeps the edge vertical to within ~1 px / matches a reference `reproject` — the old linear-stretch
+tilts it by γ and fails.
 
 ---
 

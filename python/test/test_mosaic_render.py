@@ -306,3 +306,94 @@ def test_render_mosaic_raises_for_unknown_source(tmp_path: Path) -> None:
     img_path = _make_synthetic_imagery(tmp_path)
     with pytest.raises(KeyError):
         render_mosaic(_BBOX, [(img_path, "unknown_source")])
+
+
+# ---------------------------------------------------------------------------
+# OQ-TB-7: projected (UTM) source is reprojected, not linearly stretched
+# ---------------------------------------------------------------------------
+
+def _make_utm_lon_stripe(
+    tmp_path: Path,
+    bbox: tuple[float, float, float, float],
+    lon_stripe: float,
+    *,
+    filename: str = "utm_stripe.tif",
+    utm_crs: str = "EPSG:32611",   # UTM zone 11N — KSBA sits ~2.8deg off the -117 central meridian
+    res_m: float = 1.0,
+    half_width_deg: float = 0.0003,
+) -> Path:
+    """Create a UTM GeoTIFF carrying a *true-north* (constant-longitude) white stripe.
+
+    A constant-lon line runs along grid-north only on the central meridian; off it (KSBA) the
+    stripe is tilted in UTM pixel space by the grid-convergence angle.  A correct reprojection
+    onto the tile's EPSG:4326 grid renders it vertical again; the old linear window-stretch leaves
+    it tilted.  4 bands (R/G/B/NIR) uint8 to match NAIP.
+    """
+    import rasterio
+    from rasterio.transform import from_bounds as _tfb
+    from rasterio.warp import transform as _warp_xy, transform_bounds
+
+    lon0, lat0, lon1, lat1 = bbox
+    ub = transform_bounds("EPSG:4326", utm_crs, lon0 - 0.001, lat0 - 0.001, lon1 + 0.001, lat1 + 0.001)
+    w = int((ub[2] - ub[0]) / res_m)
+    h = int((ub[3] - ub[1]) / res_m)
+    transform = _tfb(ub[0], ub[1], ub[2], ub[3], w, h)
+
+    cols = ub[0] + (np.arange(w) + 0.5) * res_m
+    rows = ub[3] - (np.arange(h) + 0.5) * res_m
+    xx, yy = np.meshgrid(cols, rows)
+    lon_pix, _ = _warp_xy(utm_crs, "EPSG:4326", xx.ravel().tolist(), yy.ravel().tolist())
+    lon_pix = np.asarray(lon_pix).reshape(h, w)
+
+    data = np.zeros((4, h, w), dtype=np.uint8)
+    stripe = np.abs(lon_pix - lon_stripe) < half_width_deg
+    data[0][stripe] = 255
+    data[1][stripe] = 255
+    data[2][stripe] = 255
+
+    out_path = tmp_path / filename
+    with rasterio.open(
+        out_path, "w",
+        driver="GTiff", width=w, height=h, count=4,
+        dtype="uint8", crs=utm_crs, transform=transform,
+    ) as dst:
+        dst.write(data)
+    return out_path
+
+
+def test_projected_source_reprojected_not_sheared(tmp_path: Path) -> None:
+    """A true-north stripe in a UTM source renders vertical (no per-tile azimuth shear).
+
+    OQ-TB-7: the old path read an axis-aligned UTM window and stretched it onto the tile,
+    tilting every tile by the grid-convergence angle (~1.6deg at KSBA => tan ~ 0.028 px/row).
+    The reprojection keeps grid-north-vs-true-north correct, so the constant-lon stripe stays
+    vertical (slope ~ 0).
+    """
+    from PIL import Image
+
+    from mosaic_render import render_mosaic
+
+    bbox = (-119.845, 34.425, -119.835, 34.435)
+    lon_stripe = -119.840
+    src = _make_utm_lon_stripe(tmp_path, bbox, lon_stripe)
+
+    desc = render_mosaic(bbox, [(src, "naip")], max_pixel_dim=1024)
+    img = np.asarray(Image.open(io.BytesIO(desc.jpeg_bytes)).convert("L"), dtype=float)
+    h, w = img.shape
+
+    # Brightness-weighted stripe column per row (robust to JPEG blur).
+    xs = np.arange(w)
+    rows, centers = [], []
+    for r in range(h):
+        row = img[r]
+        bright = row > 128
+        if bright.sum() >= 2:
+            rows.append(r)
+            centers.append(float((xs[bright] * row[bright]).sum() / row[bright].sum()))
+    rows = np.asarray(rows, dtype=float)
+    centers = np.asarray(centers, dtype=float)
+
+    assert len(rows) > 0.5 * h, "stripe not detected on enough rows"
+    slope = float(np.polyfit(rows, centers, 1)[0])  # px of column drift per row
+    # Correct reprojection: ~vertical (|slope| ~ 0).  Old linear stretch: |slope| ~ tan(1.6deg) ~ 0.028.
+    assert abs(slope) < 0.01, f"stripe tilts {slope:.4f} px/row — per-tile azimuth shear (OQ-TB-7)"

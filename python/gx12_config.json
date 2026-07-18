@@ -12,7 +12,7 @@
     "ny_axis": {
         "sdl_axis_index": 3,
         "center_output": 0.0,
-        "scale": 1.0,
+        "scale": 0.1,
         "inverted": false
     },
     "roll_axis": {

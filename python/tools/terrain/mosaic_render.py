@@ -140,30 +140,61 @@ def _read_source_rgb(
     h_pixels: int,
     w_pixels: int,
 ) -> "np.ndarray":
-    """Read RGB bands resampled to (h_pixels, w_pixels) regardless of source CRS.
+    """Read RGB bands resampled to (h_pixels, w_pixels) on the tile's EPSG:4326 grid.
 
-    Handles projected sources (NAIP UTM etc.) by transforming the geographic bbox
-    into the source CRS before computing the read window.  Out-of-bounds areas are
-    filled with 0 via boundless=True.
+    A projected source (e.g. NAIP UTM) is **reprojected** onto the tile's geographic grid
+    with ``rasterio.warp.reproject`` over a bounded source window, so grid-north is
+    derotated to true north per pixel (OQ-TB-7).  A plain windowed read + ``out_shape``
+    would linearly stretch the axis-aligned source window onto the tile, leaving each tile
+    rotated by the grid-convergence angle and tearing continuous features at tile seams.
+    EPSG:4326 sources are already north-aligned and take the direct windowed-read path.
+    Out-of-coverage areas are 0.
     """
     from rasterio.enums import Resampling
-    from rasterio.warp import transform_bounds
-    from rasterio.windows import from_bounds as _window_from_bounds
+    from rasterio.windows import Window, from_bounds as _window_from_bounds
 
-    if src.crs and src.crs.to_epsg() != 4326:
-        bounds = transform_bounds("EPSG:4326", src.crs, lon_min, lat_min, lon_max, lat_max)
-    else:
-        bounds = (lon_min, lat_min, lon_max, lat_max)
+    bands = [r_band, g_band, b_band]
 
-    window = _window_from_bounds(*bounds, src.transform)
-    return src.read(
-        [r_band, g_band, b_band],
-        window=window,
-        out_shape=(3, h_pixels, w_pixels),
-        resampling=Resampling.bilinear,
-        fill_value=0,
-        boundless=True,
+    if not (src.crs and src.crs.to_epsg() != 4326):
+        # Geographic source: the window maps linearly to the output grid; no reprojection.
+        window = _window_from_bounds(lon_min, lat_min, lon_max, lat_max, src.transform)
+        return src.read(
+            bands,
+            window=window,
+            out_shape=(3, h_pixels, w_pixels),
+            resampling=Resampling.bilinear,
+            fill_value=0,
+            boundless=True,
+        )
+
+    # Projected source: reproject the bounded source window onto the tile's EPSG:4326 grid.
+    from rasterio.transform import from_bounds as _transform_from_bounds
+    from rasterio.warp import reproject, transform_bounds
+
+    src_bounds = transform_bounds("EPSG:4326", src.crs, lon_min, lat_min, lon_max, lat_max)
+    win = _window_from_bounds(*src_bounds, src.transform)
+    pad = 8  # source pixels, so the rotated tile corners stay inside the read window
+    read_window = Window(
+        math.floor(win.col_off) - pad,
+        math.floor(win.row_off) - pad,
+        math.ceil(win.width) + 2 * pad,
+        math.ceil(win.height) + 2 * pad,
     )
+    src_data = src.read(bands, window=read_window, boundless=True, fill_value=0)
+
+    dst = np.zeros((3, h_pixels, w_pixels), dtype=src_data.dtype)
+    reproject(
+        source=src_data,
+        destination=dst,
+        src_transform=src.window_transform(read_window),
+        src_crs=src.crs,
+        dst_transform=_transform_from_bounds(
+            lon_min, lat_min, lon_max, lat_max, w_pixels, h_pixels
+        ),
+        dst_crs="EPSG:4326",
+        resampling=Resampling.bilinear,
+    )
+    return dst
 
 
 def _apply_color_pipeline(

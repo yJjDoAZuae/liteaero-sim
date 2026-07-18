@@ -110,6 +110,43 @@ def test_boundary_vertices_locked(tmp_path: Path) -> None:
     assert len(tile.vertices) == 31
 
 
+# T-seam (OQ-TB-6) — adjacent cells whose width is NOT a multiple of the grid spacing must still span
+# their edges exactly (endpoint-locked) and share the boundary vertices, so continuous features (road,
+# runway) do not shift across the tile seam.
+def test_adjacent_cells_share_boundary_vertices(tmp_path: Path) -> None:
+    from raster_sample import RasterSampler
+    from triangulate import lod_grid_spacing_deg, triangulate
+    from geodesy import enu_to_lonlat_deg
+
+    spacing = lod_grid_spacing_deg(0)
+    w = 2.3 * spacing                       # cell width — deliberately NOT a multiple of `spacing`
+    dem = tmp_path / "seam.tif"
+    # Grid-aligned raster generously covering both cells (bounds extend half a step beyond the edges).
+    _write_flat_dem(dem, n_cols=7, n_rows=5, height=0.0, lon_min=0.0, lat_min=0.0, spacing=spacing)
+    sampler = RasterSampler.from_path(dem)
+
+    def recon_lonlat(tile):
+        return enu_to_lonlat_deg(
+            tile.vertices[:, 0].astype(float), tile.vertices[:, 1].astype(float),
+            tile.centroid_lat_rad, tile.centroid_lon_rad,
+        )
+
+    cell_a = triangulate(sampler, (0.0, 0.0, w, w), lod=0, spacing_deg=spacing)
+    cell_b = triangulate(sampler, (w, 0.0, 2.0 * w, w), lod=0, spacing_deg=spacing)
+    lon_a, lat_a = recon_lonlat(cell_a)
+    lon_b, lat_b = recon_lonlat(cell_b)
+
+    # Each tile spans its cell edges EXACTLY (not off by up to half a step, as the old arange grid was).
+    assert abs(lon_a.min() - 0.0) < 1e-6 and abs(lon_a.max() - w) < 1e-6
+    assert abs(lon_b.min() - w) < 1e-6 and abs(lon_b.max() - 2.0 * w) < 1e-6
+
+    # The shared edge (lon == w) carries identical vertices on both tiles.
+    edge_a = np.sort(lat_a[np.abs(lon_a - w) < 1e-6])
+    edge_b = np.sort(lat_b[np.abs(lon_b - w) < 1e-6])
+    assert len(edge_a) >= 2 and len(edge_a) == len(edge_b)
+    np.testing.assert_allclose(edge_a, edge_b, atol=1e-6)
+
+
 # T4 — triangulated tile passes Python quality check (min_angle ≥ 10°, max_aspect ≤ 15).
 def test_output_passes_quality_verifier(tmp_path: Path) -> None:
     from raster_sample import RasterSampler

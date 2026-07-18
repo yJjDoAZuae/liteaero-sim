@@ -89,15 +89,17 @@ def triangulate(
             f"requested bbox={bbox_deg}"
         )
 
-    # Sample DEM on a regular lon/lat grid.
-    lons = np.arange(lon_min, lon_max + spacing * 0.5, spacing)
-    lats = np.arange(lat_min, lat_max + spacing * 0.5, spacing)
-
-    if len(lons) < 2 or len(lats) < 2:
-        raise ValueError(
-            f"bbox_deg too small for LOD {lod} grid spacing {spacing}° — "
-            f"need at least 2 points per axis"
-        )
+    # Sample the DEM on a regular lon/lat grid whose endpoints are LOCKED to the cell edges
+    # (OQ-TB-6). np.linspace includes lon_min/lon_max (and lat_min/lat_max) exactly, so every tile
+    # spans its cell precisely and abutting same-LOD tiles SHARE their boundary vertices — a road or
+    # runway no longer shifts across a seam. Point counts are chosen so the realized vertex spacing is
+    # within half a step of the nominal `spacing`; the sub-percent deviation is immaterial to sampling.
+    # (The old np.arange started from lon_min and, unless the cell width was an exact multiple of
+    # `spacing`, terminated up to half a step off the cell edge, mis-aligning neighbours.)
+    nx = max(2, int(round((lon_max - lon_min) / spacing)) + 1)
+    ny = max(2, int(round((lat_max - lat_min) / spacing)) + 1)
+    lons = np.linspace(lon_min, lon_max, nx)
+    lats = np.linspace(lat_min, lat_max, ny)
 
     nx, ny = len(lons), len(lats)
     lon_grid, lat_grid = np.meshgrid(lons, lats)
