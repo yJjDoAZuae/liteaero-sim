@@ -167,9 +167,13 @@ def _read_source_rgb(
             boundless=True,
         )
 
-    # Projected source: reproject the bounded source window onto the tile's EPSG:4326 grid.
+    # Projected source: reproject a bounded, DECIMATED source window onto the tile's EPSG:4326
+    # grid.  The read uses out_shape so a region-spanning coarse tile reads a bounded block
+    # rather than the full native window (tens of thousands of px per side -> multi-GB); the
+    # decimation cap is ~2x the output grid, so fine tiles still read at full resolution.
     from rasterio.transform import from_bounds as _transform_from_bounds
     from rasterio.warp import reproject, transform_bounds
+    from rasterio.windows import bounds as _window_bounds
 
     src_bounds = transform_bounds("EPSG:4326", src.crs, lon_min, lat_min, lon_max, lat_max)
     win = _window_from_bounds(*src_bounds, src.transform)
@@ -180,13 +184,24 @@ def _read_source_rgb(
         math.ceil(win.width) + 2 * pad,
         math.ceil(win.height) + 2 * pad,
     )
-    src_data = src.read(bands, window=read_window, boundless=True, fill_value=0)
+    read_w = min(max(1, int(read_window.width)), max(1, w_pixels) * 2)
+    read_h = min(max(1, int(read_window.height)), max(1, h_pixels) * 2)
+    src_data = src.read(
+        bands,
+        window=read_window,
+        out_shape=(3, read_h, read_w),
+        resampling=Resampling.bilinear,
+        boundless=True,
+        fill_value=0,
+    )
+    # Transform of the decimated read: the read window's src-CRS extent over (read_w, read_h).
+    left, bottom, right, top = _window_bounds(read_window, src.transform)
 
     dst = np.zeros((3, h_pixels, w_pixels), dtype=src_data.dtype)
     reproject(
         source=src_data,
         destination=dst,
-        src_transform=src.window_transform(read_window),
+        src_transform=_transform_from_bounds(left, bottom, right, top, read_w, read_h),
         src_crs=src.crs,
         dst_transform=_transform_from_bounds(
             lon_min, lat_min, lon_max, lat_max, w_pixels, h_pixels

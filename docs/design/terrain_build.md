@@ -660,10 +660,12 @@ UTM grid-north as if it were true north, so every tile is rotated by the local g
 convergence angle γ (≈ (λ − λ₀)·sin φ, ≈ 1.6° at KSBA) about its own centre; neighbouring
 tiles rotate about different centres and continuous features tear at the seam.  The
 reprojection derotates grid-north to true north per pixel, keeping features registered
-across seams.  The read stays windowed (only the source window covering the tile bbox is
-touched) so the per-tile memory bound from the sampling design (§Design Decisions) is
-preserved.  EPSG:4326 sources (Sentinel-2, Landsat) need no reprojection — their window
-maps linearly to the tile grid — and take the direct windowed-read path.  See §OQ-TB-7.
+across seams.  The read is **decimated on read** (`out_shape`-capped to ~2× the tile's
+output grid), so a region-spanning coarse tile reads a bounded block rather than the full
+native window (tens of thousands of px per side ≈ multiple GB) — preserving the per-tile
+memory bound from the sampling design (§Design Decisions).  EPSG:4326 sources (Sentinel-2,
+Landsat) need no reprojection — their window maps linearly to the tile grid — and take the
+direct windowed-read path.  See §OQ-TB-7.
 
 ### Sentinel-2 and Landsat Imagery
 
@@ -1678,10 +1680,11 @@ imagery.
 ### Resolution
 
 **Alternative 1 — windowed reprojection.** `_read_source_rgb` reprojects any non-EPSG:4326 source
-onto the tile's geographic grid with `rasterio.warp.reproject` over a padded, bounded source
-window; EPSG:4326 sources keep the direct windowed read. This derotates grid-north to true north
-per pixel, so per-tile azimuth rotation is removed and features stay registered across seams,
-while memory stays window-bounded. It requires a terrain **rebuild** to regenerate the tile
+onto the tile's geographic grid with `rasterio.warp.reproject` over a padded source window read
+**decimated** (`out_shape`-capped to ~2× the tile's output grid, so a region-spanning coarse tile
+reads a bounded block rather than the full native window); EPSG:4326 sources keep the direct
+windowed read. This derotates grid-north to true north per pixel, so per-tile azimuth rotation is
+removed and features stay registered across seams, while memory stays window-bounded. It requires a terrain **rebuild** to regenerate the tile
 textures (the shear is baked into the shipped JPEGs). A regression test builds a UTM source off
 its central meridian (non-zero γ) carrying a true-north-aligned edge and asserts `render_mosaic`
 keeps the edge vertical to within ~1 px / matches a reference `reproject` — the old linear-stretch
