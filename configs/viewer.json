@@ -1,19 +1,25 @@
 {
     "schema_version": 1,
 
-    "_comment": "Live-sim viewer appearance. Read by the Godot viewer (TerrainLoader.gd) at startup via the --viewer-config launch arg (run_sim.sh). Edit and relaunch run_sim.sh to change the look; independent of the terrain build. Colors/vectors are [r, g, b]. Terrain uses an affine grade: out = albedo*gain + offset (gain default [1,1,1], offset default [0,0,0], offset may be negative), then contrast then saturation. Sky top_color/horizon_color are ABSOLUTE. contrast/saturation/brightness are multipliers where 1.0 = source.",
+    "_comment": "Live-sim viewer appearance + window. Read by the Godot viewer (TerrainLoader.gd) at startup via the --viewer-config launch arg (run_sim.sh). Edit and relaunch run_sim.sh to change; independent of the terrain build. window.mode is windowed | maximized | fullscreen | exclusive_fullscreen. Colors/vectors are [r, g, b]. Terrain uses an affine grade: out = albedo*gain + offset (gain default [1,1,1], offset default [0,0,0], offset may be negative), then contrast then saturation. Sky top_color/horizon_color are ABSOLUTE. contrast/saturation/brightness are multipliers where 1.0 = source.",
+
+    "window": {
+        "width": 1920,
+        "height": 1200,
+        "mode": "windowed"
+    },
 
     "terrain": {
-        "gain": [1.0, 1.0, 1.0],
-        "offset": [0.0, 0.0, 0.0],
-        "contrast": 1.0,
-        "saturation": 1.0
+        "gain": [0.4, 0.25, 0.25],
+        "offset": [0.0, -0.05, -0.1],
+        "contrast": 0.75,
+        "saturation": 0.75
     },
 
     "sky": {
         "top_color": [0.385, 0.454, 0.55],
         "horizon_color": [0.6463, 0.6558, 0.6708],
-        "brightness": 1.0,
+        "brightness": 0.5,
         "saturation": 1.0
     }
 }

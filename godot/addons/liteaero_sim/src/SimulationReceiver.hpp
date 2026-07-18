@@ -57,10 +57,11 @@ private:
     GodotFrame frame_curr_;
 
     // Latest received HUD data (not interpolated — display raw sim values).
-    float latest_height_wgs84_m_ = 0.f;
-    float latest_height_msl_m_   = 0.f;
-    float latest_airspeed_mps_   = 0.f;
-    float latest_agl_m_          = -1.f;  // -1 = no terrain
+    float latest_height_wgs84_m_    = 0.f;
+    float latest_height_msl_m_      = 0.f;
+    float latest_airspeed_mps_      = 0.f;
+    float latest_agl_m_             = -1.f;  // -1 = no terrain
+    float latest_velocity_down_mps_ = 0.f;   // NED down; HUD V/S = -this
 
     // HUD overlay label created programmatically in _ready().
     Label* hud_label_ = nullptr;

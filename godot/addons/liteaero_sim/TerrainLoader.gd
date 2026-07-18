@@ -568,6 +568,9 @@ func _apply_viewer_config() -> void:
 	var cfg := _load_viewer_config()
 	if cfg.is_empty():
 		return
+	var win: Dictionary = cfg.get("window", {})
+	if not win.is_empty():
+		_apply_window(win)
 	var t: Dictionary = cfg.get("terrain", {})
 	if t.has("gain"):       terrain_gain = _color_from_array(t["gain"], terrain_gain)
 	if t.has("offset"):     terrain_offset = _color_from_array(t["offset"], terrain_offset)
@@ -605,6 +608,28 @@ func _color_from_array(v: Variant, fallback: Color) -> Color:
 		var a := v as Array
 		return Color(float(a[0]), float(a[1]), float(a[2]))
 	return fallback
+
+
+## Set the viewer window size and mode from the config `window` block. Fields are optional.
+func _apply_window(win: Dictionary) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var window := get_window()
+	if window == null:
+		return
+	var w := int(win.get("width", 0))
+	var h := int(win.get("height", 0))
+	if w > 0 and h > 0:
+		window.mode = Window.MODE_WINDOWED  # size only applies in windowed mode
+		window.size = Vector2i(w, h)
+		window.move_to_center()
+	match str(win.get("mode", "")).to_lower():
+		"windowed":             window.mode = Window.MODE_WINDOWED
+		"maximized":            window.mode = Window.MODE_MAXIMIZED
+		"fullscreen":           window.mode = Window.MODE_FULLSCREEN
+		"exclusive_fullscreen": window.mode = Window.MODE_EXCLUSIVE_FULLSCREEN
+		"":                     pass
+		_: push_warning("TerrainLoader: unknown window.mode '%s'" % str(win.get("mode", "")))
 
 
 func _load_config() -> Dictionary:

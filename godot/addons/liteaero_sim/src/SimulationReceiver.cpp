@@ -224,7 +224,7 @@ void SimulationReceiver::_create_hud() {
     label->set_offset(SIDE_LEFT,  -230.0f);
     label->set_offset(SIDE_RIGHT, -10.0f);
     label->set_offset(SIDE_TOP,    20.0f);
-    label->set_offset(SIDE_BOTTOM, 110.0f);
+    label->set_offset(SIDE_BOTTOM, 140.0f);
     label->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_RIGHT);
     canvas->add_child(label);
     hud_label_ = label;
@@ -248,10 +248,14 @@ void SimulationReceiver::_update_hud() {
     text       += String("ALT  ") + String::num_int64(alt_ft) + " ft\n";
     if (latest_agl_m_ >= 0.f) {
         const int agl_ft = static_cast<int>(latest_agl_m_ * 3.28084f);
-        text += String("AGL  ") + String::num_int64(agl_ft) + " ft";
+        text += String("AGL  ") + String::num_int64(agl_ft) + " ft\n";
     } else {
-        text += String("AGL  ---");
+        text += String("AGL  ---\n");
     }
+    // Vertical speed (ft/s, climb positive) from the NED down-velocity (proto field 11).
+    const int vs_fps = static_cast<int>(Math::round(-latest_velocity_down_mps_ * 3.28084f));
+    text += String("V/S  ") + (vs_fps >= 0 ? String("+") : String("")) +
+            String::num_int64(vs_fps) + " fps";
     hud_label_->set_text(text);
 }
 
@@ -281,10 +285,11 @@ void SimulationReceiver::_decode_frame(const uint8_t* data, int size) {
     const Quaternion rot = (r_ned_to_godot * q_b2n).normalized();
 
     // Store latest HUD data from this received frame.
-    latest_height_wgs84_m_ = frame.height_wgs84_m();
-    latest_height_msl_m_   = frame.height_msl_m();
-    latest_airspeed_mps_   = frame.airspeed_mps();
-    latest_agl_m_          = frame.agl_m();
+    latest_height_wgs84_m_    = frame.height_wgs84_m();
+    latest_height_msl_m_      = frame.height_msl_m();
+    latest_airspeed_mps_      = frame.airspeed_mps();
+    latest_agl_m_             = frame.agl_m();
+    latest_velocity_down_mps_ = frame.velocity_down_mps();
 
     // Shift curr -> prev, store new frame in curr.
     frame_prev_ = frame_curr_;

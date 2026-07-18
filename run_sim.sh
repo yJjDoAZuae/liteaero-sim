@@ -22,6 +22,7 @@ cd "$SCRIPT_DIR"
 # ---------------------------------------------------------------------------
 CONFIG="./configs/small_uas_ksba_flight.json"
 TERRAIN="./data/terrain/small_uas_ksba_flight/terrain_config.json"
+VIEWER_CONFIG="./configs/viewer.json"
 JOYSTICK_CONFIG="./python/gx12_config.json"
 LIVE_SIM_EXE="./build/tools/live_sim.exe"
 GODOT_PROJECT="./godot"
@@ -79,6 +80,13 @@ fi
 # Windows-native path (C:/Users/...) so Godot's FileAccess can open it.
 TERRAIN_ABS="$(cygpath -m "$(cd "$(dirname "$TERRAIN")" && pwd)/$(basename "$TERRAIN")")"
 
+# Viewer appearance config (optional): pass --viewer-config only when present.
+GODOT_USER_ARGS=(--terrain "$TERRAIN_ABS")
+if [[ -f "$VIEWER_CONFIG" ]]; then
+    VIEWER_ABS="$(cygpath -m "$(cd "$(dirname "$VIEWER_CONFIG")" && pwd)/$(basename "$VIEWER_CONFIG")")"
+    GODOT_USER_ARGS+=(--viewer-config "$VIEWER_ABS")
+fi
+
 # ---------------------------------------------------------------------------
 # Kill live_sim when this script exits (Ctrl+C, Godot closes, or error).
 # ---------------------------------------------------------------------------
@@ -125,7 +133,7 @@ fi
 echo "live_sim running (pid $LIVE_SIM_PID)"
 echo ""
 echo "Starting Godot..."
-echo "  $GODOT --path $GODOT_PROJECT -- --terrain $TERRAIN_ABS"
-"$GODOT" --path "$GODOT_PROJECT" -- --terrain "$TERRAIN_ABS"
+echo "  $GODOT --path $GODOT_PROJECT -- ${GODOT_USER_ARGS[*]}"
+"$GODOT" --path "$GODOT_PROJECT" -- "${GODOT_USER_ARGS[@]}"
 
 echo "Godot exited."

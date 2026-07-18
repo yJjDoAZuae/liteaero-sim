@@ -439,15 +439,18 @@ to change the look; a terrain rebuild never overwrites it.
 ```json
 {
     "schema_version": 1,
+    "window":  { "width": 1600, "height": 900, "mode": "windowed" },
     "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0 },
     "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 }
 }
 ```
 
+`window` sets the viewer window size and mode (`windowed` | `maximized` | `fullscreen` |
+`exclusive_fullscreen`); it is applied at startup by `_apply_window()` (ignored in headless).
 Colors/vectors are `[r, g, b]`. Terrain `gain`/`offset` are the affine factors (`offset` may be
 negative); `sky` `top_color`/`horizon_color` are absolute. Scalars are multipliers with
-1.0 = source. Values are applied before terrain loads, so streamed tiles are wrapped with the
-configured grade.
+1.0 = source. Appearance values are applied before terrain loads, so streamed tiles are wrapped
+with the configured grade.
 
 ### HUD
 
