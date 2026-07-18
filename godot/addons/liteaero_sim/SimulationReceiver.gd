@@ -66,7 +66,7 @@ func _create_hud() -> void:
 	label.set_offset(SIDE_LEFT,  -230.0)
 	label.set_offset(SIDE_RIGHT, -10.0)
 	label.set_offset(SIDE_TOP,    20.0)
-	label.set_offset(SIDE_BOTTOM, 110.0)
+	label.set_offset(SIDE_BOTTOM, 140.0)
 	canvas.add_child(label)
 	_hud_label = label
 
@@ -95,6 +95,7 @@ func _process(_delta: float) -> void:
 ##   field 1  (double): timestamp_s
 ##   field 4  (float):  height_wgs84_m       (HUD only)
 ##   field 5..8 (float): q_w/q_x/q_y/q_z     (body-to-NED quaternion)
+##   field 11 (float):  velocity_down_mps    (HUD only; V/S = -down)
 ##   field 12 (float):  airspeed_mps         (HUD only)
 ##   field 13 (float):  agl_m                (HUD only)
 ##   field 14 (float):  viewer_x_m
@@ -110,6 +111,7 @@ func _apply_frame(data: PackedByteArray) -> void:
 	var q_x: float          = parsed.get(6, 0.0)
 	var q_y: float          = parsed.get(7, 0.0)
 	var q_z: float          = parsed.get(8, 0.0)
+	var vs_down_mps: float  = parsed.get(11, 0.0)
 	var airspeed_mps: float = parsed.get(12, 0.0)
 	var agl_m: float        = parsed.get(13, -1.0)
 	var viewer_x: float     = parsed.get(14, 0.0)
@@ -140,7 +142,9 @@ func _apply_frame(data: PackedByteArray) -> void:
 			agl_line = "AGL  %d ft" % int(agl_m * 3.28084)
 		else:
 			agl_line = "AGL  ---"
-		_hud_label.text = "SPD  %d kt\nALT  %d ft\n%s" % [spd_kt, alt_ft, agl_line]
+		# Vertical speed: telemetry down-velocity (field 11); climb positive.
+		var vs_fps := int(round(-vs_down_mps * 3.28084))
+		_hud_label.text = "SPD  %d kt\nALT  %d ft\n%s\nV/S  %+d fps" % [spd_kt, alt_ft, agl_line, vs_fps]
 
 # ---------------------------------------------------------------------------
 ## Minimal proto3 varint + wire-type decoder.

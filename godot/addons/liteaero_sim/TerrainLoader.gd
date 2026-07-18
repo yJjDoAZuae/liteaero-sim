@@ -31,6 +31,9 @@
 
 extends Node
 
+## Runtime color-grade shader wrapped over each terrain tile's albedo texture (Terrain Appearance).
+const _TERRAIN_GRADE_SHADER: Shader = preload("res://addons/liteaero_sim/terrain_grade.gdshader")
+
 
 ## Rendering-LOD visibility bands are NOT fixed constants: they are recomputed at runtime from
 ## the live viewport height and field of view using the screen-space-error policy recorded in the
@@ -66,6 +69,68 @@ extends Node
 	set(v):
 		aircraft_transparency = v
 		_update_aircraft_color()
+
+# ---------------------------------------------------------------------------
+# Appearance controls — terrain (runtime color grade via per-tile material_override)
+# ---------------------------------------------------------------------------
+
+@export_group("Terrain Appearance")
+
+## Terrain color GAIN — per-channel multiplicative factor of the affine grade
+## (out = albedo*gain + offset).  White [1,1,1] = 1x.
+@export var terrain_gain: Color = Color(1.0, 1.0, 1.0):
+	set(v):
+		terrain_gain = v
+		_update_terrain_grade()
+
+## Terrain color OFFSET — per-channel additive offset of the affine grade.  Black = none.
+## May be negative via the config file; the Inspector color picker clamps to 0..1.
+@export var terrain_offset: Color = Color(0.0, 0.0, 0.0):
+	set(v):
+		terrain_offset = v
+		_update_terrain_grade()
+
+## Terrain contrast about mid-grey.  1.0 = source, 0 = flat grey, 2 = double.
+@export_range(0.0, 3.0, 0.01) var terrain_contrast: float = 1.0:
+	set(v):
+		terrain_contrast = v
+		_update_terrain_grade()
+
+## Terrain color saturation.  0 = greyscale, 1 = source, 2 = double.
+@export_range(0.0, 3.0, 0.01) var terrain_saturation: float = 1.0:
+	set(v):
+		terrain_saturation = v
+		_update_terrain_grade()
+
+# ---------------------------------------------------------------------------
+# Appearance controls — sky background
+# ---------------------------------------------------------------------------
+
+@export_group("Sky Appearance")
+
+## Sky zenith (top) color — ABSOLUTE.  Default = Godot ProceduralSkyMaterial default.
+@export var sky_top_color: Color = Color(0.385, 0.454, 0.55):
+	set(v):
+		sky_top_color = v
+		_update_sky()
+
+## Sky horizon color — ABSOLUTE.  Default = Godot ProceduralSkyMaterial default.
+@export var sky_horizon_color: Color = Color(0.6463, 0.6558, 0.6708):
+	set(v):
+		sky_horizon_color = v
+		_update_sky()
+
+## Sky brightness multiplier applied over the absolute colors.  1.0 = as-set.
+@export_range(0.0, 3.0, 0.01) var sky_brightness: float = 1.0:
+	set(v):
+		sky_brightness = v
+		_update_sky()
+
+## Sky color saturation.  0 = greyscale, 1 = as-set, 2 = double.
+@export_range(0.0, 3.0, 0.01) var sky_saturation: float = 1.0:
+	set(v):
+		sky_saturation = v
+		_update_sky()
 
 # ---------------------------------------------------------------------------
 # Camera controls
@@ -148,6 +213,11 @@ var _aircraft_center_world_y: float            = 0.0
 var _aircraft_mesh_node:    Node3D             = null
 var _aircraft_cg_prepos:    Vector3            = Vector3.ZERO  # CG in pre-position world space
 
+## Sky material (ProceduralSkyMaterial from the scene Environment) and its captured base
+## colors, so the Sky Appearance grade is re-derived from source rather than compounding.
+var _sky_material:          ProceduralSkyMaterial = null
+var _sky_base:              Dictionary            = {}
+
 # ---------------------------------------------------------------------------
 # Streamable-chunk terrain state (OQ-LS-20 / IP-LV-8)
 # ---------------------------------------------------------------------------
@@ -211,6 +281,10 @@ func _ready() -> void:
 	# higher value here guarantees _update_camera() sees the current-frame position.
 	process_priority = 1
 	_create_materials()
+	_capture_sky()
+	# Appearance from the viewer config (--viewer-config); applied before terrain loads so
+	# streamed tiles are wrapped with the configured grade and the sky is graded up front.
+	_apply_viewer_config()
 
 	var config := _load_config()
 	if config.is_empty():
@@ -367,15 +441,170 @@ func _apply_material_to_tree(node: Node, mat: Material) -> void:
 		_apply_material_to_tree(child, mat)
 
 # ---------------------------------------------------------------------------
+# Terrain appearance — runtime color grade (per-tile material_override)
+# ---------------------------------------------------------------------------
+
+## Wrap every terrain MeshInstance3D under `node` in the color-grade shader, preserving each
+## tile's own albedo texture.  Called when a chunk/GLB loads so streamed tiles are graded too.
+func _apply_terrain_grade(node: Node) -> void:
+	if node is MeshInstance3D:
+		_wrap_terrain_tile(node as MeshInstance3D)
+	for child: Node in node.get_children():
+		_apply_terrain_grade(child)
+
+
+func _wrap_terrain_tile(mi: MeshInstance3D) -> void:
+	if mi.material_override is ShaderMaterial:
+		return  # already wrapped
+	var base := mi.get_active_material(0)
+	if not (base is StandardMaterial3D):
+		return
+	var tex: Texture2D = (base as StandardMaterial3D).albedo_texture
+	if tex == null:
+		return
+	var sm := ShaderMaterial.new()
+	sm.shader = _TERRAIN_GRADE_SHADER
+	sm.set_shader_parameter("albedo_tex", tex)
+	_set_terrain_grade_params(sm)
+	mi.material_override = sm
+
+
+func _set_terrain_grade_params(sm: ShaderMaterial) -> void:
+	sm.set_shader_parameter("gain", Vector3(terrain_gain.r, terrain_gain.g, terrain_gain.b))
+	sm.set_shader_parameter("offset", Vector3(terrain_offset.r, terrain_offset.g, terrain_offset.b))
+	sm.set_shader_parameter("contrast", terrain_contrast)
+	sm.set_shader_parameter("saturation", terrain_saturation)
+
+
+## Re-push the grade uniforms to every wrapped terrain tile (on an Inspector change).
+func _update_terrain_grade() -> void:
+	if not is_inside_tree():
+		return
+	_update_terrain_grade_recursive(self)
+
+
+func _update_terrain_grade_recursive(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.material_override is ShaderMaterial:
+			_set_terrain_grade_params(mi.material_override as ShaderMaterial)
+	for child: Node in node.get_children():
+		_update_terrain_grade_recursive(child)
+
+# ---------------------------------------------------------------------------
+# Sky appearance — runtime brightness / saturation / tint of the ProceduralSkyMaterial
+# ---------------------------------------------------------------------------
+
+## Capture the scene sky material and its source colors once, so the grade is re-derived
+## from source each time (rather than compounding on the already-graded values).
+func _capture_sky() -> void:
+	var env := _find_environment(get_tree().root)
+	if env == null or env.sky == null:
+		return
+	var mat: Material = env.sky.sky_material
+	if mat is ProceduralSkyMaterial:
+		_sky_material = mat as ProceduralSkyMaterial
+		# Ground colors keep their scene baseline (sky top/horizon are set absolutely below).
+		_sky_base = {
+			"ground_bottom":  _sky_material.ground_bottom_color,
+			"ground_horizon": _sky_material.ground_horizon_color,
+		}
+		_update_sky()
+
+
+func _update_sky() -> void:
+	if _sky_material == null or _sky_base.is_empty():
+		return
+	# Sky dome uses the absolute configured colors; ground uses its captured baseline.
+	# brightness/saturation are applied over all four for a consistent dome.
+	_sky_material.sky_top_color        = _grade_sky_color(sky_top_color)
+	_sky_material.sky_horizon_color    = _grade_sky_color(sky_horizon_color)
+	_sky_material.ground_bottom_color  = _grade_sky_color(_sky_base["ground_bottom"])
+	_sky_material.ground_horizon_color = _grade_sky_color(_sky_base["ground_horizon"])
+
+
+## Apply the sky brightness (multiply) and saturation (luma lerp) over an absolute color.
+func _grade_sky_color(base: Color) -> Color:
+	var c := Color(base.r * sky_brightness, base.g * sky_brightness, base.b * sky_brightness)
+	var luma: float = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722
+	return Color(lerpf(luma, c.r, sky_saturation),
+				 lerpf(luma, c.g, sky_saturation),
+				 lerpf(luma, c.b, sky_saturation),
+				 base.a)
+
+
+func _find_environment(node: Node) -> Environment:
+	if node is WorldEnvironment and (node as WorldEnvironment).environment != null:
+		return (node as WorldEnvironment).environment
+	for child: Node in node.get_children():
+		var result := _find_environment(child)
+		if result != null:
+			return result
+	return null
+
+# ---------------------------------------------------------------------------
 
 func _get_terrain_config_path() -> String:
+	return _get_cmdline_value("--terrain")
+
+
+## Return the value following `flag` in Godot's `-- <user args>`, or "" if absent.
+func _get_cmdline_value(flag: String) -> String:
 	var user_args := OS.get_cmdline_user_args()
 	var i := 0
 	while i < user_args.size():
-		if user_args[i] == "--terrain" and i + 1 < user_args.size():
+		if user_args[i] == flag and i + 1 < user_args.size():
 			return user_args[i + 1]
 		i += 1
 	return ""
+
+# ---------------------------------------------------------------------------
+# Viewer appearance config (--viewer-config <path>)
+# ---------------------------------------------------------------------------
+
+## Load configs/viewer.json (path from --viewer-config) and apply terrain/sky appearance.
+## Missing file or keys fall back to the exported defaults, so the viewer still runs.
+func _apply_viewer_config() -> void:
+	var cfg := _load_viewer_config()
+	if cfg.is_empty():
+		return
+	var t: Dictionary = cfg.get("terrain", {})
+	if t.has("gain"):       terrain_gain = _color_from_array(t["gain"], terrain_gain)
+	if t.has("offset"):     terrain_offset = _color_from_array(t["offset"], terrain_offset)
+	if t.has("contrast"):   terrain_contrast = float(t["contrast"])
+	if t.has("saturation"): terrain_saturation = float(t["saturation"])
+	var s: Dictionary = cfg.get("sky", {})
+	if s.has("top_color"):     sky_top_color = _color_from_array(s["top_color"], sky_top_color)
+	if s.has("horizon_color"): sky_horizon_color = _color_from_array(s["horizon_color"], sky_horizon_color)
+	if s.has("brightness"):    sky_brightness = float(s["brightness"])
+	if s.has("saturation"):    sky_saturation = float(s["saturation"])
+
+
+func _load_viewer_config() -> Dictionary:
+	var path := _get_cmdline_value("--viewer-config")
+	if path.is_empty():
+		return {}
+	var resolved := _resolve_terrain_path(path)
+	if not FileAccess.file_exists(resolved):
+		push_warning("TerrainLoader: viewer config not found at '%s' — using default appearance" % resolved)
+		return {}
+	var f := FileAccess.open(resolved, FileAccess.READ)
+	if f == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if not (parsed is Dictionary):
+		push_warning("TerrainLoader: viewer config is not a JSON object at '%s'" % resolved)
+		return {}
+	print("TerrainLoader: viewer appearance from %s" % resolved)
+	return parsed as Dictionary
+
+
+## Parse a [r, g, b] JSON array into a Color; return `fallback` if malformed.
+func _color_from_array(v: Variant, fallback: Color) -> Color:
+	if v is Array and (v as Array).size() >= 3:
+		var a := v as Array
+		return Color(float(a[0]), float(a[1]), float(a[2]))
+	return fallback
 
 
 func _load_config() -> Dictionary:
@@ -417,6 +646,7 @@ func _load_single_glb_terrain(glb_path: String) -> bool:
 	add_child(terrain_node)
 	_diag_print_terrain_positions(terrain_node)
 	_apply_visibility_ranges(terrain_node)
+	_apply_terrain_grade(terrain_node)
 	return true
 
 
@@ -507,6 +737,7 @@ func _load_chunk(lod: int, cx: int, cy: int) -> bool:
 	node.name = "chunk_%s" % key
 	_terrain_root.add_child(node)
 	_apply_visibility_ranges(node)
+	_apply_terrain_grade(node)
 	_loaded_chunks[key] = node
 	return true
 

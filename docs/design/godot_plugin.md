@@ -378,66 +378,83 @@ camera frame, not behind it. `directional_shadow_max_distance = 100.0` and
 `directional_shadow_mode = 0` (orthogonal) ensure the shadow is visible at typical
 low-altitude test altitudes.
 
-### Mesh Appearance Shader
+### Appearance — Aircraft, Terrain, Sky
 
-`TerrainLoader` creates two `ShaderMaterial` instances at startup. The shader is
-defined inline as a GDScript string constant (`_SHADER_CODE`) in `TerrainLoader.gd`
-and instantiated via `Shader.new()` — this avoids Godot's resource import pipeline
-and ensures the shader is always available without a file load step. The file
-`addons/liteaero_sim/mesh_appearance.gdshader` is kept as the authoritative readable
-copy but is not loaded at runtime. The shader provides saturation, brightness,
-contrast, and transparency controls as uniforms.
+`TerrainLoader` applies three independent, runtime-adjustable colour grades — to the
+aircraft mesh, the terrain, and the sky background. Their values come from the **viewer
+appearance config** (below), so the look is data-driven rather than hard-coded, and no
+terrain build is required to change it.
 
-| Material | Applied to | `use_vertex_color` | Base color |
+**Aircraft mesh** — a `StandardMaterial3D` (`_aircraft_material`) whose `albedo_color` is
+modulated from the base colour `#4A7FC1` (PP-F25) by `aircraft_brightness`,
+`aircraft_contrast`, `aircraft_saturation`, and `aircraft_transparency`
+(`_update_aircraft_color()`), applied via `material_override` with `cast_shadow = ON`.
+
+**Terrain** — each terrain tile carries its own glTF albedo texture, so a single shared
+material cannot grade them. Instead every tile `MeshInstance3D` is wrapped in a
+`ShaderMaterial` `material_override` running
+[`addons/liteaero_sim/terrain_grade.gdshader`](../../godot/addons/liteaero_sim/terrain_grade.gdshader):
+the tile's own texture is bound to the `albedo_tex` uniform and the grade is a per-channel
+**affine** transform — `out = albedo * gain + offset` — followed by `contrast` and
+`saturation`. The additive `offset` (unlike a multiplicative tint) can introduce colour the
+imagery lacks. The shader writes graded `ALBEDO` (a lit `spatial` shader with `cull_back`),
+so scene lighting and shadows are unchanged from the source `StandardMaterial3D`. Wrapping
+happens as each chunk loads (`_apply_terrain_grade()`), so streamed-in tiles are graded too;
+a value change re-pushes the uniforms to every wrapped tile (`_update_terrain_grade()`).
+
+**Sky** — the sky dome colours are set **absolutely** from `sky_top_color` (zenith) and
+`sky_horizon_color` on the scene `ProceduralSkyMaterial` (`_update_sky()`); the ground half
+keeps its scene baseline (captured once in `_capture_sky()`). `sky_brightness` and
+`sky_saturation` are then applied over all four as overall multipliers. Unlike the terrain
+tint (a multiplicative filter over imagery), the sky colours are direct — set the sky to any
+colour, including hues the default gradient lacks.
+
+Grade operation order: terrain — affine (`albedo * gain + offset`) → contrast (scale about
+mid-grey 0.5) → saturation (BT.709 luminance lerp); aircraft — brightness → contrast →
+saturation (StandardMaterial3D albedo modulation); sky — absolute colour → brightness →
+saturation.
+
+| Property | Range | Default | Target |
 | --- | --- | --- | --- |
-| `_terrain_material` | All terrain tile `MeshInstance3D` nodes | `true` | — (reads vertex colors from GLB) |
-| `_aircraft_material` | All `MeshInstance3D` nodes in aircraft mesh | `false` | `#4A7FC1` (medium blue, PP-F25) |
+| `terrain_gain` | Color | white [1,1,1] | terrain — affine multiplicative factor |
+| `terrain_offset` | Color | black [0,0,0] | terrain — affine additive offset (may be negative) |
+| `terrain_contrast` / `terrain_saturation` | 0.0–3.0 | 1.0 | terrain |
+| `sky_top_color` / `sky_horizon_color` | Color | Godot sky defaults | sky (absolute) |
+| `sky_brightness` / `sky_saturation` | 0.0–3.0 | 1.0 | sky |
+| `aircraft_brightness` / `aircraft_contrast` / `aircraft_saturation` | 0.0–2.0 | 1.0 | aircraft mesh |
+| `aircraft_transparency` | 0.0–1.0 | 1.0 | aircraft mesh |
 
-All terrain tiles share the **same** `ShaderMaterial` instance (not copies), so a
-single Inspector slider change propagates to the entire terrain simultaneously.
+These are `@export` properties on `TerrainLoader` (so they are also editable in the editor
+Inspector during Play), but their runtime values come from the viewer config.
 
-**CULL_DISABLED shadow pitfall:** Terrain tile normals point downward in Godot (trimesh
-Z-up exports arrive in Godot Y-up space with faces that face away from the camera when
-viewed from above). The terrain material therefore uses `CULL_DISABLED` so both face
-orientations render. However, Godot has a known bug: meshes with `CULL_DISABLED`
-do not cast shadows regardless of the `cast_shadow` setting. The workaround is to set
-`cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF` on all terrain
-`MeshInstance3D` nodes (terrain receives shadows from the aircraft but does not cast
-its own). The aircraft uses the default `CULL_BACK` material and `cast_shadow = ON`.
+### Viewer Appearance Config
 
-`_apply_material_to_tree()` takes an `is_terrain` flag to implement this:
+Appearance values live in a standalone JSON config — [`configs/viewer.json`](../../configs/viewer.json)
+— read by `TerrainLoader._apply_viewer_config()` at startup. The path is passed as the
+`--viewer-config <path>` Godot user arg (added by `run_sim.sh` alongside `--terrain`); if
+the arg is absent or the file is missing/malformed, the exported defaults are used and the
+viewer still runs. The config is **independent of the terrain build** — edit it and relaunch
+to change the look; a terrain rebuild never overwrites it.
 
-```gdscript
-func _apply_material_to_tree(node: Node, mat: Material, is_terrain: bool = false) -> void:
-    if node is MeshInstance3D:
-        var mi := node as MeshInstance3D
-        mi.material_override = mat
-        mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if is_terrain \
-            else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-    for child: Node in node.get_children():
-        _apply_material_to_tree(child, mat, is_terrain)
+```json
+{
+    "schema_version": 1,
+    "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0 },
+    "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 }
+}
 ```
 
-The controls are exposed as `@export` properties on the `TerrainLoader` node and
-are adjustable in the Godot Inspector while the scene is running, with no terrain
-rebuild required:
+Colors/vectors are `[r, g, b]`. Terrain `gain`/`offset` are the affine factors (`offset` may be
+negative); `sky` `top_color`/`horizon_color` are absolute. Scalars are multipliers with
+1.0 = source. Values are applied before terrain loads, so streamed tiles are wrapped with the
+configured grade.
 
-| Property | Range | Default | Description |
-| --- | --- | --- | --- |
-| `terrain_saturation` | 0.0–2.0 | 1.0 | 0 = greyscale, 1 = source, 2 = double saturation |
-| `terrain_brightness` | 0.0–2.0 | 1.0 | 0 = black, 1 = source, 2 = double brightness |
-| `terrain_contrast` | 0.0–2.0 | 1.0 | 0 = flat grey, 1 = source, 2 = double contrast |
-| `terrain_transparency` | 0.0–1.0 | 1.0 | 0 = invisible, 1 = fully opaque |
-| `aircraft_saturation` | 0.0–2.0 | 1.0 | same scale as terrain |
-| `aircraft_brightness` | 0.0–2.0 | 1.0 | same scale as terrain |
-| `aircraft_contrast` | 0.0–2.0 | 1.0 | same scale as terrain |
-| `aircraft_transparency` | 0.0–1.0 | 1.0 | same scale as terrain |
+### HUD
 
-The shader applies operations in this order: brightness (multiplicative scale) →
-contrast (scale around mid-grey 0.5) → saturation (interpolate toward perceptual
-luminance using BT.709 weights). Alpha is set directly from the transparency
-uniform. `depth_draw_always` ensures depth is written even in the transparent
-render pass, preventing terrain from sorting behind the background clear color.
+`SimulationReceiver` draws a corner HUD updated per received frame: airspeed (`SPD`, kt),
+MSL altitude (`ALT`, ft), height above terrain (`AGL`, ft), and vertical speed (`V/S`,
+ft/s, climb positive). Vertical speed is read from the telemetry `velocity_down_mps`
+(proto field 11); it requires no simulation rebuild as the broadcaster already sends it.
 
 ### Aircraft mesh loading
 
