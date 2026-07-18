@@ -102,6 +102,19 @@ const _TERRAIN_GRADE_SHADER: Shader = preload("res://addons/liteaero_sim/terrain
 		terrain_saturation = v
 		_update_terrain_grade()
 
+## Terrain value/brightness — scalar multiplier over the whole grade.  1.0 = source, 0 = black.
+@export_range(0.0, 3.0, 0.01) var terrain_value: float = 1.0:
+	set(v):
+		terrain_value = v
+		_update_terrain_grade()
+
+## Terrain specular reflectance.  0 = matte (default; the highlight does not scale with albedo,
+## so a matte surface darkens cleanly).  Raise for a wet/shiny look.
+@export_range(0.0, 1.0, 0.01) var terrain_specular: float = 0.0:
+	set(v):
+		terrain_specular = v
+		_update_terrain_grade()
+
 # ---------------------------------------------------------------------------
 # Appearance controls — sky background
 # ---------------------------------------------------------------------------
@@ -474,6 +487,8 @@ func _set_terrain_grade_params(sm: ShaderMaterial) -> void:
 	sm.set_shader_parameter("offset", Vector3(terrain_offset.r, terrain_offset.g, terrain_offset.b))
 	sm.set_shader_parameter("contrast", terrain_contrast)
 	sm.set_shader_parameter("saturation", terrain_saturation)
+	sm.set_shader_parameter("value", terrain_value)
+	sm.set_shader_parameter("specular", terrain_specular)
 
 
 ## Re-push the grade uniforms to every wrapped terrain tile (on an Inspector change).
@@ -576,6 +591,8 @@ func _apply_viewer_config() -> void:
 	if t.has("offset"):     terrain_offset = _color_from_array(t["offset"], terrain_offset)
 	if t.has("contrast"):   terrain_contrast = float(t["contrast"])
 	if t.has("saturation"): terrain_saturation = float(t["saturation"])
+	if t.has("value"):      terrain_value = float(t["value"])
+	if t.has("specular"):   terrain_specular = float(t["specular"])
 	var s: Dictionary = cfg.get("sky", {})
 	if s.has("top_color"):     sky_top_color = _color_from_array(s["top_color"], sky_top_color)
 	if s.has("horizon_color"): sky_horizon_color = _color_from_array(s["horizon_color"], sky_horizon_color)

@@ -1,24 +1,27 @@
 {
     "schema_version": 1,
 
-    "_comment": "Live-sim viewer appearance + window. Read by the Godot viewer (TerrainLoader.gd) at startup via the --viewer-config launch arg (run_sim.sh). Edit and relaunch run_sim.sh to change; independent of the terrain build. window.mode is windowed | maximized | fullscreen | exclusive_fullscreen. Colors/vectors are [r, g, b]. Terrain uses an affine grade: out = albedo*gain + offset (gain default [1,1,1], offset default [0,0,0], offset may be negative), then contrast then saturation. Sky top_color/horizon_color are ABSOLUTE. contrast/saturation/brightness are multipliers where 1.0 = source.",
+    "_comment": "Live-sim viewer appearance + window. Read by the Godot viewer (TerrainLoader.gd) at startup via the --viewer-config launch arg (run_sim.sh). Edit and relaunch run_sim.sh to change; independent of the terrain build. window.mode is windowed | maximized | fullscreen | exclusive_fullscreen. Colors/vectors are [r, g, b]. Terrain grade: out = clamp((albedo*gain + offset), contrast about 0.5, saturation) * value; then rendered matte with specular (0 = matte, so value/gain cleanly darken; raise for a shiny look). gain default [1,1,1], offset default [0,0,0] (may be negative), value/contrast/saturation default 1.0, specular default 0.0. Sky top_color/horizon_color are ABSOLUTE; brightness/saturation are multipliers where 1.0 = source.",
 
     "window": {
-        "width": 1920,
-        "height": 1200,
+        "width": 2560,
+        "height": 1440,
         "mode": "windowed"
     },
 
+
     "terrain": {
-        "gain": [0.4, 0.25, 0.25],
-        "offset": [0.0, -0.05, -0.1],
+        "gain": [1.0, 0.75, 0.5],
+        "offset": [0.1, 0.0, 0.0],
         "contrast": 0.75,
-        "saturation": 0.75
+        "saturation": 0.75,
+        "value": 0.05,
+        "specular": 0.01
     },
 
     "sky": {
-        "top_color": [0.385, 0.454, 0.55],
-        "horizon_color": [0.6463, 0.6558, 0.6708],
+        "top_color": [0.3, 0.4, 0.55],
+        "horizon_color": [0.5, 0.5, 0.7],
         "brightness": 0.5,
         "saturation": 1.0
     }

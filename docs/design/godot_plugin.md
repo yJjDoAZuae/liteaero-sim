@@ -395,12 +395,16 @@ material cannot grade them. Instead every tile `MeshInstance3D` is wrapped in a
 `ShaderMaterial` `material_override` running
 [`addons/liteaero_sim/terrain_grade.gdshader`](../../godot/addons/liteaero_sim/terrain_grade.gdshader):
 the tile's own texture is bound to the `albedo_tex` uniform and the grade is a per-channel
-**affine** transform — `out = albedo * gain + offset` — followed by `contrast` and
-`saturation`. The additive `offset` (unlike a multiplicative tint) can introduce colour the
-imagery lacks. The shader writes graded `ALBEDO` (a lit `spatial` shader with `cull_back`),
-so scene lighting and shadows are unchanged from the source `StandardMaterial3D`. Wrapping
-happens as each chunk loads (`_apply_terrain_grade()`), so streamed-in tiles are graded too;
-a value change re-pushes the uniforms to every wrapped tile (`_update_terrain_grade()`).
+**affine** transform — `out = albedo * gain + offset` — then `contrast`, `saturation`, and a
+scalar `value` (overall brightness). The additive `offset` (unlike a multiplicative tint) can
+introduce colour the imagery lacks. The result is written to `ALBEDO` and the surface is forced
+**matte** — `ROUGHNESS = 1`, `METALLIC = 0`, `SPECULAR = specular` (default 0). This matters:
+Godot's default specular is a white highlight that does **not** scale with albedo, so with it on,
+dialing the albedo down neutralises the surface toward grey instead of darkening it (`gain = 0`
+renders light-grey rather than black); with `specular = 0` the terrain darkens cleanly. It stays a
+lit `spatial` shader with `cull_back`, so scene lighting and shadows are unchanged. Wrapping
+happens as each chunk loads (`_apply_terrain_grade()`), so streamed-in tiles are graded too; a
+value change re-pushes the uniforms to every wrapped tile (`_update_terrain_grade()`).
 
 **Sky** — the sky dome colours are set **absolutely** from `sky_top_color` (zenith) and
 `sky_horizon_color` on the scene `ProceduralSkyMaterial` (`_update_sky()`); the ground half
@@ -418,7 +422,8 @@ saturation.
 | --- | --- | --- | --- |
 | `terrain_gain` | Color | white [1,1,1] | terrain — affine multiplicative factor |
 | `terrain_offset` | Color | black [0,0,0] | terrain — affine additive offset (may be negative) |
-| `terrain_contrast` / `terrain_saturation` | 0.0–3.0 | 1.0 | terrain |
+| `terrain_contrast` / `terrain_saturation` / `terrain_value` | 0.0–3.0 | 1.0 | terrain (`value` = overall brightness) |
+| `terrain_specular` | 0.0–1.0 | 0.0 | terrain — 0 = matte (highlight is albedo-independent) |
 | `sky_top_color` / `sky_horizon_color` | Color | Godot sky defaults | sky (absolute) |
 | `sky_brightness` / `sky_saturation` | 0.0–3.0 | 1.0 | sky |
 | `aircraft_brightness` / `aircraft_contrast` / `aircraft_saturation` | 0.0–2.0 | 1.0 | aircraft mesh |
@@ -440,7 +445,7 @@ to change the look; a terrain rebuild never overwrites it.
 {
     "schema_version": 1,
     "window":  { "width": 1600, "height": 900, "mode": "windowed" },
-    "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0 },
+    "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0, "value": 1.0, "specular": 0.0 },
     "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 }
 }
 ```
