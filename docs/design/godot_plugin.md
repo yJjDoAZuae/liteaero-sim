@@ -49,6 +49,8 @@ godot/
 │       ├── liteaero_sim.gdextension       ← plugin manifest (Godot reads this)
 │       ├── SimulationReceiver.gd           ← replaced by C++ once GDExtension is built
 │       ├── TerrainLoader.gd               ← remains GDScript (no C++ needed)
+│       ├── terrain_grade.gdshader         ← per-tile terrain color-grade shader (Appearance)
+│       ├── bin/liteaero_sim_gdext.dll     ← built GDExtension (staged by ./build.sh gdext)
 │       └── src/
 │           ├── CMakeLists.txt             ← GDExtension shared library build
 │           ├── register_types.hpp
@@ -57,6 +59,8 @@ godot/
 │           └── SimulationReceiver.cpp
 └── scenes/
     └── World.tscn
+
+configs/viewer.json                        ← viewer window + appearance config (--viewer-config)
 ```
 
 Once the GDExtension is built and the shared library placed at the path declared
@@ -237,8 +241,12 @@ private:
     int    max_datagrams_per_frame_ = 10;
 
     int    socket_fd_               = -1;   // POSIX / WinSock UDP socket, non-blocking
-    double latest_height_msl_m_     = 0.0;
-    double latest_agl_m_            = 0.0;
+    // Latest HUD values from the received frame (see §HUD).
+    float  latest_airspeed_mps_      = 0.f;
+    float  latest_height_msl_m_      = 0.f;
+    float  latest_agl_m_             = -1.f;  // -1 = no terrain
+    float  latest_velocity_down_mps_ = 0.f;   // NED down; V/S = -this
+    Label* hud_label_                = nullptr;
 };
 
 } // namespace godot
@@ -336,8 +344,10 @@ void SimulationReceiver::_apply_frame(const uint8_t* data, int size) {
         static_cast<float>(frame.viewer_y_m()),
         static_cast<float>(frame.viewer_z_m())));
 
-    latest_height_msl_m_ = frame.height_msl_m();
-    latest_agl_m_        = frame.agl_m();
+    latest_airspeed_mps_      = frame.airspeed_mps();
+    latest_height_msl_m_      = frame.height_msl_m();
+    latest_agl_m_             = frame.agl_m();
+    latest_velocity_down_mps_ = frame.velocity_down_mps();  // proto field 11; HUD V/S
 
     // Body-to-NED quaternion -> body-to-Godot quaternion.
     // NED->Godot rotation matrix (from live_sim_view.md §Coordinate System):
@@ -410,13 +420,13 @@ value change re-pushes the uniforms to every wrapped tile (`_update_terrain_grad
 `sky_horizon_color` on the scene `ProceduralSkyMaterial` (`_update_sky()`); the ground half
 keeps its scene baseline (captured once in `_capture_sky()`). `sky_brightness` and
 `sky_saturation` are then applied over all four as overall multipliers. Unlike the terrain
-tint (a multiplicative filter over imagery), the sky colours are direct — set the sky to any
-colour, including hues the default gradient lacks.
+grade (a per-channel multiply/offset of the imagery), the sky colours are direct — set the sky
+to any colour, including hues the default gradient lacks.
 
 Grade operation order: terrain — affine (`albedo * gain + offset`) → contrast (scale about
-mid-grey 0.5) → saturation (BT.709 luminance lerp); aircraft — brightness → contrast →
-saturation (StandardMaterial3D albedo modulation); sky — absolute colour → brightness →
-saturation.
+mid-grey 0.5) → saturation (BT.709 luminance lerp) → scalar `value` → matte
+(`SPECULAR = specular`); aircraft — brightness → contrast → saturation (StandardMaterial3D
+albedo modulation); sky — absolute colour → brightness → saturation.
 
 | Property | Range | Default | Target |
 | --- | --- | --- | --- |

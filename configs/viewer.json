@@ -14,9 +14,9 @@
         "gain": [1.0, 0.75, 0.5],
         "offset": [0.1, 0.0, 0.0],
         "contrast": 0.75,
-        "saturation": 0.75,
-        "value": 0.05,
-        "specular": 0.01
+        "saturation": 1.0,
+        "value": 0.2,
+        "specular": 0.05
     },
 
     "sky": {
