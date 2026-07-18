@@ -456,14 +456,16 @@ to change the look; a terrain rebuild never overwrites it.
     "schema_version": 1,
     "window":  { "width": 1600, "height": 900, "mode": "windowed" },
     "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0, "value": 1.0, "specular": 0.0 },
-    "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 }
+    "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 },
+    "grid":    { "enabled": false, "spacing_m": 1000.0, "color": [0.0, 1.0, 0.0], "opacity": 0.5, "line_width_m": 5.0 }
 }
 ```
 
 `window` sets the viewer window size and mode (`windowed` | `maximized` | `fullscreen` |
 `exclusive_fullscreen`); it is applied at startup by `_apply_window()` (ignored in headless).
 Colors/vectors are `[r, g, b]`. Terrain `gain`/`offset` are the affine factors (`offset` may be
-negative); `sky` `top_color`/`horizon_color` are absolute. Scalars are multipliers with
+negative); `sky` `top_color`/`horizon_color` are absolute. `grid` overlays a conformal
+reference grid on the terrain (see §Conformal Terrain Grid). Scalars are multipliers with
 1.0 = source. Appearance values are applied before terrain loads, so streamed tiles are wrapped
 with the configured grade.
 
@@ -473,6 +475,81 @@ with the configured grade.
 MSL altitude (`ALT`, ft), height above terrain (`AGL`, ft), and vertical speed (`V/S`,
 ft/s, climb positive). Vertical speed is read from the telemetry `velocity_down_mps`
 (proto field 11); it requires no simulation rebuild as the broadcaster already sends it.
+
+### Conformal Terrain Grid
+
+An optional reference grid drawn on the terrain surface: north/east-aligned lines at equal
+metric spacing measured from the terrain-region centroid. Requirements: runtime-configurable
+spacing, color, opacity, and line width; **not** baked into the mosaic texture; and it must
+never lie above or below the terrain at any LOD.
+
+**Approach — procedural grid inside the terrain fragment shader.** The grid is a term in
+[`terrain_grade.gdshader`](../../godot/addons/liteaero_sim/terrain_grade.gdshader) (the per-tile
+terrain material), composited over the graded albedo just before the final clamp. Because it is
+computed per fragment **on the terrain surface itself**, it is conformal by construction and can
+never depth-fight, float, or sink relative to the terrain — the grid *is* part of the terrain
+surface shading. It carries no geometry and no texture, so spacing and appearance are live
+uniforms, satisfying "not baked" and "runtime reconfigurable". This is preferred over the
+alternatives — draped line geometry (needs per-LOD regeneration and is prone to z-fighting) and
+a projected `Decal` (bounded box, limited resolution over a multi-km region).
+
+**Frame and anchoring.** Terrain tiles are placed into the single world-origin ENU frame via
+their node transform (translation + curvature rotation; see §OQ-TB-2 / terrain_build.md §OQ-TB-7),
+and the world origin is the terrain-region centroid. So the fragment world position
+`p = (MODEL_MATRIX · vec4(VERTEX, 1)).xyz` gives **east `= p.x`** and **north `= −p.z`** measured
+from the centroid. Lines at `east, north = k · spacing` (integer `k`) are therefore north/east
+aligned, equally spaced in metres from the centroid, and **seamless across tiles**: `p` is
+continuous across shared edges (verified to 0.000 m) and the per-tile curvature rotation is
+absorbed by `MODEL_MATRIX`, so no per-tile grid offset arises. The vertex stage passes `p` to the
+fragment stage as a `varying`.
+
+**Line rendering (physical width, analytic anti-aliasing).** Line width is a physical world size,
+`line_width_m`. For each axis coordinate `c` (east, north, in metres): grid coordinate
+`g = c / spacing`; distance to the nearest line in metres `d = abs(fract(g − 0.5) − 0.5) · spacing`;
+pixel size in metres `aa = clamp(fwidth(c), 1e-4, spacing)`. Coverage is the **analytic 1-D pixel
+overlap** of the pixel span `[d − aa/2, d + aa/2]` with the line span `[−½·width_m, ½·width_m]`, as
+a fraction of the pixel:
+`line = clamp((min(½·width_m, d + aa/2) − max(−½·width_m, d − aa/2)) / aa, 0, 1)`.
+Combine the axes with `cover = max(line_east, line_north)`. This is robust where a naive
+derivative-scaled `smoothstep` fails: `fwidth` blows up at grazing angles (huge → over-wide edge or
+NaN that fills the screen), so `aa` is clamped, and the analytic form makes a line wider than a
+pixel read 1, a sub-pixel line dim to `width_m/aa` (so it fades cleanly at altitude/grazing instead
+of aliasing), and no separate high-altitude density fade is needed. LOD changes only the mesh
+density, not the per-fragment grid math, so the grid is unaffected by LOD. (The grid is anchored at
+the origin, so a grid line passes through the centroid; when the aircraft sits exactly on a line and
+the camera grazes, that line's physical width foreshortens to fill the near view — expected for a
+physical-width line; reduce `line_width_m` if undesired.)
+
+The grid uses its **own** colour and opacity, independent of the terrain grade — composited over
+the graded albedo at full strength: `ALBEDO = mix(graded_albedo, grid_color, cover ·
+grid_opacity)`. `grid_color`/`grid_opacity` are separate controls, so the grid is not affected by
+the terrain `gain`/`offset`/`contrast`/`saturation`/`value`.
+
+**Why "never beneath the terrain at any LOD" holds.** The grid is not separate geometry with its
+own depth; it is a color term on the terrain's own fragment. At any LOD the terrain fragment
+carries the grid, so there is no depth offset, z-fighting, clipping, or floating. The horizontal
+line positions come from world east/north (LOD-independent), so lines do not shift between LODs;
+only the draped height follows each LOD's surface. At an LOD crossfade both surfaces carry the
+grid at identical east/north, so there is no horizontal doubling.
+
+**Configuration.** A `grid` block in `configs/viewer.json` (see §Viewer Appearance Config),
+applied by `TerrainLoader` to the terrain-shader uniforms alongside the grade params and
+re-pushed to every wrapped tile on change (reusing `_set_terrain_grade_params()` /
+`_update_terrain_grade()`), so it is runtime-reconfigurable with no terrain build.
+
+| Config key | Shader uniform | Meaning |
+| --- | --- | --- |
+| `enabled` | `grid_enabled` (float 0/1) | master on/off (0 skips the grid term) |
+| `spacing_m` | `grid_spacing_m` | line spacing in metres from the centroid |
+| `color` | `grid_color` (vec3) | line color `[r, g, b]` |
+| `opacity` | `grid_opacity` | blend of `grid_color` over the terrain (0–1) |
+| `line_width_m` | `grid_width_m` | line width in metres (physical/world size) |
+
+**Resolved design decisions:** line width is a **physical** world size (`line_width_m`) — lines
+keep a fixed ground width and naturally thin/dim with altitude via the `fwidth` edge, so no
+separate density fade is required. The grid has its **own** color/opacity controls, composited at
+full strength independent of the terrain grade. A single uniform grid level is provided; major /
+minor (emphasis) line levels are a possible future extension, out of scope here.
 
 ### Aircraft mesh loading
 

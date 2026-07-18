@@ -1,22 +1,26 @@
-// terrain_grade.gdshader — runtime color grade for terrain tiles.
+// terrain_grade.gdshader — runtime color grade + conformal grid for terrain tiles.
 //
-// Applied as a per-tile material_override by TerrainLoader.gd: the tile's original
-// glTF albedo texture is passed in `albedo_tex`, and the grade is driven live from
-// TerrainLoader's exported Terrain Appearance controls (sourced from configs/viewer.json).
+// Applied as a per-tile material_override by TerrainLoader.gd: the tile's original glTF albedo
+// texture is passed in `albedo_tex`, and the grade + grid are driven live from TerrainLoader's
+// exported controls (sourced from configs/viewer.json).
 //
 // Color pipeline (per channel unless noted):
 //   c = albedo * gain + offset        // affine: multiplicative factor + additive offset
 //   c = (c - 0.5) * contrast + 0.5    // contrast about mid-grey
 //   c = mix(luma(c), c, saturation)   // saturation (cross-channel, BT.709 luma)
 //   c = c * value                     // scalar value/brightness (uniform darken/lighten)
+//   c = mix(c, grid_color, cover)     // conformal grid overlay (independent color)
 //
-// The terrain is forced fully matte (SPECULAR = 0, ROUGHNESS = 1, METALLIC = 0): the
-// default specular is a white highlight that does NOT scale with albedo, so dialing the
-// albedo down would neutralize the surface toward grey instead of darkening it. With
-// specular off, `value` (and `gain`) cleanly control the rendered brightness.
+// The terrain is forced fully matte (SPECULAR = 0, ROUGHNESS = 1, METALLIC = 0): the default
+// specular is a white highlight that does NOT scale with albedo, so dialing the albedo down would
+// neutralize the surface toward grey instead of darkening it.
 //
-// Output is written to ALBEDO (a lit spatial shader), so scene lighting and shadows
-// still apply exactly as with the original StandardMaterial3D.
+// Conformal grid (§Conformal Terrain Grid): north/east-aligned lines at equal metric spacing from
+// the terrain-region centroid (= world origin).  Computed per fragment from the world-ENU position
+// (a `spatial` shader, so it is on the terrain surface — never above/below it, at any LOD — and
+// not baked into the texture).  grid_color/grid_opacity are independent of the color grade above.
+//
+// Output is written to ALBEDO (a lit spatial shader), so scene lighting and shadows still apply.
 
 shader_type spatial;
 render_mode cull_back;
@@ -29,6 +33,31 @@ uniform float saturation : hint_range(0.0, 3.0) = 1.0;
 uniform float value : hint_range(0.0, 3.0) = 1.0;      // scalar brightness/value multiplier
 uniform float specular : hint_range(0.0, 1.0) = 0.0;   // 0 = matte (albedo-independent highlight off)
 
+// Conformal reference grid.
+uniform float grid_enabled = 0.0;                      // 0 = off, 1 = on
+uniform float grid_spacing_m = 1000.0;                 // line spacing, metres from centroid
+uniform vec3  grid_color : source_color = vec3(0.0, 1.0, 0.0);
+uniform float grid_opacity : hint_range(0.0, 1.0) = 0.5;
+uniform float grid_width_m = 5.0;                      // physical line width, metres
+
+varying highp vec3 v_world;  // fragment world position (world-origin ENU: x=east, y=up, z=-north)
+
+// Coverage of the nearest grid line to `coord` on one axis — mirrors grid_overlay.line_coverage.
+// `aa` is the pixel size in metres (clamped fwidth): analytic 1-D pixel coverage, robust at
+// grazing angles (a derivative-scaled smoothstep would over-widen / NaN and fill the screen).
+float grid_line(float coord, float spacing, float width_m, float aa) {
+	float g = coord / spacing;
+	float f = abs(fract(g - 0.5) - 0.5);   // grid units to nearest line, [0, 0.5]
+	float d = f * spacing;                 // metres to nearest line (>= 0)
+	float half_w = 0.5 * width_m;
+	float overlap = min(half_w, d + 0.5 * aa) - max(-half_w, d - 0.5 * aa);
+	return clamp(overlap / aa, 0.0, 1.0);
+}
+
+void vertex() {
+	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
 void fragment() {
 	vec3 c = texture(albedo_tex, UV).rgb;
 	c = c * gain + offset;                                 // affine
@@ -36,6 +65,19 @@ void fragment() {
 	float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
 	c = mix(vec3(luma), c, saturation);                    // desaturate/oversaturate
 	c *= value;                                            // scalar value/brightness
+
+	// Conformal grid: on-surface, north/east aligned, centroid-anchored, LOD-independent.
+	if (grid_enabled > 0.5 && grid_spacing_m > 0.0) {
+		float e = v_world.x;    // east
+		float n = -v_world.z;   // north
+		// Pixel size in metres, clamped so grazing angles (huge fwidth) don't blow up.
+		float aa_e = clamp(fwidth(e), 1e-4, grid_spacing_m);
+		float aa_n = clamp(fwidth(n), 1e-4, grid_spacing_m);
+		float cover = max(grid_line(e, grid_spacing_m, grid_width_m, aa_e),
+		                  grid_line(n, grid_spacing_m, grid_width_m, aa_n));
+		c = mix(c, grid_color, cover * grid_opacity);      // grid_color independent of the grade
+	}
+
 	ALBEDO = clamp(c, vec3(0.0), vec3(1.0));
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;

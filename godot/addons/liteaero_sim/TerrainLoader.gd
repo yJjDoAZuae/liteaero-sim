@@ -116,6 +116,43 @@ const _TERRAIN_GRADE_SHADER: Shader = preload("res://addons/liteaero_sim/terrain
 		_update_terrain_grade()
 
 # ---------------------------------------------------------------------------
+# Conformal terrain grid — north/east-aligned reference lines drawn on the terrain surface
+# (see docs/design/godot_plugin.md §Conformal Terrain Grid).  All runtime-configurable.
+# ---------------------------------------------------------------------------
+
+@export_group("Terrain Grid")
+
+## Draw the conformal reference grid on the terrain.
+@export var grid_enabled: bool = false:
+	set(v):
+		grid_enabled = v
+		_update_terrain_grade()
+
+## Grid line spacing in metres, measured from the terrain-region centroid (world origin).
+@export var grid_spacing_m: float = 1000.0:
+	set(v):
+		grid_spacing_m = v
+		_update_terrain_grade()
+
+## Grid line color (independent of the terrain color grade).
+@export var grid_color: Color = Color(0.0, 1.0, 0.0):
+	set(v):
+		grid_color = v
+		_update_terrain_grade()
+
+## Grid line opacity over the terrain.  0 = invisible, 1 = solid.
+@export_range(0.0, 1.0, 0.01) var grid_opacity: float = 0.5:
+	set(v):
+		grid_opacity = v
+		_update_terrain_grade()
+
+## Grid line width as a physical world size (metres); thins with altitude.
+@export var grid_line_width_m: float = 5.0:
+	set(v):
+		grid_line_width_m = v
+		_update_terrain_grade()
+
+# ---------------------------------------------------------------------------
 # Appearance controls — sky background
 # ---------------------------------------------------------------------------
 
@@ -489,6 +526,11 @@ func _set_terrain_grade_params(sm: ShaderMaterial) -> void:
 	sm.set_shader_parameter("saturation", terrain_saturation)
 	sm.set_shader_parameter("value", terrain_value)
 	sm.set_shader_parameter("specular", terrain_specular)
+	sm.set_shader_parameter("grid_enabled", 1.0 if grid_enabled else 0.0)
+	sm.set_shader_parameter("grid_spacing_m", grid_spacing_m)
+	sm.set_shader_parameter("grid_color", Vector3(grid_color.r, grid_color.g, grid_color.b))
+	sm.set_shader_parameter("grid_opacity", grid_opacity)
+	sm.set_shader_parameter("grid_width_m", grid_line_width_m)
 
 
 ## Re-push the grade uniforms to every wrapped terrain tile (on an Inspector change).
@@ -598,6 +640,12 @@ func _apply_viewer_config() -> void:
 	if s.has("horizon_color"): sky_horizon_color = _color_from_array(s["horizon_color"], sky_horizon_color)
 	if s.has("brightness"):    sky_brightness = float(s["brightness"])
 	if s.has("saturation"):    sky_saturation = float(s["saturation"])
+	var gr: Dictionary = cfg.get("grid", {})
+	if gr.has("enabled"):      grid_enabled = bool(gr["enabled"])
+	if gr.has("spacing_m"):    grid_spacing_m = float(gr["spacing_m"])
+	if gr.has("color"):        grid_color = _color_from_array(gr["color"], grid_color)
+	if gr.has("opacity"):      grid_opacity = float(gr["opacity"])
+	if gr.has("line_width_m"): grid_line_width_m = float(gr["line_width_m"])
 
 
 func _load_viewer_config() -> Dictionary:
