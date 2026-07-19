@@ -50,27 +50,37 @@ reference): `albedo = mix(albedo, grid_color, grid_coverage * grid_opacity)`.
 
 ## 2. Shader — `terrain_grade.gdshader`
 
-- `varying vec3 v_world;` set in `vertex()` as `(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz`.
-- Uniforms: `grid_enabled` (float 0/1), `grid_spacing_m`, `grid_color` (vec3), `grid_opacity`,
-  `grid_width_m`.
-- In `fragment()`, after the matte grade and **before** the final clamp:
-  `east = v_world.x; north = -v_world.z;` compute `cover` (§1 math, `aa = fwidth(coord)`), then
-  `c = mix(c, grid_color, grid_enabled * cover * grid_opacity);`. Guard `grid_spacing_m > 0`.
-- `grid_color`/`grid_opacity` are applied at full strength (independent of the grade).
+- `varying highp vec3 v_world;` set in `vertex()` as `(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz`
+  (`highp` for km-scale world coordinates).
+- Uniforms: `grid_enabled` (float 0/1); major `grid_spacing_m`, `grid_color` (vec3),
+  `grid_opacity`, `grid_width_m`; minor `grid_minor_divisions` (float; minor spacing =
+  `grid_spacing_m / grid_minor_divisions`), `grid_minor_color`, `grid_minor_opacity`,
+  `grid_minor_width_m`.
+- `grid_line(coord, spacing, width_m, aa)` = §1 analytic coverage; `aa = clamp(fwidth(coord),
+  1e-4, spacing)` (the clamp keeps grazing angles from filling the screen).
+- `minor_line(coord, minor_spacing, major_spacing, width_m, aa)` = `grid_line` **zeroed** where the
+  nearest minor line coincides with a major line (§1 `minor_line_coverage`).
+- In `fragment()`, after the matte grade and **before** the final clamp, with `east = v_world.x;
+  north = -v_world.z;` — if `grid_enabled`, composite the **minor** grid first (guard
+  `grid_spacing_m > 0 && grid_minor_divisions >= 2`, using `minor_line`) then the **major** grid on
+  top (guard `grid_spacing_m > 0`, using `grid_line`), each `cover = max(east, north)`,
+  `c = mix(c, <level>_color, cover · <level>_opacity)`. Each level's color/opacity is full strength
+  (independent of the grade).
 
 ## 3. `TerrainLoader.gd`
 
-- `@export_group("Terrain Grid")`: `grid_enabled: bool`, `grid_spacing_m: float`,
-  `grid_color: Color`, `grid_opacity: float (0–1)`, `grid_line_width_m: float`; each setter →
-  `_update_terrain_grade()`.
-- `_set_terrain_grade_params(sm)` also sets the five `grid_*` uniforms (`grid_enabled` as
-  `1.0`/`0.0`).
-- `_apply_viewer_config()` reads `cfg.grid`: `enabled`, `spacing_m`, `color` (via
-  `_color_from_array`), `opacity`, `line_width_m`.
+- `@export_group("Terrain Grid")`: `grid_enabled: bool`; major `grid_spacing_m`, `grid_color`,
+  `grid_opacity`, `grid_line_width_m`; minor `grid_minor_divisions: int`, `grid_minor_color`,
+  `grid_minor_opacity`, `grid_minor_line_width_m`; each setter → `_update_terrain_grade()`.
+- `_set_terrain_grade_params(sm)` sets all `grid_*` / `grid_minor_*` uniforms (`grid_enabled` and
+  `grid_minor_divisions` as floats).
+- `_apply_viewer_config()` reads `cfg.grid`: `enabled`, `spacing_m`, `color`, `opacity`,
+  `line_width_m`, and `minor_divisions`, `minor_color`, `minor_opacity`, `minor_line_width_m`.
 
 ## 4. `configs/viewer.json`
 
-Add: `"grid": { "enabled": false, "spacing_m": 1000.0, "color": [0,1,0], "opacity": 0.5, "line_width_m": 5.0 }`.
+Add a `grid` block with major keys plus `minor_divisions` (integer; minor spacing = major /
+divisions; `< 2` = minor grid off), `minor_color`, `minor_opacity`, `minor_line_width_m`.
 
 ## 5. Test Specification (TDD order)
 
@@ -84,6 +94,8 @@ Add: `"grid": { "enabled": false, "spacing_m": 1000.0, "color": [0,1,0], "opacit
 | `test_subpixel_line_dims` | `width_m < aa` → on-line coverage < 1 (partial), monotonic in `width_m/aa`. |
 | `test_grid_is_axis_max` | `grid_coverage` = `max` of the two axis coverages; a point on an east line but far from any north line still reads full. |
 | `test_spacing_scales` | line positions move with `spacing` (lines at multiples only). |
+| `test_minor_nests_major` | when the minor spacing divides the major, every major line is also a minor line (major lines are a subset) — the property the two-level grid relies on. |
+| `test_minor_skips_major` | `minor_line_coverage` is 0 where the minor line coincides with a major line, unchanged elsewhere, and unsuppressed when `major_spacing = 0`. |
 
 **Integration / acceptance** (no GDScript unit harness — per project convention):
 

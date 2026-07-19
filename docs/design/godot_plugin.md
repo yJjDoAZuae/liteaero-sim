@@ -457,7 +457,8 @@ to change the look; a terrain rebuild never overwrites it.
     "window":  { "width": 1600, "height": 900, "mode": "windowed" },
     "terrain": { "gain": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0], "contrast": 1.0, "saturation": 1.0, "value": 1.0, "specular": 0.0 },
     "sky":     { "top_color": [0.385, 0.454, 0.55], "horizon_color": [0.6463, 0.6558, 0.6708], "brightness": 1.0, "saturation": 1.0 },
-    "grid":    { "enabled": false, "spacing_m": 1000.0, "color": [0.0, 1.0, 0.0], "opacity": 0.5, "line_width_m": 5.0 }
+    "grid":    { "enabled": false, "spacing_m": 1000.0, "color": [0.0, 1.0, 0.0], "opacity": 0.5, "line_width_m": 5.0,
+                 "minor_divisions": 5, "minor_color": [0.0, 1.0, 0.0], "minor_opacity": 0.2, "minor_line_width_m": 2.0 }
 }
 ```
 
@@ -537,19 +538,31 @@ applied by `TerrainLoader` to the terrain-shader uniforms alongside the grade pa
 re-pushed to every wrapped tile on change (reusing `_set_terrain_grade_params()` /
 `_update_terrain_grade()`), so it is runtime-reconfigurable with no terrain build.
 
+Two levels are drawn: a **major** grid and a **minor** grid. The minor grid is an integer
+subdivision of the major — `minor_spacing = major_spacing / minor_divisions` — so it always nests
+exactly (`< 2` disables it, and it requires the major grid). The minor grid is composited first,
+then the major grid on top; and a minor line that coincides with a major line (every
+`minor_divisions` minor lines) is **skipped**, so intersections show a clean major line rather than
+a blend. The minor grid has its own color, opacity, and line width, independent of the major grid
+and of the terrain grade. The shared `grid_enabled` toggles both.
+
 | Config key | Shader uniform | Meaning |
 | --- | --- | --- |
-| `enabled` | `grid_enabled` (float 0/1) | master on/off (0 skips the grid term) |
-| `spacing_m` | `grid_spacing_m` | line spacing in metres from the centroid |
-| `color` | `grid_color` (vec3) | line color `[r, g, b]` |
-| `opacity` | `grid_opacity` | blend of `grid_color` over the terrain (0–1) |
-| `line_width_m` | `grid_width_m` | line width in metres (physical/world size) |
+| `enabled` | `grid_enabled` (float 0/1) | master on/off (0 skips both levels) |
+| `spacing_m` | `grid_spacing_m` | major line spacing in metres from the centroid |
+| `color` | `grid_color` (vec3) | major line color `[r, g, b]` |
+| `opacity` | `grid_opacity` | major blend over the terrain (0–1) |
+| `line_width_m` | `grid_width_m` | major line width in metres (physical/world size) |
+| `minor_divisions` | `grid_minor_divisions` | integer subdivisions of the major (`minor = major/divisions`; `< 2` = off) |
+| `minor_color` | `grid_minor_color` (vec3) | minor line color |
+| `minor_opacity` | `grid_minor_opacity` | minor blend over the terrain (0–1) |
+| `minor_line_width_m` | `grid_minor_width_m` | minor line width in metres |
 
-**Resolved design decisions:** line width is a **physical** world size (`line_width_m`) — lines
-keep a fixed ground width and naturally thin/dim with altitude via the `fwidth` edge, so no
-separate density fade is required. The grid has its **own** color/opacity controls, composited at
-full strength independent of the terrain grade. A single uniform grid level is provided; major /
-minor (emphasis) line levels are a possible future extension, out of scope here.
+**Resolved design decisions:** line width is a **physical** world size — lines keep a fixed ground
+width and naturally thin/dim with altitude via the analytic `fwidth`-based coverage, so no separate
+density fade is required. Each grid level has its **own** color/opacity/spacing/width controls,
+composited at full strength independent of the terrain grade; the major grid draws over the minor
+grid.
 
 ### Aircraft mesh loading
 

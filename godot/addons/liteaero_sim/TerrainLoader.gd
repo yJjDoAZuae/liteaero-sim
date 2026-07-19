@@ -152,6 +152,31 @@ const _TERRAIN_GRADE_SHADER: Shader = preload("res://addons/liteaero_sim/terrain
 		grid_line_width_m = v
 		_update_terrain_grade()
 
+## Minor grid subdivisions of the major grid (integer).  Minor spacing = major / divisions;
+## minor lines that land on a major line are skipped.  < 2 disables the minor grid.
+@export var grid_minor_divisions: int = 5:
+	set(v):
+		grid_minor_divisions = v
+		_update_terrain_grade()
+
+## Minor grid line color (independent of the major grid and the terrain grade).
+@export var grid_minor_color: Color = Color(0.0, 1.0, 0.0):
+	set(v):
+		grid_minor_color = v
+		_update_terrain_grade()
+
+## Minor grid line opacity over the terrain.  0 = invisible, 1 = solid.
+@export_range(0.0, 1.0, 0.01) var grid_minor_opacity: float = 0.2:
+	set(v):
+		grid_minor_opacity = v
+		_update_terrain_grade()
+
+## Minor grid line width as a physical world size (metres).
+@export var grid_minor_line_width_m: float = 2.0:
+	set(v):
+		grid_minor_line_width_m = v
+		_update_terrain_grade()
+
 # ---------------------------------------------------------------------------
 # Appearance controls — sky background
 # ---------------------------------------------------------------------------
@@ -531,6 +556,10 @@ func _set_terrain_grade_params(sm: ShaderMaterial) -> void:
 	sm.set_shader_parameter("grid_color", Vector3(grid_color.r, grid_color.g, grid_color.b))
 	sm.set_shader_parameter("grid_opacity", grid_opacity)
 	sm.set_shader_parameter("grid_width_m", grid_line_width_m)
+	sm.set_shader_parameter("grid_minor_divisions", float(grid_minor_divisions))
+	sm.set_shader_parameter("grid_minor_color", Vector3(grid_minor_color.r, grid_minor_color.g, grid_minor_color.b))
+	sm.set_shader_parameter("grid_minor_opacity", grid_minor_opacity)
+	sm.set_shader_parameter("grid_minor_width_m", grid_minor_line_width_m)
 
 
 ## Re-push the grade uniforms to every wrapped terrain tile (on an Inspector change).
@@ -641,11 +670,15 @@ func _apply_viewer_config() -> void:
 	if s.has("brightness"):    sky_brightness = float(s["brightness"])
 	if s.has("saturation"):    sky_saturation = float(s["saturation"])
 	var gr: Dictionary = cfg.get("grid", {})
-	if gr.has("enabled"):      grid_enabled = bool(gr["enabled"])
-	if gr.has("spacing_m"):    grid_spacing_m = float(gr["spacing_m"])
-	if gr.has("color"):        grid_color = _color_from_array(gr["color"], grid_color)
-	if gr.has("opacity"):      grid_opacity = float(gr["opacity"])
-	if gr.has("line_width_m"): grid_line_width_m = float(gr["line_width_m"])
+	if gr.has("enabled"):            grid_enabled = bool(gr["enabled"])
+	if gr.has("spacing_m"):          grid_spacing_m = float(gr["spacing_m"])
+	if gr.has("color"):              grid_color = _color_from_array(gr["color"], grid_color)
+	if gr.has("opacity"):            grid_opacity = float(gr["opacity"])
+	if gr.has("line_width_m"):       grid_line_width_m = float(gr["line_width_m"])
+	if gr.has("minor_divisions"):    grid_minor_divisions = int(gr["minor_divisions"])
+	if gr.has("minor_color"):        grid_minor_color = _color_from_array(gr["minor_color"], grid_minor_color)
+	if gr.has("minor_opacity"):      grid_minor_opacity = float(gr["minor_opacity"])
+	if gr.has("minor_line_width_m"): grid_minor_line_width_m = float(gr["minor_line_width_m"])
 
 
 func _load_viewer_config() -> Dictionary:

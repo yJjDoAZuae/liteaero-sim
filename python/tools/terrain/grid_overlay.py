@@ -48,3 +48,21 @@ def grid_coverage(east, north, spacing: float, width_m: float, aa: float):
         line_coverage(north, spacing, width_m, aa),
     )
     return cov if (np.ndim(east) or np.ndim(north)) else float(cov)
+
+
+def minor_line_coverage(coord, minor_spacing: float, major_spacing: float, width_m: float, aa: float):
+    """Minor-line coverage on one axis, **suppressed** where the minor line coincides with a major
+    line, so a coincident intersection shows only the major line (no blended overlap).
+
+    The viewer derives ``minor_spacing = major_spacing / divisions`` (an integer ratio), so a minor
+    line coincides with a major line exactly every ``divisions`` minor lines.  With
+    ``major_spacing <= 0`` there is no major grid and nothing is suppressed.
+    """
+    c = np.asarray(coord, dtype=float)
+    cov = np.asarray(line_coverage(c, minor_spacing, width_m, aa), dtype=float)
+    if major_spacing and major_spacing > 0.0:
+        nearest = np.round(c / minor_spacing) * minor_spacing   # nearest minor line position
+        ratio = nearest / major_spacing
+        coincident = np.abs(ratio - np.round(ratio)) < 1e-3     # nearest minor line is a major line
+        cov = np.where(coincident, 0.0, cov)
+    return cov if c.ndim else float(cov)

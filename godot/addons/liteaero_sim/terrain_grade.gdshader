@@ -33,12 +33,16 @@ uniform float saturation : hint_range(0.0, 3.0) = 1.0;
 uniform float value : hint_range(0.0, 3.0) = 1.0;      // scalar brightness/value multiplier
 uniform float specular : hint_range(0.0, 1.0) = 0.0;   // 0 = matte (albedo-independent highlight off)
 
-// Conformal reference grid.
-uniform float grid_enabled = 0.0;                      // 0 = off, 1 = on
-uniform float grid_spacing_m = 1000.0;                 // line spacing, metres from centroid
+// Conformal reference grid — a major level and an independent minor level (drawn under major).
+uniform float grid_enabled = 0.0;                      // 0 = off, 1 = on (both levels)
+uniform float grid_spacing_m = 1000.0;                 // major line spacing, metres from centroid
 uniform vec3  grid_color : source_color = vec3(0.0, 1.0, 0.0);
 uniform float grid_opacity : hint_range(0.0, 1.0) = 0.5;
-uniform float grid_width_m = 5.0;                      // physical line width, metres
+uniform float grid_width_m = 5.0;                      // major physical line width, metres
+uniform float grid_minor_divisions = 5.0;              // minor spacing = major / divisions (< 2 = no minor)
+uniform vec3  grid_minor_color : source_color = vec3(0.0, 1.0, 0.0);
+uniform float grid_minor_opacity : hint_range(0.0, 1.0) = 0.2;
+uniform float grid_minor_width_m = 2.0;                // minor physical line width, metres
 
 varying highp vec3 v_world;  // fragment world position (world-origin ENU: x=east, y=up, z=-north)
 
@@ -54,6 +58,20 @@ float grid_line(float coord, float spacing, float width_m, float aa) {
 	return clamp(overlap / aa, 0.0, 1.0);
 }
 
+// Minor-line coverage on one axis, suppressed where the minor line coincides with a major line
+// (so a coincident intersection shows only the major line) — mirrors grid_overlay.minor_line_coverage.
+float minor_line(float coord, float minor_spacing, float major_spacing, float width_m, float aa) {
+	float cov = grid_line(coord, minor_spacing, width_m, aa);
+	if (major_spacing > 0.0) {
+		float nearest = round(coord / minor_spacing) * minor_spacing;  // nearest minor line position
+		float ratio = nearest / major_spacing;
+		if (abs(ratio - round(ratio)) < 1e-3) {
+			cov = 0.0;   // this minor line is also a major line — skip it
+		}
+	}
+	return cov;
+}
+
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -67,15 +85,26 @@ void fragment() {
 	c *= value;                                            // scalar value/brightness
 
 	// Conformal grid: on-surface, north/east aligned, centroid-anchored, LOD-independent.
-	if (grid_enabled > 0.5 && grid_spacing_m > 0.0) {
+	// Minor level first, major level on top; each independent and independent of the grade.
+	// (fwidth clamped so grazing angles — huge fwidth — don't blow up and fill the screen.)
+	if (grid_enabled > 0.5) {
 		float e = v_world.x;    // east
 		float n = -v_world.z;   // north
-		// Pixel size in metres, clamped so grazing angles (huge fwidth) don't blow up.
-		float aa_e = clamp(fwidth(e), 1e-4, grid_spacing_m);
-		float aa_n = clamp(fwidth(n), 1e-4, grid_spacing_m);
-		float cover = max(grid_line(e, grid_spacing_m, grid_width_m, aa_e),
-		                  grid_line(n, grid_spacing_m, grid_width_m, aa_n));
-		c = mix(c, grid_color, cover * grid_opacity);      // grid_color independent of the grade
+		if (grid_spacing_m > 0.0 && grid_minor_divisions >= 2.0) {
+			float minor_spacing = grid_spacing_m / grid_minor_divisions;
+			float aa_e = clamp(fwidth(e), 1e-4, minor_spacing);
+			float aa_n = clamp(fwidth(n), 1e-4, minor_spacing);
+			float cover = max(minor_line(e, minor_spacing, grid_spacing_m, grid_minor_width_m, aa_e),
+			                  minor_line(n, minor_spacing, grid_spacing_m, grid_minor_width_m, aa_n));
+			c = mix(c, grid_minor_color, cover * grid_minor_opacity);
+		}
+		if (grid_spacing_m > 0.0) {
+			float aa_e = clamp(fwidth(e), 1e-4, grid_spacing_m);
+			float aa_n = clamp(fwidth(n), 1e-4, grid_spacing_m);
+			float cover = max(grid_line(e, grid_spacing_m, grid_width_m, aa_e),
+			                  grid_line(n, grid_spacing_m, grid_width_m, aa_n));
+			c = mix(c, grid_color, cover * grid_opacity);
+		}
 	}
 
 	ALBEDO = clamp(c, vec3(0.0), vec3(1.0));

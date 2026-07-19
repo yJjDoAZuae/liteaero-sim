@@ -79,6 +79,33 @@ def test_spacing_scales() -> None:
     assert line_coverage(500.0, 1000.0, width_m, aa) == pytest.approx(0.0, abs=1e-6)
 
 
+def test_minor_nests_major() -> None:
+    from grid_overlay import line_coverage
+
+    # Two-level grid: minor spacing divides the major (1000 / 200 = 5), so every major line is
+    # also a minor line — the property the major/minor composite relies on.
+    major, minor, width_m, aa = 1000.0, 200.0, 20.0, 1.0
+    for k in (-2, -1, 0, 1, 2):
+        assert line_coverage(k * major, minor, width_m, aa) == pytest.approx(1.0, abs=1e-6)
+    # A minor line that is not a major line is a line at minor spacing but not at major spacing.
+    assert line_coverage(minor, minor, width_m, aa) == pytest.approx(1.0, abs=1e-6)
+    assert line_coverage(minor, major, width_m, aa) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_minor_skips_major() -> None:
+    from grid_overlay import minor_line_coverage
+
+    minor, major, width_m, aa = 100.0, 1000.0, 10.0, 1.0
+    # A minor line coincident with a major line is suppressed (0), so the major line stands alone.
+    for k in (-1, 0, 1, 2):
+        assert minor_line_coverage(k * major, minor, major, width_m, aa) == pytest.approx(0.0, abs=1e-6)
+    # A minor line that is not a major line keeps full coverage.
+    for c in (100.0, 200.0, 300.0, 900.0, 1100.0):
+        assert minor_line_coverage(c, minor, major, width_m, aa) == pytest.approx(1.0, abs=1e-6)
+    # With no major grid (major_spacing = 0) there is nothing to skip.
+    assert minor_line_coverage(1000.0, minor, 0.0, width_m, aa) == pytest.approx(1.0, abs=1e-6)
+
+
 def test_vectorized() -> None:
     from grid_overlay import line_coverage
 
