@@ -8,7 +8,7 @@
     "cd0": 0.022,
     "cmd_filter_substeps": 1,
     "nz_wn_rad_s": 8.0,
-    "nz_zeta_nd": 1.0,
+    "nz_zeta_nd": 0.7,
     "ny_wn_rad_s": 15.0,
     "ny_zeta_nd": 0.7,
     "roll_rate_wn_rad_s": 30.0,
@@ -82,7 +82,7 @@
     "alpha_min_rad": -0.17
   },
   "landing_gear": {
-    "substeps": 4,
+    "substeps": 16,
     "wheel_units": [
       {
         "_comment": "Nose gear — steerable, no brake",
@@ -110,7 +110,9 @@
         "rolling_resistance_nd": 0.02,
         "is_steerable": true,
         "is_castering": true,
-        "has_brake": false
+        "has_brake": false,
+        "spindown_time_s": 5.0,
+        "spindown_reference_speed_mps": 20.0
       },
       {
         "_comment": "Left main gear",
@@ -137,7 +139,9 @@
         "tyre_longitudinal_stiffness_npm": 4000.0,
         "rolling_resistance_nd": 0.02,
         "is_steerable": false,
-        "has_brake": true
+        "has_brake": true,
+        "spindown_time_s": 5.0,
+        "spindown_reference_speed_mps": 20.0
       },
       {
         "_comment": "Right main gear",
@@ -164,7 +168,9 @@
         "tyre_longitudinal_stiffness_npm": 4000.0,
         "rolling_resistance_nd": 0.02,
         "is_steerable": false,
-        "has_brake": true
+        "has_brake": true,
+        "spindown_time_s": 5.0,
+        "spindown_reference_speed_mps": 20.0
       }
     ]
   },

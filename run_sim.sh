@@ -20,7 +20,7 @@ cd "$SCRIPT_DIR"
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-CONFIG="./configs/small_uas_ksba_flight.json"
+CONFIG="./configs/small_uas_ksba.json"
 TERRAIN="./data/terrain/small_uas_ksba_flight/terrain_config.json"
 VIEWER_CONFIG="./configs/viewer.json"
 JOYSTICK_CONFIG="./python/gx12_config.json"
