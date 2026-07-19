@@ -672,19 +672,25 @@ void Aircraft::step(double time_sec,
         // --- Force channel (pitch), §5c per source (OQ-BC-7 → Alt 2): destanced vertical load →
         //     faded FPA rate → G(s). The gear and body-collider channels share the same stance τ and
         //     G(s) coefficients, so by linearity their sum equals the former combined channel. ---
+        float a_arrest_gear  = 0.f;   // gear force-channel diagnostics (threaded out for StepDiag)
+        float fz_stance_gear = 0.f;
         auto forceChannel = [&](const Eigen::Vector3f& src_force_body,
                                 liteaero::control::FilterSS2Clip& stance,
-                                liteaero::control::Mat21& fx) -> float {
+                                liteaero::control::Mat21& fx,
+                                float* a_arrest_out  = nullptr,
+                                float* fz_stance_out = nullptr) -> float {
             const float fz_ned    = (R_nb_mat * src_force_body).z();
             const float fz_stance = stance.step(fz_ned);
             const float a_arrest  = (fz_ned - fz_stance) / _inertia.mass_kg;
+            if (a_arrest_out)  *a_arrest_out  = a_arrest;
+            if (fz_stance_out) *fz_stance_out = fz_stance;
             const float u_force   = (-a_arrest * cos_gamma / V_safe) * phi;
             const float y = (_force_h * fx)(0, 0) + _force_j(0, 0) * u_force;  // y = h·x + j·u
             fx = _force_phi * fx + _force_gamma * u_force;                     // x = phi·x + gamma·u
             return y;
         };
         const float dtheta_force =
-            forceChannel(gear_force_body, _fz_stance_filter,    _force_x)
+            forceChannel(gear_force_body, _fz_stance_filter,    _force_x, &a_arrest_gear, &fz_stance_gear)
           + forceChannel(bc_force_body,   _bc_fz_stance_filter, _bc_force_x);
 
         // --- Moment channels (pitch/roll/yaw), §5c per source: H₂ low-pass on M/I, scaled by 1/ωn².
@@ -725,6 +731,21 @@ void Aircraft::step(double time_sec,
         // Yaw: rate of change of the (returning) deviation × velocity → lateral specific force.
         delta_ay_filt_mps2 = (dtheta_yaw - _prev_dtheta_yaw) / _outer_dt_s * V_safe;
         _prev_dtheta_yaw   = dtheta_yaw;
+
+        // Verbose diagnostics (model diagnosis; recomputed each step, not serialized). α_cmd/α_body
+        // are filled below once the LFA has solved.
+        _step_diag.dtheta_pitch         = dtheta_pitch;
+        _step_diag.dtheta_force         = dtheta_force;
+        _step_diag.dtheta_moment_pitch  = dtheta_moment_pitch;
+        _step_diag.dtheta_yaw           = dtheta_yaw;
+        _step_diag.phi_authority        = phi;
+        _step_diag.gamma_fpa_rad        = gamma;
+        _step_diag.a_arrest_gear_mps2   = a_arrest_gear;
+        _step_diag.fz_stance_gear_n     = fz_stance_gear;
+        _step_diag.gear_moment_pitch_nm = gear_moment_body.y();
+        _step_diag.bc_moment_pitch_nm   = bc_moment_body.y();
+        _step_diag.n_z_shaped           = n_z_shaped;
+        _step_diag.weight_on_wheels     = contact_forces.weight_on_wheels;
     }
 
     LoadFactorInputs lfa_in;
@@ -767,6 +788,8 @@ void Aircraft::step(double time_sec,
     // Body attitude uses alpha_cmd + Δθ_pitch so that gear geometry at the next
     // step sees the body's inertially-lagged orientation (one-step lag per design).
     const float alpha_body = lfa_out.alpha_rad + dtheta_pitch;
+    _step_diag.alpha_cmd  = lfa_out.alpha_rad;
+    _step_diag.alpha_body = alpha_body;
     const float ca = std::cos(alpha_body);
     const float sa = std::sin(alpha_body);
     const float cb = std::cos(lfa_out.beta_rad);

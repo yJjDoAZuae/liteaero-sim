@@ -102,6 +102,35 @@ public:
     // contactForces().moment_body_nm.x().
     float rollRateState_rps() const { return _roll_rate_state_rps; }
 
+    // Verbose per-step diagnostics for the Δθ rotation-deviation / attitude machinery (OQ-LG-15
+    // gear-F&M model). Recomputed every step() from live intermediates — NOT serialized state.
+    // Exposed for model diagnosis (Python `step_diag()`); all SI units.
+    struct StepDiag {
+        // Pitch rotation-deviation Δθ decomposition (rad): total = force channel + moment channel.
+        float dtheta_pitch         = 0.f;  // Δθ_pitch fed to α_body and the gear geometry
+        float dtheta_force         = 0.f;  // force channel G(s)·u (gear + body-collider)
+        float dtheta_moment_pitch  = 0.f;  // moment channel (1/ωₙ²)·H₂(M/I) (gear + body-collider)
+        float dtheta_yaw           = 0.f;  // yaw rotation deviation Δθ_yaw (rad)
+        // Angle of attack (rad).
+        float alpha_cmd            = 0.f;  // LFA-commanded α (attached-flow / stall solve)
+        float alpha_body           = 0.f;  // α_cmd + Δθ_pitch — the body α used downstream
+        // Force-channel drivers.
+        float phi_authority        = 0.f;  // Φ(V) dynamic-pressure authority fade (nd, [0,1])
+        float gamma_fpa_rad        = 0.f;  // inertial flight-path angle γ used in the force channel
+        float a_arrest_gear_mps2   = 0.f;  // gear destanced vertical accel (F_z − F_stance)/m
+        float fz_stance_gear_n     = 0.f;  // gear stance (destance reference) vertical load, NED (N)
+        // Pitch-moment drivers about the CG (body Y axis, N·m).
+        float gear_moment_pitch_nm = 0.f;
+        float bc_moment_pitch_nm   = 0.f;
+        // FBW-shaped normal load-factor command feeding the LFA (g).
+        float n_z_shaped           = 0.f;
+        // Any wheel or body-collider contact on this step.
+        bool  weight_on_wheels     = false;
+    };
+
+    // Verbose Δθ / attitude diagnostics from the most recent step() (model diagnosis; not serialized).
+    const StepDiag& stepDiag() const { return _step_diag; }
+
     // Serialize / deserialize warm-start state.
     // Note: deserializeJson() restores _propulsion state via _propulsion->deserializeJson()
     // but does not reconstruct the propulsion model itself — the correct Propulsion
@@ -224,6 +253,7 @@ private:
     float  _cl_eff                = 0.f;
     bool   _aero_stalled          = false;
     bool   _cl_recovering_active  = false;
+    StepDiag _step_diag;                  // verbose Δθ/attitude diagnostics (recomputed each step)
     float                  _outer_dt_s           = 0.02f;  // integration timestep from Simulation
     int                    _cmd_filter_substeps   = 1;      // filter steps per Aircraft::step()
     float                  _cmd_filter_dt_s       = 0.02f;  // outer_dt_s / cmd_filter_substeps

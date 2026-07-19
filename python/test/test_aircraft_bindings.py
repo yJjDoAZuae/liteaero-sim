@@ -241,6 +241,41 @@ def test_aircraft_step_advances_state():
 
 
 # ---------------------------------------------------------------------------
+# step_diag() — verbose Δθ / attitude debug accessors (OQ-LG-15 gear-F&M model)
+# ---------------------------------------------------------------------------
+
+
+def test_step_diag_fields_finite_and_consistent():
+    ac = liteaero_sim_py.Aircraft(_GA_JSON)
+    cmd = liteaero_sim_py.AircraftCommand(n_z=1.0, throttle_nd=0.5)
+    for _ in range(5):
+        ac.step(cmd)
+    d = ac.step_diag()
+    for attr in (
+        "dtheta_pitch",
+        "dtheta_force",
+        "dtheta_moment_pitch",
+        "dtheta_yaw",
+        "alpha_cmd",
+        "alpha_body",
+        "phi_authority",
+        "gamma_fpa_rad",
+        "a_arrest_gear_mps2",
+        "fz_stance_gear_n",
+        "gear_moment_pitch_nm",
+        "bc_moment_pitch_nm",
+        "n_z_shaped",
+    ):
+        val = getattr(d, attr)
+        assert math.isfinite(val), f"AircraftStepDiag.{attr} not finite: {val}"
+    assert isinstance(d.weight_on_wheels, bool)
+    # Δθ_pitch decomposes exactly into its force and moment channels.
+    assert d.dtheta_pitch == pytest.approx(d.dtheta_force + d.dtheta_moment_pitch, abs=1e-6)
+    # α_body = α_cmd + Δθ_pitch — the OQ-LG-15 gear-F&M rotation deviation fed to the gear geometry.
+    assert d.alpha_body == pytest.approx(d.alpha_cmd + d.dtheta_pitch, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # reset()
 # ---------------------------------------------------------------------------
 

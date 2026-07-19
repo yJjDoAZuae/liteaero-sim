@@ -189,6 +189,42 @@ void bind_aircraft(py::module_& m)
             },
             "Per-wheel contact force in the body frame (N) as [x, y, z].");
 
+    // --- Aircraft::StepDiag (verbose Δθ / attitude debug accessors; model-diagnosis interface) ---
+    py::class_<Aircraft::StepDiag>(m, "AircraftStepDiag")
+        .def_readonly("dtheta_pitch", &Aircraft::StepDiag::dtheta_pitch,
+            "Total pitch rotation deviation Δθ_pitch (rad) = force + moment channels; feeds α_body\n"
+            "and the gear geometry.")
+        .def_readonly("dtheta_force", &Aircraft::StepDiag::dtheta_force,
+            "Force-channel Δθ (rad): G(s)·u on the destanced gear+body vertical load, faded by\n"
+            "Φ(V). →0 in steady roll and at low airspeed.")
+        .def_readonly("dtheta_moment_pitch", &Aircraft::StepDiag::dtheta_moment_pitch,
+            "Moment-channel Δθ (rad): (1/ωₙ²)·H₂(M_pitch/I_yy) over gear + body collider. Finite\n"
+            "DC = static stance; no velocity fade (live even at rest).")
+        .def_readonly("dtheta_yaw", &Aircraft::StepDiag::dtheta_yaw,
+            "Yaw rotation deviation Δθ_yaw (rad).")
+        .def_readonly("alpha_cmd", &Aircraft::StepDiag::alpha_cmd,
+            "LFA-commanded angle of attack (rad).")
+        .def_readonly("alpha_body", &Aircraft::StepDiag::alpha_body,
+            "Body angle of attack (rad) = alpha_cmd + dtheta_pitch (used downstream and for the\n"
+            "gear geometry at the next step).")
+        .def_readonly("phi_authority", &Aircraft::StepDiag::phi_authority,
+            "Φ(V) dynamic-pressure authority fade (nd, [0,1]); 0 at rest, →1 with airspeed. Gates\n"
+            "the force channel.")
+        .def_readonly("gamma_fpa_rad", &Aircraft::StepDiag::gamma_fpa_rad,
+            "Inertial flight-path angle γ (rad) used in the force channel.")
+        .def_readonly("a_arrest_gear_mps2", &Aircraft::StepDiag::a_arrest_gear_mps2,
+            "Gear destanced vertical acceleration (F_z − F_stance)/m (m/s²) — the force-channel input.")
+        .def_readonly("fz_stance_gear_n", &Aircraft::StepDiag::fz_stance_gear_n,
+            "Gear stance (destance reference) vertical load in NED (N).")
+        .def_readonly("gear_moment_pitch_nm", &Aircraft::StepDiag::gear_moment_pitch_nm,
+            "Gear pitching moment about the CG (body Y, N·m) — drives the moment channel.")
+        .def_readonly("bc_moment_pitch_nm", &Aircraft::StepDiag::bc_moment_pitch_nm,
+            "Body-collider pitching moment about the CG (body Y, N·m).")
+        .def_readonly("n_z_shaped", &Aircraft::StepDiag::n_z_shaped,
+            "FBW-shaped normal load-factor command feeding the LFA (g).")
+        .def_readonly("weight_on_wheels", &Aircraft::StepDiag::weight_on_wheels,
+            "True if any wheel or body-collider contact occurred on this step.");
+
     // --- KinematicState (read-only; returned by Aircraft.state()) ---
     py::class_<KinematicState>(m, "KinematicState")
         .def_property_readonly("time_s",
@@ -397,6 +433,16 @@ void bind_aircraft(py::module_& m)
         .def_property_readonly("roll_rate_state_rps",
              [](const PyAircraft& self) { return self.aircraft->rollRateState_rps(); },
              "OQ-BC-12 Alt B persistent wind-axis roll-rate state (rad/s) committed to the\n"
-             "attitude each step (the induced contact roll rate, Tustin-integrated).");
+             "attitude each step (the induced contact roll rate, Tustin-integrated).")
+        .def("step_diag",
+             [](const PyAircraft& self) -> const Aircraft::StepDiag& {
+                 return self.aircraft->stepDiag();
+             },
+             py::return_value_policy::reference_internal,
+             "Verbose Δθ / attitude debug diagnostics (AircraftStepDiag) from the most recent\n"
+             "step(): the pitch rotation-deviation decomposition (force vs moment channel),\n"
+             "α_cmd/α_body, the Φ(V) authority fade, flight-path angle, gear destance/stance\n"
+             "load, and the gear / body-collider pitching moments. Recomputed each step (not\n"
+             "serialized). Use for model diagnosis of the OQ-LG-15 gear-F&M attitude behavior.");
 }
 
