@@ -223,7 +223,25 @@ void bind_aircraft(py::module_& m)
         .def_readonly("n_z_shaped", &Aircraft::StepDiag::n_z_shaped,
             "FBW-shaped normal load-factor command feeding the LFA (g).")
         .def_readonly("weight_on_wheels", &Aircraft::StepDiag::weight_on_wheels,
-            "True if any wheel or body-collider contact occurred on this step.");
+            "True if any wheel or body-collider contact occurred on this step.")
+        .def_readonly("v_final_elev_rad", &Aircraft::StepDiag::v_final_elev_rad,
+            "Elevation of the true post-integration NED velocity (rad, + = velocity up).")
+        .def_readonly("att_base_elev_rad", &Aircraft::StepDiag::att_base_elev_rad,
+            "Elevation of v_att_base — the contact-excluded reference velocity (rad).")
+        .def_readonly("att_filt_elev_rad", &Aircraft::StepDiag::att_filt_elev_rad,
+            "Elevation of the low-pass attitude-reference velocity (rad).")
+        .def_readonly("att_ref_elev_rad", &Aircraft::StepDiag::att_ref_elev_rad,
+            "Elevation of v_att_ref — the Φ-blended reference q_nw slaves to (rad).")
+        .def_readonly("att_ref_speed_mps", &Aircraft::StepDiag::att_ref_speed_mps,
+            "Magnitude of v_att_ref (m/s).")
+        .def_readonly("phi_att_nd", &Aircraft::StepDiag::phi_att_nd,
+            "Φ(V) authority weight blending instantaneous vs low-pass velocity in the attitude reference.")
+        .def_readonly("qnw_pitch_rad", &Aircraft::StepDiag::qnw_pitch_rad,
+            "Committed q_nw Euler pitch — the wind-frame flight-path elevation (rad).")
+        .def_readonly("qnw_ref_desync_rad", &Aircraft::StepDiag::qnw_ref_desync_rad,
+            "Angle between the committed q_nw forward axis and the attitude-reference velocity (rad).\n"
+            "The velocity-slaving invariant error (should be ~0: q_nw.x = v_hat_ref) — exactly the\n"
+            "desync the OQ-AC-9 re-anchor fix would zero. ~0 in a regime means that fix is a no-op there.");
 
     // --- KinematicState (read-only; returned by Aircraft.state()) ---
     py::class_<KinematicState>(m, "KinematicState")

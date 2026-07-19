@@ -30,11 +30,11 @@
         "enabled": true,
         "spacing_m": 1000.0,
         "color": [0.0, 1.0, 0.5],
-        "opacity": 0.3,
+        "opacity": 0.5,
         "line_width_m": 5.0,
-        "minor_divisions": 10,
+        "minor_divisions": 50,
         "minor_color": [1.0, 1.0, 1.0],
         "minor_opacity": 0.1,
-        "minor_line_width_m": 1.0
+        "minor_line_width_m": 0.5
     }
 }

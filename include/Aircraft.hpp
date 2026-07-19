@@ -126,6 +126,21 @@ public:
         float n_z_shaped           = 0.f;
         // Any wheel or body-collider contact on this step.
         bool  weight_on_wheels     = false;
+        // Velocity-slaving attitude-reference chain (NED elevations, rad; + = velocity/nose up). These
+        // isolate whether q_nw is pitched by a spurious vertical component in the reference velocity
+        // (the path-curvature diff_rot_n tilt) vs. the true velocity. att_*_elev are elevations of the
+        // successive reference velocities; qnw_pitch is the committed wind-frame Euler pitch.
+        float v_final_elev_rad     = 0.f;  // elevation of the true post-integration NED velocity
+        float att_base_elev_rad    = 0.f;  // elevation of v_att_base (contact-excluded velocity)
+        float att_filt_elev_rad    = 0.f;  // elevation of the low-pass attitude-reference velocity
+        float att_ref_elev_rad     = 0.f;  // elevation of v_att_ref (Φ-blended; q_nw slaves to this)
+        float att_ref_speed_mps    = 0.f;  // |v_att_ref|
+        float phi_att_nd           = 0.f;  // Φ(V) authority weight in the attitude-reference blend
+        float qnw_pitch_rad        = 0.f;  // committed q_nw Euler pitch (wind-frame flight-path)
+        // Angle between the committed q_nw forward axis and the attitude-reference velocity (rad).
+        // This is the velocity-slaving invariant error (should be ~0: "q_nw.x = v̂_ref") — exactly the
+        // desync the OQ-AC-9 re-anchor fix would zero. ~0 in a regime ⇒ that fix is a no-op there.
+        float qnw_ref_desync_rad   = 0.f;
     };
 
     // Verbose Δθ / attitude diagnostics from the most recent step() (model diagnosis; not serialized).

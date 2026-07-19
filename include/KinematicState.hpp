@@ -110,6 +110,9 @@ public:
     Eigen::Vector3f acceleration_NED_mps() const { return snapshot_.acceleration_ned_mps2; }
     Eigen::Vector3f rates_Body_rps()    const { return snapshot_.rates_body_rps; }
     Eigen::Quaternionf q_nw()           const { return snapshot_.q_nw; }
+    // Stored (slew-saturated) attitude-reference velocity from the last commitAttitude — the vector
+    // q_nw is slaved to. Exposed for instrumentation (the OQ-AC-9 velocity-slaving invariant check).
+    Eigen::Vector3f attitudeRefPrev_ned_mps() const { return att_ref_prev_ned_mps_; }
 
     // ── Derived quantity forwarders ────────────────────────────────────────────
 

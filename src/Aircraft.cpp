@@ -935,6 +935,33 @@ void Aircraft::step(double time_sec,
 
     _state.commitAttitude(rollRate_filt_rps + delta_rr_filt_rps, dt_s, v_att_ref,
                           1.0f / _qnw_min_turn_radius_m);   // OQ-AC-2 speed-proportional cap
+
+    // Diagnostics: the velocity-slaving attitude-reference chain (elevations, rad; + = velocity up),
+    // to isolate whether q_nw is pitched by a spurious vertical component in the reference velocity.
+    {
+        auto elev = [](const Eigen::Vector3f& v) {
+            return std::atan2(-v.z(), v.head<2>().norm());
+        };
+        _step_diag.v_final_elev_rad  = elev(v_final_ned);
+        _step_diag.att_base_elev_rad = elev(v_att_base);
+        _step_diag.att_filt_elev_rad = elev(_v_filt_ned);
+        _step_diag.att_ref_elev_rad  = elev(v_att_ref);
+        _step_diag.att_ref_speed_mps = v_att_ref.norm();
+        _step_diag.phi_att_nd        = phi_att;
+        const Eigen::Matrix3f R_nw = _state.q_nw().toRotationMatrix();
+        _step_diag.qnw_pitch_rad = std::atan2(-R_nw(2, 0), std::hypot(R_nw(0, 0), R_nw(1, 0)));
+        // Velocity-slaving invariant error: angle between the committed q_nw forward axis and the
+        // stored (slew-SATURATED) reference q_nw is actually slaved to (att_ref_prev) — should be ~0
+        // ("q_nw.x = v̂_ref_sat"). Measured against the saturated reference, NOT the raw v_att_ref, so
+        // it excludes the intended OQ-AC-2 slew lag and isolates the OQ-AC-9 conserved desync the
+        // re-anchor would zero; ~0 in a regime ⇒ that fix is a no-op there.
+        const Eigen::Vector3f arp = _state.attitudeRefPrev_ned_mps();
+        const float arp_norm = arp.norm();
+        if (arp_norm > 1e-4f) {
+            const float c = R_nw.col(0).dot(arp) / arp_norm;   // R_nw.col(0) is unit
+            _step_diag.qnw_ref_desync_rad = std::acos(std::clamp(c, -1.f, 1.f));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -573,6 +573,57 @@ Derived quantities available from `KinematicState` after `step()`:
 
 ---
 
+### Diagnostics Accessors
+
+Read-only instrumentation from the most recent `step()`, for model diagnosis and scenario notebooks.
+None is serialized — each is recomputed every step from live intermediates.
+
+```cpp
+const ContactForces&    contactForces()      const;   // gear + collider force/moment, WoW
+float                   clEff()              const;   // effective CL applied
+bool                    isStalled()          const;
+bool                    isClRecovering()     const;
+float                   rollRateState_rps()  const;   // OQ-BC-12 persistent wind-axis roll rate
+const StepDiag&         stepDiag()           const;   // Δθ / attitude decomposition (below)
+float                   agl_m()              const;   // height above terrain (−1 if no terrain)
+bool                    weightOnWheels()     const;
+```
+
+`StepDiag` exposes the velocity-slaved-attitude / gear-F&M `Δθ` machinery that is otherwise internal to
+`step()`, which is what makes the OQ-AC-9 ground-start divergence observable:
+
+| Field | Unit | Meaning |
+| --- | --- | --- |
+| `dtheta_pitch` | rad | Total pitch rotation deviation `Δθ_pitch` = force + moment channels |
+| `dtheta_force` | rad | Force-channel `G(s)·u` (destanced gear+collider vertical load, faded by `Φ(V)`) |
+| `dtheta_moment_pitch` | rad | Moment-channel `(1/ωₙ²)·H₂(M_pitch/I_yy)` (finite DC, no velocity fade) |
+| `dtheta_yaw` | rad | Yaw rotation deviation `Δθ_yaw` |
+| `alpha_cmd`, `alpha_body` | rad | LFA-commanded α, and `α_body = α_cmd + Δθ_pitch` (feeds the gear geometry) |
+| `phi_authority` | — | `Φ(V)` dynamic-pressure authority fade (0 at rest → 1 at flight speed) |
+| `gamma_fpa_rad` | rad | Inertial flight-path angle `γ` used in the force channel |
+| `a_arrest_gear_mps2` | m/s² | Gear destanced vertical acceleration `(F_z − F_stance)/m` (force-channel input) |
+| `fz_stance_gear_n` | N | Gear stance (destance reference) vertical load, NED |
+| `gear_moment_pitch_nm`, `bc_moment_pitch_nm` | N·m | Gear and body-collider pitching moment about the CG (body Y) |
+| `n_z_shaped` | g | FBW-shaped normal load-factor command feeding the LFA |
+| `weight_on_wheels` | — | Any wheel or collider contact on this step |
+| `v_final_elev_rad` | rad | Elevation of the true post-integration NED velocity (+ = up) |
+| `att_base_elev_rad` | rad | Elevation of `v_att_base` (contact-excluded reference velocity) |
+| `att_filt_elev_rad` | rad | Elevation of the low-pass attitude-reference velocity |
+| `att_ref_elev_rad` | rad | Elevation of `v_att_ref` (Φ-blended reference `q_nw` slaves to) |
+| `att_ref_speed_mps` | m/s | Magnitude of `v_att_ref` |
+| `phi_att_nd` | — | `Φ(V)` authority weight in the attitude-reference blend |
+| `qnw_pitch_rad` | rad | Committed `q_nw` Euler pitch (wind-frame flight-path) |
+| `qnw_ref_desync_rad` | rad | Angle between the committed `q_nw` forward axis and the slew-saturated reference it slaves to — the velocity-slaving invariant error (OQ-AC-9); ~0 when consistent |
+
+The `v_*_elev` / `qnw_pitch_rad` / `qnw_ref_desync_rad` group isolates whether `q_nw` is tracking its
+reference (OQ-AC-9): `qnw_ref_desync_rad` is the direct invariant error (angle to the *saturated* reference,
+excluding the intended OQ-AC-2 slew lag) — ~0 in every consistently-initialized regime, ~90° for a
+rest-on-gear start. All are exposed to Python as
+`AircraftStepDiag` via `PyAircraft.step_diag()`
+([`src/python/bind_aircraft.cpp`](../../src/python/bind_aircraft.cpp)).
+
+---
+
 ### Serialization
 
 ```cpp
@@ -934,8 +985,10 @@ acceleration; `KinematicState::step()` integrates it directly without adding $g$
 
 **Velocity slaving.** The attitude is *velocity-slaved*: `commitAttitude` keeps `q_nw` aligned with the
 attitude-reference velocity vector by rotating it with `setFromTwoVectors(v_ref_prev, v_ref)` each step
-([KinematicState.cpp](../../src/KinematicState.cpp)), so **by construction `q_nw.x = v̂_ref`** — the strict
-velocity↔attitude relationship the whole trimaero model depends on. That rotation is the *full angle*
+([KinematicState.cpp](../../src/KinematicState.cpp)). The strict velocity↔attitude relationship
+**`q_nw.x = v̂_ref`** is what the whole trimaero model depends on; it is enforced by anchoring the rotation
+to `q_nw`'s own forward axis each step (see *Reference re-anchoring* below — the earlier form anchored it to
+the stored previous reference, which did not self-correct a desync). That rotation is the *full angle*
 between the two reference-velocity vectors with no magnitude weighting: the applied heading / flight-path
 rate is `angle(v_ref_prev, v_ref)/dt`, irrespective of speed.
 
@@ -984,6 +1037,28 @@ nondimensionalization `p̂ = p·b/(2V)` anchored at stall so the span cancels �
 even with a fixed `n_z` command — is a separate, still-open aero-lift / stall-shaping interaction of the
 OQ-BC-11 family, independent of the attitude reference.
 
+**Reference re-anchoring — enforcing `q_nw.x = v̂_ref` (OQ-AC-9 resolution; not yet implemented).** The
+propagation must build the per-step path-curvature rotation from `q_nw`'s **own** current forward axis to
+the slew-saturated reference — `diff_rot_n = setFromTwoVectors(q_nw.col(0), v_ref_sat)` — rather than from
+the stored previous reference `att_ref_prev`. Anchoring to `att_ref_prev` keeps `q_nw.x` on the velocity
+only while `q_nw.x` already equals `att_ref_prev`; it has no term that re-anchors `q_nw.x` to the reference,
+so a `q_nw.x ↔ att_ref_prev` desync is preserved (merely rotated) each step and never corrected. An
+inconsistent initial condition then diverges — a start **at rest on the gear** is initialized level while
+the only velocity is the downward settling velocity, seeding a ~90° desync that accumulates the body pitch
+to vertical (OQ-AC-9). Anchoring to `q_nw.col(0)` instead makes the propagation **self-correcting**: it
+enforces `q_nw.x = v̂_ref` strictly every step and any desync decays in one step, from any source. The
+OQ-AC-2 slew-rate bound is preserved because `v_ref_sat` remains the rate-limited target. This is a **measured
+no-op above very low speed**: the invariant error (`stepDiag().qnw_ref_desync_rad`, the angle to the
+saturated reference) is < 0.05° in every consistently-initialized regime — high-speed ground roll (20 m/s)
+0.03°, in-flight cruise under an aggressive maneuver 0.04°, steady crosswind crab with a realistically ramped
+wind 0.03° — and is ~90° only from an inconsistent at-rest IC. It must therefore be implemented under strict
+TDD with **no regression** of the existing ground-roll and flight behavior above very low speeds: regression
+against the resolved OQ-AC-2 (low-speed slew) and OQ-AC-4 (aero-velocity reference / crab) cases and the
+gear-only crabbed-touchdown scenario, and confirmation that the wind-axis `roll_delta` composition still
+yields the intended bank, are required. This fix pairs with the [Ground-Trim Attitude](#ground-trim-attitude)
+reference, which removes the at-rest seed at its source; re-anchoring is the self-correcting net for any
+residual inconsistency.
+
 ### Aerodynamic Wind Frame and Crab
 
 The wind frame `q_nw` (NED→wind) is aligned with the **aerodynamic velocity** — the relative wind
@@ -1030,6 +1105,90 @@ to zero). The increment then maintains the crab and tracks wind *changes* (gusts
 scenario is thus set up purely by initial conditions (runway azimuth, crabbed heading, crosswind) with no
 controller. The on-ground yaw behavior in wind — whether the gear holds heading or the aircraft
 weathervanes — is the [On-Ground Gear-Aero Yaw Balance](#on-ground-gear-aero-yaw-balance).
+
+### Ground-Trim Attitude
+
+**Status: resolved design (OQ-AC-9, Alternative 1); not yet implemented.** This is the decided design for the
+at-rest / low-speed attitude reference; it must be implemented under strict TDD with no regression of the
+existing above-low-speed behavior (see [OQ-AC-9](#oq-ac-9--velocity-slaving-q_nw-desyncs-from-its-reference-at-a-ground-start-resolved)).
+It pairs with the [reference re-anchoring](#velocity-slaved-attitude-and-low-speed-slew-saturation) fix
+(OQ-AC-9 Alternative 2), which is the self-correcting net for any residual inconsistency.
+
+**Motivation.** The velocity-slaved attitude has no meaningful reference at rest — there is no velocity to
+slave to. Just as a steady crab is an *initialization* requirement built from the initial aero velocity
+(see [§Aerodynamic Wind Frame and Crab](#aerodynamic-wind-frame-and-crab)), a start **at rest on the gear**
+needs its attitude initialized from the gear, not from a (zero, or settling-dominated) velocity. The
+physically-correct at-rest attitude is the **static gear-trim attitude**: the body orientation at which the
+landing gear is in static equilibrium with the weight on the local ground plane.
+
+**Static gear-trim problem.** On the local ground plane (surface normal from the terrain query the gear
+already performs), solve for the body attitude — pitch `θ` and, for asymmetric gear or a sloped/​banked
+surface, roll `φ` — together with the per-strut compressions `δ_i` such that:
+
+- **Kinematic closure:** each wheel's ground contact fixes its strut compression as a function of the
+  attitude and CG height, `δ_i = δ_i(θ, φ, h_cg)` (the geometry that already maps pose → compression in the
+  gear model).
+- **Vertical force balance:** `Σ_i N_i = m g`, with each static strut normal force `N_i = k_i · δ_i` (spring
+  only; the damper term is zero at static equilibrium, `δ̇_i = 0`).
+- **Moment balance about the CG:** `Σ_i r_i × N_i = 0` in pitch (and roll for the 2-D case), where `r_i` is
+  the wheel-contact position relative to the CG.
+
+For symmetric tricycle gear on flat ground this reduces to a 1-D solve in `θ` (roll `φ = 0`); the general
+case is a small 2-D/3-unknown nonlinear solve. The static solution has, **by construction**, `α = 0` (no
+airspeed), `β = 0`, and **zero net gear pitching moment → `Δθ = 0`** — so `q_nb = q_nw =` the trim attitude,
+with no spurious tilt. (Contrast the present behavior: initialized off-trim, the residual gear moment is
+converted by the `Δθ_moment` channel into a persistent `α_body ≈ −3.4°` — i.e. today's "rest" is not a true
+trim.)
+
+**Computational structure — correct for every ground orientation without a per-step nonlinear solve.** The
+static trim attitude is genuinely a function of the ground orientation: on a slope the strut compressions
+redistribute in the tilted gravity field, so the body's attitude relative to the ground plane is **not** a
+fixed rake. Composing a flat-ground rake with an arbitrary ground plane
+(`q_trim ≈ ground_plane ∘ rake_flat`) is only a first-order (small-slope) approximation and must **not** be
+claimed as the trim for every orientation — it survives only as a warm-start guess. Being correct for an
+arbitrary orientation requires an **actual solve of the equilibrium for that orientation** (numerical to
+tolerance is sufficient; a closed form exists only for simple gear layouts). Two mechanisms provide that
+without re-solving from scratch every step:
+
+- **Initialization — one real solve for the actual initial ground.** Solve the force + moment balance
+  (§above) for the initial ground orientation, once. This is a small nonlinear solve — 1–2 DOF for common
+  gear; a few Newton iterations reusing the gear force model already evaluated each step (the flat-ground
+  rake is a good warm start). It is exact for that orientation, not a flat-ground surrogate.
+- **Convergence as `V → 0` — relaxation, exact-in-the-limit for any orientation.** A WoW/`Φ(V)`-gated slow
+  integrator nudges the `q_nw` reference to null the gear moment `M_gear` the model *already computes each
+  step* (`M_gear → 0` ⇒ Δθ = 0). Because it is driven by the *actual* moment on the *current* ground, it
+  converges to the true trim for whatever surface the aircraft is on — no closed form required, no stale
+  value retained. It is effectively the one-time solve spread across the rollout (the aircraft settles over
+  many steps regardless), at one cheap update per step.
+
+So the equilibrium solve is either amortized to a single, orientation-exact initialization or replaced
+entirely by the per-step relaxation; neither claims a fixed rake valid for all orientations.
+
+**Integration with the velocity slaving.**
+
+- **Initialization:** for an at-rest ground start (weight-on-wheels, `V ≈ 0`), initialize `q_nw` and
+  `att_ref_prev` from the gear-trim attitude, so the velocity-slaving invariant `q_nw.x = v̂_ref` starts
+  satisfied (no OQ-AC-9 seed desync).
+- **Convergence as `V → 0` (OQ-AC-10, resolved → relaxation):** the low-speed attitude reference converges
+  to the gear-trim attitude by the **relaxation** — a weight-on-wheels/`Φ(V)`-gated slow integrator that
+  nulls the per-step gear moment `M_gear` (orientation-exact by construction; see *Computational structure*
+  above). The reference is realized as an **attitude** — a `slerp` from the velocity-slaved quaternion toward
+  the gear-trim quaternion weighted by the `Φ(V)` dynamic-pressure factor (the OQ-LG-21/OQ-LG-19 factor) —
+  not a filtered *velocity* (ill-defined as `V → 0`). The **relaxation time constant** and the **fade speed
+  scale/threshold** are **configuration parameters, not hardcoded magic numbers**, following the existing
+  config convention (e.g. a `ground_trim_relax_tau_s` field, and the `Φ(V)` speed scale via the existing
+  `dtheta_vref_ratio` or a dedicated `ground_trim_fade_vref_ratio` field). Above the fade `Φ(V) → 1` the
+  existing velocity-slaved attitude is recovered unchanged, so high-speed rolling and flight are untouched.
+- **Takeoff release:** the hold must release *into* rotation, not fight it — co-designed with the OQ-LG-23
+  settle/rotation term so rotation begins *from* the trim attitude as `Φ(V)` and the wing authority build.
+
+The re-anchor of `stepQnw` (OQ-AC-9 Alternative 2) **is adopted alongside** this reference as the
+self-correcting net — see [reference re-anchoring](#velocity-slaved-attitude-and-low-speed-slew-saturation).
+
+The `V → 0` convergence mechanism and fade schedule are resolved (OQ-AC-10 → the **relaxation**, with the
+relaxation time constant and the fade speed scale as **configuration parameters**). The equilibrium-solve
+mathematics for the initialization (equations, solution method, existence/uniqueness on a slope, convergence)
+will be formalized in a dedicated algorithm document when this item is scheduled.
 
 ### Roll–Strut Co-Integration (Substep)
 
@@ -1360,6 +1519,8 @@ is passed to `Aircraft::initialize()`. `Aircraft` does not access any global clo
 | OQ-AC-6 | Constant `Ny` command authority at all speeds is unphysical: on the ground it implies an arbitrarily tight turn radius as the vehicle slows, and airborne it drives the emulated β without bound as `q`→0. The flight vs ground-steering minimum radii differ significantly, and a purely speed-based transition would false-shift the dynamics in a strong headwind | Resolved — authority-limit `Ny` to a maximum path curvature (Ny magnitude bounded by V²/(g·R)), blending flight (airspeed, `R_flight`) and ground (ground speed, `R_ground`) regimes by a WoW-load-fraction × below-stall-smoothstep weight (2026-07-14) |
 | OQ-AC-7 | On-ground weathervane needs an aero yaw moment for the gear to react (OQ-AC-5 Alt 3), but trimaero has no `Cn_β` — how is the aero weathervane yaw moment `N_aero` emulated from the quantities the model does carry (β, `Cy_β`, FBW `A_y`)? | Resolved — `N_aero = F_aero,y·x_acy` (side-force × aerodynamic lever, Alt 1, 2026-07-15) |
 | OQ-AC-8 | The gear-aero balance (OQ-AC-5 Alt 3) holds heading while the aero weathervane moment is within the FBW's on-ground yaw authority — how is that authority estimated, given it is a closed-loop control moment (not a gear-friction force, not a modeled nose-wheel deflection)? | Resolved — estimated FBW steering-moment authority `N_steer,max = steering_authority_m · F_z,contact` (contact-scaled control moment, 2026-07-16) |
+| OQ-AC-9 | Ground start from rest: the velocity-slaving propagation does not enforce `q_nw.x = v̂_ref`. `stepQnw` rotates `q_nw` by the stored reference's frame-to-frame rotation (`setFromTwoVectors(att_ref_prev, v_ref_sat)`), never re-anchoring to `q_nw`'s own forward axis, so a `q_nw.x`↔`att_ref_prev` desync is never self-corrected. A ground start seeds a ~90° desync (level initial attitude vs the downward gear-settling velocity), which accumulates into a ~90° nose-up pitch even though the true velocity and `v_att_ref` stay horizontal | Resolved — Alt 1 ([Ground-Trim Attitude](#ground-trim-attitude) reference: consistent at-rest init + `V→0` relaxation to `M_gear→0`, static `α = Δθ = 0`) **and** Alt 2 (re-anchor `stepQnw` to `q_nw`'s own forward axis); implementation pending under strict TDD / no regression above very low speed (2026-07-19) |
+| OQ-AC-10 | Low-speed ground-trim attitude blend (OQ-AC-9 Alt 1 implementation detail): as `V → 0` the attitude reference converges to the gear-trim attitude — by which mechanism (relaxation nulling `M_gear`, or periodic re-solve of the equilibrium as the ground orientation changes, at what cadence) and on what `Φ(V)` fade schedule/threshold? | Resolved — Alternative 1 (relaxation nulling `M_gear`, orientation-exact by construction); the relaxation time constant and the `Φ(V)` fade speed scale are **configuration parameters** (no magic numbers) (2026-07-19) |
 
 ### OQ-AC-1 — Stall departure for the load-factor model
 
@@ -1559,6 +1720,55 @@ steering-moment authority `c_steer·F_z,contact` — a control moment scaled by 
 specific effector (differential braking, nose steering); the trimaero model emulates the closed-loop
 capability, not the linkage. (3) Fixed authority independent of contact: discontinuous at the
 flight↔ground boundary. The `c_steer·F_z` estimate is the contact-scaled emulation OQ-AC-5 called for.
+
+### OQ-AC-9 — Velocity-slaving `q_nw` desyncs from its reference at a ground start *(Resolved)*
+
+**Resolved (2026-07-19) — Alternative 1 (ground-trim attitude reference) with Alternative 2 (re-anchor the
+`q_nw` propagation).** A start at rest on the gear seeds an inconsistent initial condition — the aircraft is
+initialized level while its only velocity is the downward gear-settling velocity, so `q_nw.x` and the
+attitude-reference direction begin ~90° apart. Because `stepQnw` propagated `q_nw` from the *stored* previous
+reference and never re-anchored to `q_nw`'s own forward axis, that desync was preserved and accumulated the
+body pitch to ~90° nose-up. Measurement (via the `stepDiag()` reference-chain accessors) confirmed the fault
+is the `q_nw` propagation, not the reference: the true velocity and `v_att_ref` both stayed horizontal while
+the committed `q_nw` pitch ran to 90°; the invariant error is < 0.05° in every consistently-initialized
+regime (high-speed roll, in-flight maneuver, realistically-ramped crab) and ~90° only from an inconsistent
+at-rest IC. (This supersedes the earlier, incorrect hypothesis that the IP-CRB-4 contact-exclusion residual
+corrupted `v_att_ref`.)
+
+The resolution has two parts, whose design now lives in the model sections:
+
+- **Ground-trim attitude reference (Alternative 1, primary)** — the physically-correct at-rest reference:
+  initialize `q_nw` to the static gear-trim attitude and make it the `V → 0` convergence target (static
+  properties `α = 0`, `Δθ = 0`), removing the inconsistent-IC seed at its source. Full design:
+  [§Ground-Trim Attitude](#ground-trim-attitude).
+- **Reference re-anchoring (Alternative 2, self-correcting net)** — build the propagation rotation from
+  `q_nw`'s own forward axis so `q_nw.x = v̂_ref` is enforced strictly every step and any residual desync
+  decays in one step. Design:
+  [§Velocity-Slaved Attitude and Low-Speed Slew Saturation](#velocity-slaved-attitude-and-low-speed-slew-saturation).
+
+**Constraint on implementation (not yet done).** Both parts are confined below the `Φ(V)` fade and are a
+measured no-op above very low speed, so they must be implemented under **strict TDD with no regression** of
+the existing ground-roll and flight behavior above very low speeds — specifically regression against the
+resolved OQ-AC-2 (low-speed slew), OQ-AC-4 (aero-velocity reference / crab), and the gear-only
+crabbed-touchdown scenario, plus confirmation that the wind-axis `roll_delta` bank composition is unchanged.
+Co-design with OQ-LG-23 (takeoff rotation must release *from* the trim attitude) and OQ-LG-21 (the low-speed
+reference becomes the trim-attitude blend).
+
+### OQ-AC-10 — Low-speed ground-trim attitude blend: convergence mechanism and fade schedule *(Resolved)*
+
+**Resolved (2026-07-19) — Alternative 1 (relaxation).** The `V → 0` convergence to the gear-trim attitude
+uses a weight-on-wheels/`Φ(V)`-gated slow integrator that nulls the per-step gear moment `M_gear` the model
+already computes (`M_gear → 0` ⇒ Δθ = 0). It is orientation-exact by construction — driven by the actual
+moment on the current ground, it needs no closed form and retains no stale value — and reuses existing
+quantities. A periodic re-solve (Alternatives 2/3) is not adopted; it may be revisited only if a
+runway-realistic ground-orientation rate is found to outrun the relaxation. The **relaxation time constant**
+and the **`Φ(V)` fade speed scale/threshold** are **configuration parameters, not hardcoded magic numbers**
+(following the existing config convention — e.g. a `ground_trim_relax_tau_s` field, and the fade speed scale
+via the existing `dtheta_vref_ratio` or a dedicated `ground_trim_fade_vref_ratio` field); their values are
+tuned empirically under the OQ-AC-9 no-regression tests. The design now lives in
+[§Ground-Trim Attitude](#ground-trim-attitude); implementation is
+[aircraft_ground_attitude.md](../implementation/aircraft_ground_attitude.md) IP-AGA-7 (config parameters:
+IP-AGA-6).
 
 ---
 
