@@ -603,3 +603,55 @@ def test_full_stop_landing_converges_no_lowspeed_divergence_oq_lg24():
     assert max_pitch_deg_after_td < 20.0, (
         f"on-ground attitude diverged nose-up: max|pitch| {max_pitch_deg_after_td:.1f} deg"
     )
+
+
+@pytest.mark.xfail(
+    reason="OQ-AC-9 ground-trim reference (Alt 1) not yet implemented; the incremental "
+    "velocity-slaving still diverges from a rest-on-gear IC. Remove xfail when the ground-trim "
+    "at-rest reference lands. (Alt 2 re-anchor was dropped: it regressed freefall belly-impact.)",
+    strict=False,
+)
+def test_ground_rest_start_does_not_pitch_up_oq_ac9():
+    # OQ-AC-9 (aircraft.md §Velocity-Slaved Attitude / §OQ-AC-9): starting at rest on the gear and
+    # applying throttle must NOT diverge the velocity-slaved attitude. Before the re-anchor fix,
+    # q_nw desyncs from its reference (the propagation rotated q_nw from the stored previous
+    # reference instead of q_nw's own forward axis), and the body pitch runs to ~90 deg nose-up on
+    # the takeoff roll even though the true velocity and v_att_ref stay horizontal. The re-anchored
+    # propagation enforces q_nw.x = v_hat_ref (qnw_ref_desync ~ 0), so the pitch stays bounded.
+    cfg_path = _repo_config("small_uas_ksba.json")
+    if not os.path.isfile(cfg_path):
+        pytest.skip(f"config not found: {cfg_path}")
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    cfg["initial_state"].update(
+        {"altitude_m": 1.0, "velocity_north_mps": 0.0, "velocity_east_mps": 0.0,
+         "velocity_down_mps": 0.0, "pitch_rad": 0.0}
+    )
+    dt = 0.01
+    ac = liteaero_sim_py.Aircraft(json.dumps(cfg), dt_s=dt)
+    ac.set_terrain(liteaero_sim_py.FlatTerrain(0.0))
+    cmd = liteaero_sim_py.AircraftCommand()
+    cmd.n_z = 1.0
+
+    cmd.throttle_nd = 0.0                       # settle onto the gear at idle
+    for _ in range(int(2.0 / dt)):
+        ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
+
+    cmd.throttle_nd = 0.8                        # takeoff roll
+    max_pitch_deg = 0.0
+    max_desync_deg = 0.0
+    for _ in range(int(8.0 / dt)):
+        ac.step(cmd, dt_s=dt, rho_kgm3=1.225)
+        max_pitch_deg = max(max_pitch_deg, abs(math.degrees(ac.state().pitch_rad)))
+        max_desync_deg = max(max_desync_deg, math.degrees(ac.step_diag().qnw_ref_desync_rad))
+
+    # Far below flying speed on a short roll: the attitude must stay bounded, not rotate toward
+    # vertical (the OQ-AC-9 divergence ran to ~90 deg).
+    assert max_pitch_deg < 20.0, (
+        f"ground-rest start pitched up to {max_pitch_deg:.1f} deg (OQ-AC-9 divergence)"
+    )
+    # The velocity-slaving invariant q_nw.x = v_hat_ref must hold throughout (self-correcting
+    # propagation): the angle between q_nw's forward axis and its saturated reference stays ~0.
+    assert max_desync_deg < 1.0, (
+        f"q_nw desynced from its reference by {max_desync_deg:.1f} deg (OQ-AC-9)"
+    )

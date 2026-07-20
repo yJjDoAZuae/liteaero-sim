@@ -17,7 +17,7 @@ $N_\text{arr}\approx3$) from airframe properties that `Aircraft` now supplies to
 Serialization), [landing_gear.md §2a, §7](../design/landing_gear.md) (the $\Delta\theta$ pattern and
 its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sites).
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-07-20
 
 ---
 
@@ -42,6 +42,8 @@ its stability), [aircraft.md](../design/aircraft.md) (step 5a / step 12 call sit
 | IP-BC-13 | superseded (OQ-BC-12) | Inelastic §5c rotational velocity-arrest (OQ-BC-10 → Alt 1). **Prototyped and shown ineffective** for the reported gear-landing catapult: it cut the launch but left the 177° roll-over, because the driver is the §5a CM-arresting force + the missing rotational DOF, not the §5c moment channel (OQ-BC-12). Test scaffold retained (roll metrics + `WingtipStrike` + wide-wing config + the `GearLanding_WingtipGraze` reproduction). | — | [body_collider.md OQ-BC-10](../design/body_collider.md) |
 | IP-BC-14 | superseded (OQ-BC-12) | Scoped aero-lift suppression for the steep/inverted pitch limit cycle. Subsumed: the lift-fight is a facet of the missing rotational DOF (OQ-BC-12); the suppression is at most a velocity-slaved patch. | — | [body_collider.md OQ-BC-11](../design/body_collider.md) |
 | IP-BC-15 | blocked (OQ-BC-12) | Implement the OQ-BC-12 resolution (Alt A rigid-body contact rotation, or Alt B velocity-slaved pivot-rate approximation). Guard: the `GearLanding_WingtipGraze_DoesNotCatapultOrLaunch` reproduction + the impact-envelope + the full landing-gear regressions | — | [body_collider.md OQ-BC-12](../design/body_collider.md) |
+| IP-BC-16 | todo | Re-pose `BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce` from a `velocity=0` vertical freefall — out of the velocity-slaved model's domain (no velocity ⇒ undefined attitude) and a redundant duplicate of `BodyColliderOnly_VerticalMaxSpeedImpact` — to an **in-domain forward-flight glide** (forward velocity + moderate sink, e.g. ~40 m/s fwd / ~3 m/s down, FPA ≈ −4°), matching the test's name and exercising the attitude model where it is valid; keep the descent-arrest / WoW / body-collider-upward-force / non-penetration assertions | — | [body_collider.md §5a, Test Strategy](../design/body_collider.md), [aircraft.md §Velocity-Slaved Attitude and Low-Speed Slew Saturation](../design/aircraft.md) |
+| IP-BC-17 | todo | Re-pose `BodyColliderImpact_RotationState_RoundTrips` from a `velocity=0` vertical freefall to an **in-domain flown impact** (forward velocity + moderate sink) so the collider rotation-channel state is exercised within the velocity-slaved model's domain before the JSON/proto round-trip; keep the "non-zero `bc_force_x` state after impact" + round-trip-equality assertions | — | [body_collider.md §5c, Serialization](../design/body_collider.md), [aircraft.md §Velocity-Slaved Attitude and Low-Speed Slew Saturation](../design/aircraft.md) |
 
 > **IP-BC-11 reason:** OQ-BC-8 is resolved (Alt 1 — hysteretic geometric latch, derived band). Ordered
 > after IP-BC-12, which removes the control-loop WoW gate, so the latch lands as reporting-only.
@@ -112,3 +114,15 @@ tests.)
 
 **Pre-existing unrelated failures:** `LandingGear.BearingDragCoeffs_NonzeroWhenSpindownConfigured` and
 `LandingGear.DifferentialBrake_ProducesYawMoment` fail independently of this plan (brake/spindown logic).
+
+**Ill-conceived stationary-drop tests (IP-BC-16, IP-BC-17).** `BodyColliderOnly_GlideToImpact` and
+`BodyColliderImpact_RotationState_RoundTrips` both use a `velocity = 0` vertical freefall to force a
+collider impact. That drags the *velocity-slaved* trimaero attitude model out of its domain (no velocity ⇒
+undefined attitude), which is why they were sensitive to the OQ-AC-9 attitude-propagation change (see
+[aircraft_ground_attitude.md](aircraft_ground_attitude.md)); the well-posed *flying* impact tests
+(shallow/steep/inverted/wingtip, all with forward velocity) were not. `GlideToImpact` is additionally
+**misnamed** (a glide has forward airspeed) and **redundant** with the deliberate near-vertical case
+`BodyColliderOnly_VerticalMaxSpeedImpact`. IP-BC-16 re-poses `GlideToImpact` as a flown glide;
+`BodyColliderImpact_RotationState_RoundTrips` (its serialization round-trip only needs *an* impact to load
+the collider rotation state) shares the identical `velocity = 0` defect and one-line fix and is re-posed the
+same way in IP-BC-17.
