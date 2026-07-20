@@ -1059,6 +1059,16 @@ yields the intended bank, are required. This fix pairs with the [Ground-Trim Att
 reference, which removes the at-rest seed at its source; re-anchoring is the self-correcting net for any
 residual inconsistency.
 
+**Verified no-regression (2026-07-20).** A probe applied the re-anchor and ran the full C++
+attitude/gear/collider suite: it caused **zero new failures** beyond the five pre-existing ones (unrelated
+brake/spindown 335/336 and the OQ-BC-12 collider limit-cycle 578/579/581). An earlier probe appeared to
+regress two body-collider impact tests (`GlideToImpact`, `RotationState_RoundTrips`), but those tests used a
+**stationary `velocity = 0` drop** — an *out-of-domain* input for the velocity-slaved model (no velocity ⇒
+undefined attitude), not a real regression. Re-posed as in-domain **flown** impacts (body-collider plan
+IP-BC-16/17), both pass with and without the re-anchor. This confirms the re-anchor is a genuine no-op in
+every in-domain regime and that the OQ-AC-9 Alt 1 + Alt 2 resolution stands (the re-anchor is a valid,
+regression-free self-correcting net; the at-rest fix itself is the Alt 1 ground-trim reference).
+
 ### Aerodynamic Wind Frame and Crab
 
 The wind frame `q_nw` (NED→wind) is aligned with the **aerodynamic velocity** — the relative wind

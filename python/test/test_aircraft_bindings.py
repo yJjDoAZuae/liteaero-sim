@@ -606,9 +606,9 @@ def test_full_stop_landing_converges_no_lowspeed_divergence_oq_lg24():
 
 
 @pytest.mark.xfail(
-    reason="OQ-AC-9 ground-trim reference (Alt 1) not yet implemented; the incremental "
-    "velocity-slaving still diverges from a rest-on-gear IC. Remove xfail when the ground-trim "
-    "at-rest reference lands. (Alt 2 re-anchor was dropped: it regressed freefall belly-impact.)",
+    reason="OQ-AC-9 at-rest fix (Alt 1 init-trim, aircraft_ground_attitude.md IP-AGA-5) not yet "
+    "implemented: with no valid at-rest reference the velocity-slaved attitude still diverges from a "
+    "rest-on-gear IC. Remove xfail when the ground-trim init-trim lands.",
     strict=False,
 )
 def test_ground_rest_start_does_not_pitch_up_oq_ac9():

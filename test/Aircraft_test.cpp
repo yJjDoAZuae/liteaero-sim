@@ -1318,17 +1318,20 @@ TEST(AircraftTest, GearLanding_WithRollAndYaw_GearOnly_Settles) {
 
 TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce) {
     // No landing gear — body collider is the only contact model.
-    // Aircraft starts at 5 m AGL, stationary.  At zero airspeed q_inf = 0 so
-    // aerodynamic forces are zero and the aircraft falls under gravity.
+    // A shallow GLIDING belly impact (IP-BC-16): the aircraft flies in at approach speed with a
+    // moderate sink (40 m/s forward, 3 m/s down → FPA ≈ −4.3°); n_z=1 holds the sink until the belly
+    // reaches the surface. This is the in-domain "glide to impact" the test name denotes — a stationary
+    // V=0 drop would put the velocity-slaved attitude model out of its domain (no velocity ⇒ undefined
+    // attitude), and the near-vertical case is covered by BodyColliderOnly_VerticalMaxSpeedImpact.
     // Body collider half-extents z = 0.3 m → first corner contact at CG altitude 0.3 m.
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
 
     auto cfg = addBodyCollider(makeConfig());
     cfg["initial_state"]["altitude_m"]         = 5.0;
-    cfg["initial_state"]["velocity_north_mps"] = 0.0;
+    cfg["initial_state"]["velocity_north_mps"] = 40.0;
     cfg["initial_state"]["velocity_east_mps"]  = 0.0;
-    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 3.0;
 
     auto ac = std::make_unique<liteaero::simulation::Aircraft>(
         std::make_unique<StubPropulsion>(0.0f));
@@ -1363,10 +1366,12 @@ TEST(AircraftTest, BodyColliderOnly_GlideToImpact_ArrestsDescentAndReportsForce)
         << "body collider must report weight-on-wheels during impact";
     EXPECT_TRUE(upward_force_seen)
         << "contactForces() must reflect body-collider upward force (not gear-only)";
-    // Freefall from 5 m reaches sqrt(2 * 9.8 * 5) ≈ 9.9 m/s; body collider must
-    // arrest the descent to well below that by 6 s.
-    EXPECT_LT(ac->state().velocity_NED_mps().z(), 9.9f)
+    // The glide arrives with a 3 m/s sink; the body collider must arrest that descent — settling
+    // near the surface, not still plunging through and not launched back up.
+    EXPECT_LT(ac->state().velocity_NED_mps().z(), 1.0f)
         << "body collider must arrest descent velocity after impact";
+    EXPECT_GT(ac->state().velocity_NED_mps().z(), -1.0f)
+        << "body collider must not launch the aircraft off the surface after impact";
 }
 
 TEST(AircraftTest, LandingGear_FullStop_SpeedNearZero) {
@@ -1605,16 +1610,18 @@ TEST(AircraftTest, BodyCollider_ReceivesAircraftInertia) {
 }
 
 TEST(AircraftTest, BodyColliderImpact_RotationState_RoundTrips) {
-    // §5c (OQ-BC-6/7): a body-collider belly impact drives the dedicated collider
-    // rotation channel (its force/stance state), which must serialize and round-trip
-    // through both JSON and proto so a restored aircraft continues identically.
+    // §5c (OQ-BC-6/7, IP-BC-17): a body-collider belly impact drives the dedicated collider
+    // rotation channel (its force/stance state), which must serialize and round-trip through both
+    // JSON and proto so a restored aircraft continues identically. The impact is a FLOWN belly
+    // impact (40 m/s forward, 4 m/s sink) — in-domain for the velocity-slaved model — which loads
+    // the collider force channel; a stationary V=0 drop would put the attitude model out of its domain.
     using namespace liteaero::terrain;
     FlatTerrain terrain{0.0f};
     auto cfg = addBodyCollider(makeConfig());
     cfg["initial_state"]["altitude_m"]         = 5.0;
-    cfg["initial_state"]["velocity_north_mps"] = 0.0;
+    cfg["initial_state"]["velocity_north_mps"] = 40.0;
     cfg["initial_state"]["velocity_east_mps"]  = 0.0;
-    cfg["initial_state"]["velocity_down_mps"]  = 0.0;
+    cfg["initial_state"]["velocity_down_mps"]  = 4.0;
 
     auto ac1 = std::make_unique<liteaero::simulation::Aircraft>(
         std::make_unique<StubPropulsion>(0.0f));
@@ -1624,8 +1631,9 @@ TEST(AircraftTest, BodyColliderImpact_RotationState_RoundTrips) {
 
     const liteaero::simulation::AircraftCommand cmd;
     constexpr float kDt = 0.02f;
-    // Fall to impact and a few steps past it so the collider force channel is loaded.
-    for (int i = 1; i <= 60; ++i)
+    // Fly to impact (belly at ~0.3 m from 5 m at 4 m/s sink ≈ 1.2 s) and a good margin past it so
+    // the collider force channel is loaded.
+    for (int i = 1; i <= 120; ++i)
         ac1->step(i * static_cast<double>(kDt), cmd, Eigen::Vector3f::Zero(), 1.225f);
 
     // The collider force-channel state must be non-zero (the channel was exercised).
